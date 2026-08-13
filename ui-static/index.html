@@ -15,7 +15,13 @@
   <body>
     <div class="app">
       <header class="top">
-        <div class="brand">amem</div>
+        <div class="brand-block">
+          <div class="brand">amem</div>
+          <div class="repo-switcher">
+            <select id="repoSelect" aria-label="Repository"></select>
+            <button class="btn secondary small" id="addRepoBtn" type="button">Add repo</button>
+          </div>
+        </div>
         <nav class="tabs" id="tabs">
           <button data-tab="setup" class="active">Setup</button>
           <button data-tab="brain">Brain</button>
@@ -23,6 +29,14 @@
         </nav>
         <div class="privacy">Local only · 127.0.0.1</div>
       </header>
+      <div id="addRepoPanel" class="add-repo-panel hidden">
+        <label for="addRepoPath">Path to another git repo on this machine</label>
+        <div class="add-repo-row">
+          <input id="addRepoPath" type="text" placeholder="/Users/you/projects/other-repo" />
+          <button class="btn" id="addRepoGo" type="button">Open setup</button>
+          <button class="btn secondary" id="addRepoCancel" type="button">Cancel</button>
+        </div>
+      </div>
       <main id="main"></main>
     </div>
     <script type="module" src="/app.js"></script>

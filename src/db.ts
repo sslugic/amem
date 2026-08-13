@@ -1,6 +1,8 @@
 import Database from "better-sqlite3";
+import { existsSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { dbPath, ensureAmemHome } from "./paths.js";
-import { detectRepoIdentity, newId, type RepoIdentity } from "./repo-identity.js";
+import { detectRepoIdentity, newId, parseWorkspaceSlug, slugifyWorkspace, type RepoIdentity } from "./repo-identity.js";
 
 export type RepoRow = {
   id: string;
@@ -60,6 +62,26 @@ export type UsageEventRow = {
   packet_tokens: number;
   estimated_tokens_saved: number;
   reported_tokens_saved: number | null;
+  created_at: string;
+  local_ms: number | null;
+  estimated_ms_saved: number | null;
+  kind: string | null;
+};
+
+export type SessionRow = {
+  platform: string;
+  session_id: string;
+  repo_id: string;
+  last_seen: string;
+};
+
+export type ConversationNoteRow = {
+  id: string;
+  repo_id: string;
+  platform: string;
+  session_id: string | null;
+  role: string;
+  text: string;
   created_at: string;
 };
 
@@ -141,7 +163,10 @@ CREATE TABLE IF NOT EXISTS usage_events (
   packet_tokens INTEGER NOT NULL,
   estimated_tokens_saved INTEGER NOT NULL,
   reported_tokens_saved INTEGER,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  local_ms INTEGER,
+  estimated_ms_saved INTEGER,
+  kind TEXT
 );
 
 CREATE TABLE IF NOT EXISTS setup_state (
@@ -151,6 +176,16 @@ CREATE TABLE IF NOT EXISTS setup_state (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS conversation_notes (
+  id TEXT PRIMARY KEY,
+  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL,
+  session_id TEXT,
+  role TEXT NOT NULL,
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS claims_repo_idx ON claims(repo_id);
 CREATE INDEX IF NOT EXISTS edges_repo_idx ON edges(repo_id);
 CREATE INDEX IF NOT EXISTS components_repo_idx ON components(repo_id);
@@ -158,6 +193,8 @@ CREATE INDEX IF NOT EXISTS flows_repo_idx ON flows(repo_id);
 CREATE INDEX IF NOT EXISTS agent_sessions_repo_idx ON agent_sessions(repo_id);
 CREATE INDEX IF NOT EXISTS usage_events_repo_idx ON usage_events(repo_id);
 CREATE INDEX IF NOT EXISTS usage_events_created_idx ON usage_events(created_at);
+CREATE INDEX IF NOT EXISTS conversation_notes_repo_idx ON conversation_notes(repo_id);
+CREATE INDEX IF NOT EXISTS conversation_notes_created_idx ON conversation_notes(created_at);
 `;
 
 let cached: Database.Database | null = null;
@@ -166,10 +203,23 @@ export function openDb(): Database.Database {
   if (cached) return cached;
   ensureAmemHome();
   const db = new Database(dbPath());
+  db.pragma("journal_mode = WAL");
+  db.pragma("busy_timeout = 5000");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
+  migrateUsageEvents(db);
   cached = db;
   return db;
+}
+
+function migrateUsageEvents(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(usage_events)").all() as { name: string }[];
+  const have = new Set(cols.map((c) => c.name));
+  if (!have.has("local_ms")) db.exec("ALTER TABLE usage_events ADD COLUMN local_ms INTEGER");
+  if (!have.has("estimated_ms_saved")) {
+    db.exec("ALTER TABLE usage_events ADD COLUMN estimated_ms_saved INTEGER");
+  }
+  if (!have.has("kind")) db.exec("ALTER TABLE usage_events ADD COLUMN kind TEXT");
 }
 
 export function closeDb(): void {
@@ -227,6 +277,16 @@ export function upsertRepo(
   return db.prepare("SELECT * FROM repos WHERE id = ?").get(id) as RepoRow;
 }
 
+function normalizeFsPath(p: string): string {
+  const resolved = resolve(p).replace(/[/\\]+$/, "");
+  try {
+    if (existsSync(resolved)) return realpathSync(resolved);
+  } catch {
+    // ignore
+  }
+  return resolved;
+}
+
 export function getRepoByCwd(cwd: string = process.cwd()): RepoRow | null {
   const identity = detectRepoIdentity(cwd);
   const db = openDb();
@@ -235,18 +295,21 @@ export function getRepoByCwd(cwd: string = process.cwd()): RepoRow | null {
     .get(identity.repoKey) as RepoRow | undefined;
   if (byKey) return byKey;
 
-  return (
-    (db
-      .prepare("SELECT * FROM repos WHERE root_path = ?")
-      .get(identity.rootPath) as RepoRow | undefined) ?? null
-  );
+  const byExact = db
+    .prepare("SELECT * FROM repos WHERE root_path = ?")
+    .get(identity.rootPath) as RepoRow | undefined;
+  if (byExact) return byExact;
+
+  const want = normalizeFsPath(identity.rootPath);
+  const rows = db.prepare("SELECT * FROM repos").all() as RepoRow[];
+  return rows.find((r) => normalizeFsPath(r.root_path) === want) ?? null;
 }
 
 export function requireRepo(cwd: string = process.cwd()): RepoRow {
   const repo = getRepoByCwd(cwd);
   if (!repo) {
     throw new Error(
-      "No amem binding for this repo. Run `amem init --platform cursor|claude` first.",
+      "No amem binding here. Run `amem init --platform cursor|claude` in a git repo, or `amem init --workspace <name>` for an app.",
     );
   }
   return repo;
@@ -314,16 +377,22 @@ export function insertUsageEvent(input: {
   claimsCount: number;
   packetTokens: number;
   estimatedTokensSaved: number;
+  localMs?: number | null;
+  estimatedMsSaved?: number | null;
+  kind?: string | null;
 }): UsageEventRow {
   const id = newId("usage");
   const ts = nowIso();
+  if (input.sessionId) {
+    touchSession(input.platform, input.sessionId, input.repoId);
+  }
   openDb()
     .prepare(
       `INSERT INTO usage_events (
          id, repo_id, platform, session_id, query, claim_ids,
          anchors_count, claims_count, packet_tokens, estimated_tokens_saved,
-         reported_tokens_saved, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+         reported_tokens_saved, created_at, local_ms, estimated_ms_saved, kind
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -337,8 +406,19 @@ export function insertUsageEvent(input: {
       input.packetTokens,
       input.estimatedTokensSaved,
       ts,
+      input.localMs ?? null,
+      input.estimatedMsSaved ?? null,
+      input.kind ?? null,
     );
   return openDb().prepare("SELECT * FROM usage_events WHERE id = ?").get(id) as UsageEventRow;
+}
+
+export function listSessions(repoId: string): SessionRow[] {
+  return openDb()
+    .prepare(
+      `SELECT * FROM agent_sessions WHERE repo_id = ? ORDER BY last_seen DESC`,
+    )
+    .all(repoId) as SessionRow[];
 }
 
 export function setReportedTokensSaved(eventId: string, saved: number): UsageEventRow {
@@ -435,6 +515,67 @@ export function getRepoById(id: string): RepoRow | null {
     (openDb().prepare("SELECT * FROM repos WHERE id = ?").get(id) as RepoRow | undefined) ??
     null
   );
+}
+
+export function getRepoByName(name: string): RepoRow | null {
+  const byId = getRepoById(name);
+  if (byId) return byId;
+  let slug: string;
+  try {
+    slug = slugifyWorkspace(name);
+  } catch {
+    return null;
+  }
+  const rows = listRepos();
+  return (
+    rows.find((r) => parseWorkspaceSlug(r.remote_url) === slug) ??
+    rows.find((r) => r.repo_name.toLowerCase() === slug) ??
+    null
+  );
+}
+
+export function insertConversationNote(input: {
+  repoId: string;
+  platform: string;
+  sessionId?: string | null;
+  role: string;
+  text: string;
+}): ConversationNoteRow {
+  const id = newId("note");
+  const ts = nowIso();
+  const text = input.text.trim().slice(0, 2000);
+  openDb()
+    .prepare(
+      `INSERT INTO conversation_notes (id, repo_id, platform, session_id, role, text, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(id, input.repoId, input.platform, input.sessionId ?? null, input.role, text, ts);
+  pruneConversationNotes(input.repoId);
+  return openDb()
+    .prepare("SELECT * FROM conversation_notes WHERE id = ?")
+    .get(id) as ConversationNoteRow;
+}
+
+function pruneConversationNotes(repoId: string): void {
+  const cutoff = openDb()
+    .prepare(
+      `SELECT created_at FROM conversation_notes WHERE repo_id = ?
+       ORDER BY created_at DESC LIMIT 1 OFFSET 100`,
+    )
+    .get(repoId) as { created_at: string } | undefined;
+  if (!cutoff) return;
+  openDb()
+    .prepare("DELETE FROM conversation_notes WHERE repo_id = ? AND created_at < ?")
+    .run(repoId, cutoff.created_at);
+}
+
+export function listConversationNotes(repoId: string, limit = 40): ConversationNoteRow[] {
+  return openDb()
+    .prepare(
+      `SELECT * FROM conversation_notes WHERE repo_id = ?
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(repoId, limit) as ConversationNoteRow[];
 }
 
 export { nowIso };

@@ -70,6 +70,33 @@ export function detectRepoIdentity(cwd: string = process.cwd()): RepoIdentity {
   };
 }
 
+export function slugifyWorkspace(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!slug) throw new Error("Workspace name must contain letters or numbers");
+  return slug;
+}
+
+export function workspaceIdentity(name: string, rootPath: string): RepoIdentity {
+  const slug = slugifyWorkspace(name);
+  const repoKey = createHash("sha256").update(`workspace:${slug}`).digest("hex").slice(0, 16);
+  return {
+    rootPath: resolve(rootPath),
+    remoteUrl: `amem://workspace/${slug}`,
+    repoKey,
+    repoName: slug,
+    defaultBranch: "main",
+  };
+}
+
+export function parseWorkspaceSlug(remoteUrl: string | null | undefined): string | null {
+  const m = /^amem:\/\/workspace\/([^/]+)$/.exec(remoteUrl ?? "");
+  return m?.[1] ?? null;
+}
+
 export function newId(prefix?: string): string {
   const id = randomUUID();
   return prefix ? `${prefix}_${id}` : id;

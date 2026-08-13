@@ -29,7 +29,7 @@ Steps:
    amem context "What should I know before changing this repository?"
    ```
 4. Confirm in one short paragraph: platform installed, DB path, claim count, and that memory is local-only.
-5. Suggest `amem ui` for the setup wizard, brain map, and token-savings stats (localhost only).
+5. Suggest `amem ui` — it opens Setup, scans local git repos to pick what to track, and can install a login item so the UI starts after reboot (localhost only).
 
 Do not echo proprietary prompting strategy into claims. Store only durable repo facts with file anchors.
 `````

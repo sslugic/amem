@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { buildAttestReport, formatAttestHuman } from "./attest.js";
-import { logContextUsage } from "./api/routes.js";
+import { handleApi, logContextUsage } from "./api/routes.js";
 import {
   closeDb,
   getRepoByCwd,
+  getRepoByName,
   listClaims,
   listComponents,
   listFlows,
@@ -18,6 +19,7 @@ import {
   wipeAllRepos,
   wipeRepo,
 } from "./db.js";
+import { handleHookPayload } from "./hook.js";
 import { installClaude, claudeInstallHealth } from "./install/claude.js";
 import { installCursor, cursorInstallHealth } from "./install/cursor.js";
 import { amemHome, dbPath } from "./paths.js";
@@ -34,25 +36,33 @@ import {
   loadProposalFile,
   validateProposal,
 } from "./proposal.js";
-import { detectRepoIdentity } from "./repo-identity.js";
-import { startUiServer } from "./ui/server.js";
+import { detectRepoIdentity, workspaceIdentity } from "./repo-identity.js";
+import { startUiServer, buildUiLandingUrl, openUiInBrowser, isAddrInUse } from "./ui/server.js";
+import { installLoginService, isServiceInstalled, uninstallLoginService } from "./service.js";
+import { mcpClientConfig, runMcpServer } from "./mcp.js";
+import { provisionWorkspace } from "./workspace-setup.js";
 
 function usage(): never {
   console.log(`amem — local personal agent memory
 
 Usage:
   amem init --platform cursor|claude
-  amem status
+  amem init --workspace <name> [--path <dir>] [--platform luna|cursor|claude]
+  amem status [--workspace <name>]
   amem doctor [--attest] [--json]
-  amem context "<query>" [--platform cursor|claude]
+  amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna]
+  amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>]
   amem propose validate <file.json>
   amem propose apply <file.json>
   amem export [--out <file.json>]
   amem wipe --yes
   amem wipe --all --yes
   amem session touch --platform cursor|claude [--session-id <id>]
+  amem hook
   amem usage report --saved <n> [--platform cursor|claude] [--event-id <id>]
   amem ui [--port 7843] [--no-open]
+  amem service install|uninstall|status
+  amem mcp [--print-config] [--workspace <name>]
 
 Privacy:
   All memory stays in ${amemHome()} on this machine.
@@ -93,6 +103,26 @@ function flagString(flags: Map<string, string | boolean>, name: string): string 
   return typeof v === "string" ? v : undefined;
 }
 
+function resolveBinding(flags: Map<string, string | boolean>) {
+  const workspace = flagString(flags, "workspace") || process.env.AMEM_WORKSPACE;
+  if (workspace) {
+    const repo = getRepoByName(workspace);
+    if (!repo) {
+      throw new Error(`No workspace "${workspace}". Run: amem init --workspace ${workspace}`);
+    }
+    return repo;
+  }
+  return requireRepo();
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 async function main(): Promise<void> {
   const { positional, flags } = parseArgs(process.argv);
   const cmd = positional[0];
@@ -101,9 +131,28 @@ async function main(): Promise<void> {
   try {
     switch (cmd) {
       case "init": {
+        const workspace = flagString(flags, "workspace");
+        if (workspace) {
+          const platform = flagString(flags, "platform") ?? "app";
+          const slugPath = join(amemHome(), "workspaces", workspace.toLowerCase());
+          const root = resolve(flagString(flags, "path") ?? slugPath);
+          mkdirSync(root, { recursive: true });
+          const identity = workspaceIdentity(workspace, root);
+          const repo = upsertRepo(identity, platform);
+          upsertSetupState(repo.id, [platform], true);
+          if (platform === "cursor") installCursor(identity.rootPath);
+          else if (platform === "claude") installClaude(identity.rootPath);
+          const ready = provisionWorkspace(repo, platform);
+          console.log(`Workspace ${repo.repo_name} (${repo.id})`);
+          console.log(`Memory DB: ${dbPath()}`);
+          console.log(`Root: ${repo.root_path}`);
+          console.log(`Platform: ${platform}`);
+          for (const line of ready.checks) console.log(`Ready: ${line}`);
+          break;
+        }
         const platform = flagString(flags, "platform");
         if (platform !== "cursor" && platform !== "claude") {
-          throw new Error("amem init requires --platform cursor|claude");
+          throw new Error("amem init requires --platform cursor|claude or --workspace <name>");
         }
         const policy = loadPolicy().policy;
         assertPlatformAllowed(platform, policy);
@@ -136,8 +185,15 @@ async function main(): Promise<void> {
         break;
       }
       case "status": {
-        const identity = detectRepoIdentity();
-        const repo = getRepoByCwd();
+        const workspaceFlag = flagString(flags, "workspace") || process.env.AMEM_WORKSPACE;
+        const identity = workspaceFlag
+          ? (() => {
+              const bound = getRepoByName(workspaceFlag);
+              if (!bound) throw new Error(`No workspace "${workspaceFlag}"`);
+              return { rootPath: bound.root_path, repoKey: bound.repo_key, remoteUrl: bound.remote_url, repoName: bound.repo_name };
+            })()
+          : detectRepoIdentity();
+        const repo = workspaceFlag ? getRepoByName(workspaceFlag) : getRepoByCwd();
         const policy = loadPolicy().policy;
         console.log(`cwd root: ${identity.rootPath}`);
         console.log(`repo key: ${identity.repoKey}`);
@@ -184,7 +240,7 @@ async function main(): Promise<void> {
           issues.push(...cursorInstallHealth(identity.rootPath));
         } else if (platform === "claude") {
           issues.push(...claudeInstallHealth());
-        } else if (repo) {
+        } else if (repo && repo.platform !== "luna" && !(repo.remote_url || "").startsWith("amem://workspace/")) {
           issues.push(...cursorInstallHealth(identity.rootPath));
           issues.push(...claudeInstallHealth());
         }
@@ -200,7 +256,7 @@ async function main(): Promise<void> {
       case "context": {
         const query = positional.slice(1).join(" ").trim();
         if (!query) throw new Error('Usage: amem context "<query>"');
-        const repo = requireRepo();
+        const repo = resolveBinding(flags);
         const platform =
           flagString(flags, "platform") ??
           repo.platform ??
@@ -226,6 +282,31 @@ async function main(): Promise<void> {
         );
         break;
       }
+      case "remember": {
+        const text = positional.slice(1).join(" ").trim();
+        if (!text) throw new Error('Usage: amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>]');
+        const repo = resolveBinding(flags);
+        const anchor = flagString(flags, "anchor");
+        const result = handleApi({
+          method: "POST",
+          pathname: "/api/remember",
+          searchParams: new URLSearchParams(),
+          body: {
+            text,
+            repoId: repo.id,
+            kind: flagString(flags, "kind") ?? "session",
+            anchors: anchor ? [anchor] : undefined,
+            source: "cli",
+          },
+          cwd: process.cwd(),
+        });
+        if (result.status >= 400) {
+          throw new Error((result.body as { error?: string }).error || "remember failed");
+        }
+        const remembered = result.body as { claimId?: string; workspace?: string };
+        console.log(`Remembered ${remembered.claimId} in ${remembered.workspace || repo.repo_name}`);
+        break;
+      }
       case "propose": {
         const sub = positional[1];
         const file = positional[2];
@@ -245,9 +326,8 @@ async function main(): Promise<void> {
           console.log("Proposal is valid.");
           break;
         }
-        const identity = detectRepoIdentity();
-        assertRemoteAllowed(identity.remoteUrl, policy);
-        const repo = requireRepo();
+        const repo = resolveBinding(flags);
+        assertRemoteAllowed(repo.remote_url, policy);
         const result = applyProposal(repo.id, proposal, policy);
         console.log(
           `Applied: ${result.claims} claims, ${result.flows} flows, ${result.components} components, ${result.edges} edges`,
@@ -256,7 +336,7 @@ async function main(): Promise<void> {
       }
       case "export": {
         assertExportAllowed();
-        const repo = requireRepo();
+        const repo = resolveBinding(flags);
         const data = {
           exported_at: new Date().toISOString(),
           repo: {
@@ -292,7 +372,7 @@ async function main(): Promise<void> {
           console.log(`Wiped all local amem data (${count} repos) under ${amemHome()}`);
           break;
         }
-        const repo = requireRepo();
+        const repo = resolveBinding(flags);
         wipeRepo(repo.id);
         console.log(`Wiped local memory for ${repo.repo_name}`);
         break;
@@ -318,6 +398,15 @@ async function main(): Promise<void> {
         touchSession(platform, sessionId, repo.id);
         break;
       }
+      case "hook": {
+        try {
+          const result = handleHookPayload(await readStdin());
+          process.stdout.write(`${JSON.stringify(result)}\n`);
+        } catch {
+          process.stdout.write(`${JSON.stringify({ continue: true })}\n`);
+        }
+        break;
+      }
       case "usage": {
         const sub = positional[1];
         if (sub !== "report") {
@@ -337,7 +426,7 @@ async function main(): Promise<void> {
           console.log(`Updated ${event.id} reported_tokens_saved=${saved}`);
           break;
         }
-        const repo = requireRepo();
+        const repo = resolveBinding(flags);
         const platform = flagString(flags, "platform") ?? repo.platform ?? "unknown";
         const event = setReportedOnLatest(repo.id, platform, saved);
         console.log(`Updated ${event.id} reported_tokens_saved=${saved}`);
@@ -348,18 +437,56 @@ async function main(): Promise<void> {
         const policy = loadPolicy().policy;
         const port = Number(flagString(flags, "port") ?? "7843");
         const openBrowser = !flags.get("no-open");
-        const server = await startUiServer({
-          port,
-          cwd: process.cwd(),
-          openBrowser,
-          host: policy.ui_bind,
-        });
-        console.log(`amem ui at ${server.url} (localhost only)`);
-        console.log(`cwd: ${process.cwd()}`);
-        console.log("Press Ctrl+C to stop.");
-        await new Promise(() => {
-          // run until killed
-        });
+        const landing = buildUiLandingUrl(port, process.cwd());
+        try {
+          const server = await startUiServer({
+            port,
+            cwd: process.cwd(),
+            openBrowser,
+            host: policy.ui_bind,
+            landingUrl: landing,
+          });
+          console.log(`amem ui at ${server.url} (localhost only)`);
+          console.log(`focused: ${process.cwd()}`);
+          console.log("Press Ctrl+C to stop.");
+          await new Promise(() => {
+            // run until killed
+          });
+        } catch (error) {
+          if (!isAddrInUse(error)) throw error;
+          if (openBrowser) openUiInBrowser(landing);
+          console.log(`amem ui already running — opened setup:`);
+          console.log(landing);
+          closeDb();
+        }
+        break;
+      }
+      case "service": {
+        const sub = positional[1];
+        if (sub === "status") {
+          console.log(`login item: ${isServiceInstalled() ? "installed" : "not installed"}`);
+          break;
+        }
+        if (sub === "install") {
+          const result = installLoginService();
+          console.log(`Installed login item: ${result.path}`);
+          console.log("amem ui will start on login (localhost only).");
+          break;
+        }
+        if (sub === "uninstall") {
+          const result = uninstallLoginService();
+          console.log(`Removed login item: ${result.path}`);
+          break;
+        }
+        throw new Error("Usage: amem service install|uninstall|status");
+      }
+      case "mcp": {
+        if (flags.get("print-config")) {
+          const ws = flagString(flags, "workspace") || process.env.AMEM_WORKSPACE || "my-app";
+          console.log(JSON.stringify(mcpClientConfig(ws), null, 2));
+          break;
+        }
+        await runMcpServer();
         break;
       }
       case "help":
@@ -372,7 +499,7 @@ async function main(): Promise<void> {
         usage();
     }
   } finally {
-    if (cmd !== "ui") closeDb();
+    if (cmd !== "ui" && cmd !== "mcp") closeDb();
   }
 }
 

@@ -20,12 +20,26 @@ export function estimateTokensSaved(input: {
   );
 }
 
+/** Typical Cursor/Claude tool round-trip to read a file (~1.2s) plus a little per claim. */
+export const MS_PER_FILE_ROUNDTRIP = 1200;
+export const MS_PER_CLAIM = 80;
+
+export function estimateMsSaved(input: { anchorsCount: number; claimsCount: number }): number {
+  return Math.max(0, input.anchorsCount * MS_PER_FILE_ROUNDTRIP + input.claimsCount * MS_PER_CLAIM);
+}
+
+export function eventKind(claimsCount: number, notesCount = 0): "local_hit" | "server_trip" {
+  return claimsCount > 0 || notesCount > 0 ? "local_hit" : "server_trip";
+}
+
 export function metricsFromPacket(packet: ContextPacket, markdown: string): {
   claimIds: string[];
   anchorsCount: number;
   claimsCount: number;
   packetTokens: number;
   estimatedTokensSaved: number;
+  estimatedMsSaved: number;
+  kind: "local_hit" | "server_trip";
 } {
   const claimIds = packet.claims.map((c) => c.id);
   const anchorSet = new Set<string>();
@@ -48,5 +62,16 @@ export function metricsFromPacket(packet: ContextPacket, markdown: string): {
     claimsCount,
     packetTokens,
   });
-  return { claimIds, anchorsCount, claimsCount, packetTokens, estimatedTokensSaved };
+  const notesCount = packet.notes.length;
+  const estimatedMsSaved = estimateMsSaved({ anchorsCount, claimsCount });
+  const kind = eventKind(claimsCount, notesCount);
+  return {
+    claimIds,
+    anchorsCount,
+    claimsCount,
+    packetTokens,
+    estimatedTokensSaved,
+    estimatedMsSaved,
+    kind,
+  };
 }

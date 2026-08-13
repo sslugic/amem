@@ -2,7 +2,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
 import { handleApi } from "../api/routes.js";
+import { detectRepoIdentity } from "../repo-identity.js";
+import { handleMcpHttpBody, isJsonRpcMessage } from "../mcp.js";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -44,6 +47,54 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Accept, mcp-session-id, mcp-protocol-version, x-amem-workspace",
+  });
+  res.end(payload);
+}
+
+const MCP_CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Content-Type, Accept, mcp-session-id, mcp-protocol-version, x-amem-workspace",
+  "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",
+};
+
+function workspaceFromMcpReq(req: IncomingMessage, url: URL): string | undefined {
+  const q = url.searchParams.get("workspace")?.trim();
+  if (q) return q;
+  const header = req.headers["x-amem-workspace"];
+  if (typeof header === "string" && header.trim()) return header.trim();
+  return process.env.AMEM_WORKSPACE || undefined;
+}
+
+function sendMcp(res: ServerResponse, req: IncomingMessage, body: unknown, workspace?: string): void {
+  const handled = handleMcpHttpBody(body, workspace);
+  if (handled.status === 202) {
+    res.writeHead(202, MCP_CORS);
+    res.end();
+    return;
+  }
+  const payload = JSON.stringify(handled.body);
+  const accept = String(req.headers.accept ?? "");
+  const preferSse = accept.includes("text/event-stream") && !accept.includes("application/json");
+  if (preferSse) {
+    res.writeHead(handled.status, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      ...MCP_CORS,
+    });
+    res.end(`event: message\ndata: ${payload}\n\n`);
+    return;
+  }
+  res.writeHead(handled.status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...MCP_CORS,
   });
   res.end(payload);
 }
@@ -75,11 +126,39 @@ export type UiServerOptions = {
   openBrowser?: boolean;
   /** Loopback only — non-loopback values are forced to 127.0.0.1 */
   host?: string;
+  landingUrl?: string;
 };
 
 function resolveLoopbackHost(host?: string): string {
   if (!host || host === "localhost" || host === "127.0.0.1") return "127.0.0.1";
   return "127.0.0.1";
+}
+
+export function buildUiLandingUrl(port: number, cwd: string): string {
+  const identity = detectRepoIdentity(cwd);
+  const q = new URLSearchParams();
+  q.set("tab", "setup");
+  q.set("path", identity.rootPath);
+  return `http://127.0.0.1:${port}/?${q.toString()}`;
+}
+
+export function openUiInBrowser(url: string): void {
+  try {
+    if (process.platform === "darwin") execFile("open", [url]);
+    else if (process.platform === "win32") execFile("cmd", ["/c", "start", url]);
+    else execFile("xdg-open", [url]);
+  } catch {
+    // ignore
+  }
+}
+
+export function isAddrInUse(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "EADDRINUSE"
+  );
 }
 
 export async function startUiServer(options: UiServerOptions = {}): Promise<{
@@ -95,6 +174,46 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<{
     try {
       const host = req.headers.host ?? `${listenHost}:${port}`;
       const url = new URL(req.url ?? "/", `http://${host}`);
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, MCP_CORS);
+        res.end();
+        return;
+      }
+      const mcpPath = url.pathname === "/mcp" || url.pathname === "/sse";
+      if (mcpPath && req.method === "GET") {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          ...MCP_CORS,
+        });
+        res.write(": amem mcp\n\n");
+        req.on("close", () => res.end());
+        return;
+      }
+      if (mcpPath && req.method === "DELETE") {
+        res.writeHead(204, MCP_CORS);
+        res.end();
+        return;
+      }
+      if (req.method === "POST") {
+        const body = await readBody(req);
+        if (mcpPath || isJsonRpcMessage(body)) {
+          sendMcp(res, req, body, workspaceFromMcpReq(req, url));
+          return;
+        }
+        if (url.pathname.startsWith("/api/")) {
+          const result = handleApi({
+            method: req.method,
+            pathname: url.pathname,
+            searchParams: url.searchParams,
+            body,
+            cwd,
+          });
+          sendJson(res, result.status, result.body);
+          return;
+        }
+      }
       if (url.pathname.startsWith("/api/")) {
         const body = req.method === "GET" || req.method === "HEAD" ? null : await readBody(req);
         const result = handleApi({
@@ -119,17 +238,9 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<{
     server.listen(port, listenHost, () => resolve());
   });
 
-  const url = `http://${listenHost}:${port}`;
+  const url = options.landingUrl ?? `http://${listenHost}:${port}`;
   if (options.openBrowser !== false) {
-    try {
-      const { execFile } = await import("node:child_process");
-      const platform = process.platform;
-      if (platform === "darwin") execFile("open", [url]);
-      else if (platform === "win32") execFile("cmd", ["/c", "start", url]);
-      else execFile("xdg-open", [url]);
-    } catch {
-      // ignore
-    }
+    openUiInBrowser(url);
   }
 
   return {

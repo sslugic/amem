@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +53,20 @@ export function writeJson(path: string, value: unknown): void {
 }
 
 export function resolveAmemBin(): string {
-  // Prefer PATH-installed binary; fall back to node running this package's CLI.
-  return "amem";
+  const args = resolveAmemProgramArgs();
+  return args.length === 1 ? args[0]! : args.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ");
+}
+
+export function resolveAmemProgramArgs(...extra: string[]): string[] {
+  try {
+    const found = execFileSync("which", ["amem"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (found) return [found, ...extra];
+  } catch {
+    // fall through
+  }
+  const cli = join(getPackageRoot(), "dist", "cli.js");
+  return [process.execPath, cli, ...extra];
 }

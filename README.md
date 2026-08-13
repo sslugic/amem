@@ -75,17 +75,24 @@ amem status       # sanity check from any directory
 
 ## First-time setup (recommended)
 
-Pick a **product repository** you actually work in — not the amem tool repo unless you are testing amem on itself.
-
 ```bash
-cd ~/path/to/your-real-project
 amem ui
 ```
 
-That opens `http://127.0.0.1:7843` with three tabs:
+That opens `http://127.0.0.1:7843` on the **Setup** tab. It scans your home folder for git repos (skips `Library`, `node_modules`, `Downloads`, and similar noise). Check the ones you want, pick Cursor and/or Claude Code, then **Start tracking selected**. Each pick is bound in `~/.amem` and gets agent install (skills, hooks, rules).
 
-1. **Setup** — choose Cursor and/or Claude Code, install skills/hooks/rules, apply a bootstrap proposal into local memory  
-2. **Brain** — interactive map of components, flows, and claims; highlights what recent context queries used  
+Optional: check **Start amem ui when this computer logs in** so the localhost server comes back after a reboot (macOS LaunchAgent). Same thing from the CLI:
+
+```bash
+amem service install    # start on login
+amem service status
+amem service uninstall
+```
+
+Tabs after setup:
+
+1. **Setup** — scan/select repos, platforms, login auto-start, bootstrap proposal  
+2. **Brain** — facts grouped by file, plus recent Cursor hits/misses (what was injected vs what had to be explored)  
 3. **Stats** — estimated tokens saved per LLM (clearly labeled as estimates)
 
 Server-only (no browser open):
@@ -93,6 +100,8 @@ Server-only (no browser open):
 ```bash
 amem ui --port 7843 --no-open
 ```
+
+To scan extra folders (or only a subset), set `AMEM_SCAN_ROOTS` to a colon-separated list of directories.
 
 ### CLI alternative (no UI)
 
@@ -178,6 +187,10 @@ estimated_avoided = max(0, anchors×4000 + claims×200 − packet_tokens)
 
 This is a **proxy** for exploration avoided — not your Cursor/Anthropic bill.
 
+Time saved is a separate proxy: each returned file anchor is treated as ~1.2s of tool round-trip the agent did not have to make. Local lookup duration is measured (SQLite on localhost). A **server trip** in the brain map is a miss: amem had nothing useful, so the agent had to explore.
+
+Stats also shows a **monthly projection**: last 7 days of calls (or fewer if you just started), scaled to 30 days. Still a proxy, not a bill.
+
 If you later know a better number:
 
 ```bash
@@ -188,13 +201,81 @@ amem usage report --event-id usage_… --saved 12000
 
 ---
 
+## LLM clients (beyond git repos)
+
+amem can bind a **named workspace** that is not a git checkout — for Luna Client or any tool that talks to Cursor/Claude/other models.
+
+```bash
+amem init --workspace my-app
+# seeds starter facts and runs a context check automatically
+```
+
+Attach any LLM client yourself (HTTP or MCP). Keep `amem ui` running for HTTP. From the client, **before** each model call:
+
+```js
+const res = await fetch("http://127.0.0.1:7843/api/context", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    workspace: "my-app",
+    query: userMessage,
+    platform: "app",
+    sessionId,
+  }),
+});
+const { markdown } = await res.json();
+// prepend markdown to the prompt / tool result so the model skips a large retrieve
+```
+
+After a durable outcome:
+
+```js
+await fetch("http://127.0.0.1:7843/api/remember", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    workspace: "my-app",
+    text: takeaway,
+    kind: "session",
+    anchors: ["my-app"],
+  }),
+});
+```
+
+MCP config (Cursor / Claude / Luna / any MCP host):
+
+Keep `amem ui` running (or `amem service install` so it starts at login). GUI apps often cannot find `amem` on `PATH`, which shows up as “live tool discovery failed” / MCP `error` — not a sign-in prompt. Prefer HTTP:
+
+```json
+{
+  "mcpServers": {
+    "amem": {
+      "url": "http://127.0.0.1:7843/mcp?workspace=my-app"
+    }
+  }
+}
+```
+
+Stdio also works if the host can spawn the binary. Print a config with absolute paths:
+
+```bash
+amem mcp --print-config --workspace my-app
+```
+
+Same localhost DB as git-repo memory. Workspaces show up in the UI switcher; create one from Setup or `amem init --workspace`.
+
+---
+
 ## Command reference
 
 ```text
 amem init --platform cursor|claude
-amem status
+amem init --workspace <name> [--path <dir>] [--platform app]
+amem status [--workspace <name>]
 amem doctor [--attest] [--json]
-amem context "<query>" [--platform cursor|claude]
+amem context "<query>" [--workspace <name>] [--platform …]
+amem remember "<text>" [--workspace <name>]
+amem mcp [--print-config] [--workspace <name>]
 amem propose validate <file.json>
 amem propose apply <file.json>
 amem export [--out <file.json>]
@@ -203,14 +284,18 @@ amem wipe --all --yes
 amem session touch --platform cursor|claude [--session-id <id>]
 amem usage report --saved <n> [--platform …] [--event-id …]
 amem ui [--port 7843] [--no-open]
+amem service install|uninstall|status
 ```
 
 | Command | Purpose |
 | --- | --- |
-| `init` | Bind this git repo to local DB; install agent glue |
+| `init` | Bind a git repo or a named app workspace |
 | `context` | Retrieve a Markdown packet; log usage |
+| `remember` | Store one local fact |
+| `mcp` | Stdio MCP tools; HTTP MCP is at `http://127.0.0.1:7843/mcp` while the UI is running |
 | `propose apply` | Upsert structured memory locally |
 | `ui` | Setup wizard + brain + stats on localhost |
+| `service` | Install a macOS login item so `amem ui` starts after reboot |
 | `doctor --attest` | Privacy/policy attestation for IT tickets |
 | `export` / `wipe` | Personal backup or delete (still local) |
 | `wipe --all --yes` | Offboard: wipe every repo and remove `~/.amem` |

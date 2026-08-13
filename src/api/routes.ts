@@ -1,7 +1,12 @@
+import { existsSync, mkdirSync } from "node:fs";
+import { resolve, join } from "node:path";
+import { createHash } from "node:crypto";
 import { metricsFromPacket } from "../estimate.js";
+import { buildActivityGraph, speedForEvent } from "../activity.js";
 import {
   getRepoByCwd,
   getRepoById,
+  getRepoByName,
   getSetupState,
   insertUsageEvent,
   listClaims,
@@ -9,6 +14,7 @@ import {
   listEdges,
   listFlows,
   listRepos,
+  listSessions,
   listUsageEvents,
   setReportedOnLatest,
   setReportedTokensSaved,
@@ -27,9 +33,16 @@ import {
   loadPolicy,
 } from "../policy.js";
 import { applyProposal, parseProposalJson, validateProposal } from "../proposal.js";
-import { detectRepoIdentity } from "../repo-identity.js";
+import { detectRepoIdentity, normalizeRemoteUrl, parseWorkspaceSlug, slugifyWorkspace, workspaceIdentity, type RepoIdentity } from "../repo-identity.js";
 import { amemHome, dbPath } from "../paths.js";
 import { buildAttestReport } from "../attest.js";
+import { scanGitRepos } from "../scan.js";
+import { provisionWorkspace } from "../workspace-setup.js";
+import {
+  installLoginService,
+  isServiceInstalled,
+  uninstallLoginService,
+} from "../service.js";
 
 export type ApiRequest = {
   method: string;
@@ -50,6 +63,93 @@ function ok(body: unknown): ApiResponse {
 
 function err(status: number, message: string): ApiResponse {
   return { status, body: { error: message } };
+}
+
+function bodyField(body: unknown, key: string): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const value = (body as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+type ResolvedScope =
+  | { ok: true; identity: RepoIdentity; repo: RepoRow | null }
+  | { ok: false; response: ApiResponse };
+
+function resolveScope(req: ApiRequest): ResolvedScope {
+  const repoId = req.searchParams.get("repo") || bodyField(req.body, "repoId");
+  const workspace = req.searchParams.get("workspace") || bodyField(req.body, "workspace");
+  const rawPath = req.searchParams.get("path") || bodyField(req.body, "path");
+
+  if (repoId && repoId !== "current" && repoId !== "all") {
+    const found = getRepoById(repoId);
+    if (!found) return { ok: false, response: err(404, "Repo not found") };
+    return { ok: true, identity: identityForRepo(found), repo: found };
+  }
+
+  if (workspace) {
+    const found = getRepoByName(workspace);
+    if (!found) {
+      return {
+        ok: false,
+        response: err(404, `Workspace not found: ${workspace}. Run amem init --workspace ${workspace}`),
+      };
+    }
+    return { ok: true, identity: identityForRepo(found), repo: found };
+  }
+
+  const cwd = rawPath ? resolve(rawPath) : req.cwd;
+  if (rawPath && !existsSync(cwd)) {
+    return { ok: false, response: err(400, `Path not found: ${cwd}`) };
+  }
+  return { ok: true, identity: detectRepoIdentity(cwd), repo: getRepoByCwd(cwd) };
+}
+
+function identityForRepo(repo: RepoRow): RepoIdentity {
+  const slug = parseWorkspaceSlug(repo.remote_url);
+  if (slug) return workspaceIdentity(slug, repo.root_path);
+  return detectRepoIdentity(repo.root_path);
+}
+
+function summarizeRepo(r: RepoRow) {
+  const setup = getSetupState(r.id);
+  return {
+    id: r.id,
+    repo_key: r.repo_key,
+    repo_name: r.repo_name,
+    root_path: r.root_path,
+    remote_url: r.remote_url,
+    platform: r.platform,
+    kind: parseWorkspaceSlug(r.remote_url) ? "workspace" : "git",
+    setup_completed: Boolean(setup?.setup_completed_at),
+    counts: {
+      claims: listClaims(r.id).length,
+      flows: listFlows(r.id).length,
+      components: listComponents(r.id).length,
+    },
+  };
+}
+
+function statusPayload(identity: RepoIdentity, repo: RepoRow | null) {
+  const setup = repo ? getSetupState(repo.id) : null;
+  const loaded = loadPolicy();
+  return {
+    amemHome: amemHome(),
+    dbPath: dbPath(),
+    identity,
+    repo,
+    setup,
+    policy: loaded.policy,
+    doctor: doctorIssues(repo, identity.rootPath),
+    counts: repo
+      ? {
+          claims: listClaims(repo.id).length,
+          flows: listFlows(repo.id).length,
+          components: listComponents(repo.id).length,
+          edges: listEdges(repo.id).length,
+        }
+      : null,
+    repos: listRepos().map(summarizeRepo),
+  };
 }
 
 function doctorIssues(repo: RepoRow | null, rootPath: string): string[] {
@@ -79,7 +179,58 @@ function doctorIssues(repo: RepoRow | null, rootPath: string): string[] {
   return issues;
 }
 
-function aggregateUsage(events: UsageEventRow[]) {
+function dayStamp(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+function inclusiveDaySpan(fromIso: string, toMs: number): number {
+  const from = Date.parse(`${dayStamp(fromIso)}T00:00:00Z`);
+  const to = Date.parse(`${new Date(toMs).toISOString().slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return 1;
+  return Math.floor((to - from) / 86_400_000) + 1;
+}
+
+function projectMonthly(events: UsageEventRow[], windowDays: number) {
+  const empty = {
+    trendDays: 0,
+    sampleQueries: 0,
+    estimatedTokensSaved: 0,
+    estimatedMsSaved: 0,
+    queries: 0,
+    anchorsAvoided: 0,
+  };
+  if (events.length === 0) return empty;
+
+  const trendCap = Math.min(7, Math.max(1, windowDays));
+  const now = Date.now();
+  const cutoff = now - trendCap * 86_400_000;
+  const recent = events.filter((e) => Date.parse(e.created_at) >= cutoff);
+  const sample = recent.length > 0 ? recent : events;
+  const oldest = sample.reduce((a, e) => (e.created_at < a ? e.created_at : a), sample[0]!.created_at);
+  const trendDays = Math.min(trendCap, inclusiveDaySpan(oldest, now));
+  const scale = 30 / trendDays;
+
+  let tokens = 0;
+  let ms = 0;
+  let anchors = 0;
+  for (const e of sample) {
+    const speed = speedForEvent(e);
+    tokens += e.estimated_tokens_saved;
+    ms += speed.estimatedMsSaved;
+    anchors += speed.anchorsCount;
+  }
+
+  return {
+    trendDays,
+    sampleQueries: sample.length,
+    estimatedTokensSaved: Math.round(tokens * scale),
+    estimatedMsSaved: Math.round(ms * scale),
+    queries: Math.round(sample.length * scale),
+    anchorsAvoided: Math.round(anchors * scale),
+  };
+}
+
+function aggregateUsage(events: UsageEventRow[], windowDays = 30) {
   const byPlatform: Record<
     string,
     {
@@ -87,15 +238,45 @@ function aggregateUsage(events: UsageEventRow[]) {
       queries: number;
       estimatedTokensSaved: number;
       reportedTokensSaved: number;
+      estimatedMsSaved: number;
+      localHits: number;
+      serverTrips: number;
+      localMsTotal: number;
+      localMsSamples: number;
       lastUsed: string | null;
     }
   > = {};
   const byDay: Record<
     string,
-    { day: string; estimatedTokensSaved: number; reportedTokensSaved: number; queries: number }
+    {
+      day: string;
+      estimatedTokensSaved: number;
+      reportedTokensSaved: number;
+      estimatedMsSaved: number;
+      queries: number;
+      localHits: number;
+      serverTrips: number;
+    }
   > = {};
 
+  let localMsTotal = 0;
+  let localMsSamples = 0;
+  let estimatedMsSaved = 0;
+  let localHits = 0;
+  let serverTrips = 0;
+  let anchorsAvoided = 0;
+
   for (const e of events) {
+    const speed = speedForEvent(e);
+    estimatedMsSaved += speed.estimatedMsSaved;
+    anchorsAvoided += speed.anchorsCount;
+    if (speed.kind === "local_hit") localHits += 1;
+    else serverTrips += 1;
+    if (speed.localMs != null) {
+      localMsTotal += speed.localMs;
+      localMsSamples += 1;
+    }
+
     const p = e.platform || "unknown";
     if (!byPlatform[p]) {
       byPlatform[p] = {
@@ -103,61 +284,232 @@ function aggregateUsage(events: UsageEventRow[]) {
         queries: 0,
         estimatedTokensSaved: 0,
         reportedTokensSaved: 0,
+        estimatedMsSaved: 0,
+        localHits: 0,
+        serverTrips: 0,
+        localMsTotal: 0,
+        localMsSamples: 0,
         lastUsed: null,
       };
     }
     byPlatform[p]!.queries += 1;
     byPlatform[p]!.estimatedTokensSaved += e.estimated_tokens_saved;
     byPlatform[p]!.reportedTokensSaved += e.reported_tokens_saved ?? 0;
+    byPlatform[p]!.estimatedMsSaved += speed.estimatedMsSaved;
+    if (speed.kind === "local_hit") byPlatform[p]!.localHits += 1;
+    else byPlatform[p]!.serverTrips += 1;
+    if (speed.localMs != null) {
+      byPlatform[p]!.localMsTotal += speed.localMs;
+      byPlatform[p]!.localMsSamples += 1;
+    }
     if (!byPlatform[p]!.lastUsed || e.created_at > byPlatform[p]!.lastUsed!) {
       byPlatform[p]!.lastUsed = e.created_at;
     }
 
     const day = e.created_at.slice(0, 10);
     if (!byDay[day]) {
-      byDay[day] = { day, estimatedTokensSaved: 0, reportedTokensSaved: 0, queries: 0 };
+      byDay[day] = {
+        day,
+        estimatedTokensSaved: 0,
+        reportedTokensSaved: 0,
+        estimatedMsSaved: 0,
+        queries: 0,
+        localHits: 0,
+        serverTrips: 0,
+      };
     }
     byDay[day]!.estimatedTokensSaved += e.estimated_tokens_saved;
     byDay[day]!.reportedTokensSaved += e.reported_tokens_saved ?? 0;
+    byDay[day]!.estimatedMsSaved += speed.estimatedMsSaved;
     byDay[day]!.queries += 1;
+    if (speed.kind === "local_hit") byDay[day]!.localHits += 1;
+    else byDay[day]!.serverTrips += 1;
   }
 
+  const queries = events.length;
   return {
-    byPlatform: Object.values(byPlatform),
+    byPlatform: Object.values(byPlatform).map((p) => ({
+      ...p,
+      avgLocalMs: p.localMsSamples ? Math.round(p.localMsTotal / p.localMsSamples) : null,
+    })),
     byDay: Object.values(byDay).sort((a, b) => a.day.localeCompare(b.day)),
     totals: {
-      queries: events.length,
+      queries,
       estimatedTokensSaved: events.reduce((s, e) => s + e.estimated_tokens_saved, 0),
       reportedTokensSaved: events.reduce((s, e) => s + (e.reported_tokens_saved ?? 0), 0),
+      estimatedMsSaved,
+      localHits,
+      serverTrips,
+      hitRate: queries ? localHits / queries : 0,
+      avgLocalMs: localMsSamples ? Math.round(localMsTotal / localMsSamples) : null,
+      anchorsAvoided,
     },
+    monthly: projectMonthly(events, windowDays),
   };
+}
+
+function createWorkspace(body: unknown): ApiResponse {
+  const name = bodyField(body, "name");
+  if (!name) return err(400, "name required");
+  let slug: string;
+  try {
+    slug = slugifyWorkspace(name);
+  } catch (error) {
+    return err(400, error instanceof Error ? error.message : String(error));
+  }
+  const platform = bodyField(body, "platform") ?? "app";
+  const rawPath = bodyField(body, "path");
+  const root = rawPath ? resolve(rawPath) : join(amemHome(), "workspaces", slug);
+  mkdirSync(root, { recursive: true });
+  const identity = workspaceIdentity(slug, root);
+  const repo = upsertRepo(identity, platform);
+  upsertSetupState(repo.id, [platform], true);
+  const ready = provisionWorkspace(repo, platform);
+  return ok({
+    workspace: slug,
+    repo: summarizeRepo(repo),
+    ready,
+    mcp: {
+      url: `http://127.0.0.1:7843/mcp?workspace=${encodeURIComponent(slug)}`,
+    },
+  });
+}
+
+function runContext(repo: RepoRow, body: unknown, searchParams: URLSearchParams): ApiResponse {
+  const query = bodyField(body, "query") || searchParams.get("query") || "";
+  if (!query.trim()) return err(400, "query required");
+  const platform =
+    bodyField(body, "platform") || searchParams.get("platform") || repo.platform || "unknown";
+  const sessionId = bodyField(body, "sessionId") || searchParams.get("sessionId") || undefined;
+  const result = logContextUsage({
+    repoId: repo.id,
+    platform,
+    sessionId,
+    query,
+  });
+  return ok({
+    markdown: result.markdown,
+    event: result.event,
+    workspace: parseWorkspaceSlug(repo.remote_url) ?? repo.repo_name,
+  });
+}
+
+function runRemember(repo: RepoRow, body: unknown): ApiResponse {
+  const text = bodyField(body, "text");
+  if (!text) return err(400, "text required");
+  const kind = bodyField(body, "kind") ?? "session";
+  const id =
+    bodyField(body, "id") ??
+    `claim.remember_${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
+  const payload = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const anchorsRaw = payload.anchors;
+  const anchors = Array.isArray(anchorsRaw)
+    ? anchorsRaw.filter((a): a is string => typeof a === "string" && Boolean(a.trim())).slice(0, 8)
+    : [];
+  if (anchors.length === 0) {
+    anchors.push(parseWorkspaceSlug(repo.remote_url) ?? repo.repo_name);
+  }
+  const applied = applyProposal(repo.id, {
+    claims: [
+      {
+        id,
+        kind,
+        text,
+        code_anchors: anchors,
+        source_ref: bodyField(body, "source") ?? "api",
+      },
+    ],
+  });
+  return ok({
+    applied,
+    claimId: id,
+    workspace: parseWorkspaceSlug(repo.remote_url) ?? repo.repo_name,
+  });
 }
 
 export function handleApi(req: ApiRequest): ApiResponse {
   const { method, pathname, searchParams, body, cwd } = req;
-  const identity = detectRepoIdentity(cwd);
-  const repo = getRepoByCwd(cwd);
+
+  if (method === "GET" && pathname === "/api/repos") {
+    return ok({ repos: listRepos().map(summarizeRepo) });
+  }
+
+  if (method === "POST" && pathname === "/api/workspaces") {
+    return createWorkspace(body);
+  }
+
+  if (method === "GET" && pathname === "/api/scan") {
+    const scanned = scanGitRepos();
+    const bound = listRepos();
+    return ok({
+      ...scanned,
+      repos: scanned.repos.map((r) => ({
+        ...r,
+        tracking: bound.some((b) => {
+          if (b.root_path === r.path) return true;
+          if (r.remote && b.remote_url && normalizeRemoteUrl(r.remote) === b.remote_url) return true;
+          return false;
+        }),
+      })),
+    });
+  }
+
+  if (method === "POST" && pathname === "/api/track") {
+    const payload = body && typeof body === "object" ? (body as { paths?: string[]; platforms?: string[] }) : {};
+    const paths = (payload.paths ?? []).filter((p) => typeof p === "string" && p.trim());
+    const platforms = (payload.platforms ?? []).filter((p) => p === "cursor" || p === "claude");
+    if (paths.length === 0) return err(400, "Select at least one repository");
+    if (platforms.length === 0) return err(400, "Select at least one platform: cursor or claude");
+    const tracked: unknown[] = [];
+    for (const raw of paths) {
+      const root = resolve(raw);
+      if (!existsSync(root)) continue;
+      const identity = detectRepoIdentity(root);
+      let current = upsertRepo(identity, platforms[0]);
+      for (const platform of platforms) {
+        current = upsertRepo(identity, platform);
+        if (platform === "cursor") installCursor(identity.rootPath);
+        else installClaude(identity.rootPath);
+      }
+      upsertSetupState(current.id, platforms, true);
+      tracked.push(summarizeRepo(current));
+    }
+    return ok({ tracked, repos: listRepos().map(summarizeRepo) });
+  }
+
+  if (method === "GET" && pathname === "/api/service") {
+    return ok({
+      platform: process.platform,
+      supported: process.platform === "darwin",
+      installed: isServiceInstalled(),
+    });
+  }
+
+  if (method === "POST" && pathname === "/api/service") {
+    const enabled = (body as { enabled?: boolean })?.enabled;
+    if (typeof enabled !== "boolean") return err(400, "enabled must be true or false");
+    try {
+      const result = enabled ? installLoginService() : uninstallLoginService();
+      return ok({ ...result, supported: process.platform === "darwin" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return err(400, message);
+    }
+  }
+
+  if (method === "GET" && pathname.startsWith("/api/repos/")) {
+    const id = pathname.slice("/api/repos/".length);
+    const found = getRepoById(id);
+    if (!found) return err(404, "Repo not found");
+    return ok({ repo: found, ...summarizeRepo(found) });
+  }
+
+  const scoped = resolveScope(req);
+  if (!scoped.ok) return scoped.response;
+  const { identity, repo } = scoped;
 
   if (method === "GET" && pathname === "/api/status") {
-    const setup = repo ? getSetupState(repo.id) : null;
-    const loaded = loadPolicy();
-    return ok({
-      amemHome: amemHome(),
-      dbPath: dbPath(),
-      identity,
-      repo,
-      setup,
-      policy: loaded.policy,
-      doctor: doctorIssues(repo, identity.rootPath),
-      counts: repo
-        ? {
-            claims: listClaims(repo.id).length,
-            flows: listFlows(repo.id).length,
-            components: listComponents(repo.id).length,
-            edges: listEdges(repo.id).length,
-          }
-        : null,
-    });
+    return ok(statusPayload(identity, repo));
   }
 
   if (method === "GET" && pathname === "/api/attest") {
@@ -190,7 +542,18 @@ export function handleApi(req: ApiRequest): ApiResponse {
       setup,
       installs: results,
       doctor: doctorIssues(current, identity.rootPath),
+      status: statusPayload(identity, current),
     });
+  }
+
+  if ((method === "POST" || method === "GET") && pathname === "/api/context") {
+    if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
+    return runContext(repo, body, searchParams);
+  }
+
+  if (method === "POST" && pathname === "/api/remember") {
+    if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
+    return runRemember(repo, body);
   }
 
   if (method === "POST" && pathname === "/api/bootstrap") {
@@ -241,11 +604,15 @@ export function handleApi(req: ApiRequest): ApiResponse {
       edges: listEdges(repo.id),
       recentClaimIds: [...recentClaimIds],
       recentEvents: events.slice(0, 30),
+      activity: buildActivityGraph({
+        events,
+        sessions: listSessions(repo.id),
+      }),
     });
   }
 
   if (method === "GET" && pathname === "/api/usage") {
-    const scope = searchParams.get("repo") ?? "current";
+    const scope = searchParams.get("scope") ?? (searchParams.get("repo") === "all" ? "all" : "current");
     const days = Number(searchParams.get("days") ?? "30");
     let events: UsageEventRow[];
     if (scope === "all") {
@@ -258,7 +625,7 @@ export function handleApi(req: ApiRequest): ApiResponse {
       scope,
       days,
       events,
-      aggregate: aggregateUsage(events),
+      aggregate: aggregateUsage(events, days),
       repos: listRepos().map((r) => ({ id: r.id, name: r.repo_name })),
     });
   }
@@ -288,17 +655,6 @@ export function handleApi(req: ApiRequest): ApiResponse {
     return ok({ wiped: true });
   }
 
-  if (method === "GET" && pathname === "/api/repos") {
-    return ok({ repos: listRepos() });
-  }
-
-  if (method === "GET" && pathname.startsWith("/api/repos/")) {
-    const id = pathname.slice("/api/repos/".length);
-    const found = getRepoById(id);
-    if (!found) return err(404, "Repo not found");
-    return ok({ repo: found });
-  }
-
   return err(404, `Unknown route ${method} ${pathname}`);
 }
 
@@ -307,10 +663,12 @@ export function logContextUsage(input: {
   platform: string;
   sessionId?: string;
   query: string;
-}): { markdown: string; event: UsageEventRow } {
+}): { markdown: string; event: UsageEventRow; packet: ReturnType<typeof buildContext> } {
+  const started = Date.now();
   const packet = buildContext(input.repoId, input.query);
   const markdown = renderContextMarkdown(packet);
   const metrics = metricsFromPacket(packet, markdown);
+  const localMs = Math.max(0, Date.now() - started);
   const event = insertUsageEvent({
     repoId: input.repoId,
     platform: input.platform,
@@ -321,6 +679,9 @@ export function logContextUsage(input: {
     claimsCount: metrics.claimsCount,
     packetTokens: metrics.packetTokens,
     estimatedTokensSaved: metrics.estimatedTokensSaved,
+    localMs,
+    estimatedMsSaved: metrics.estimatedMsSaved,
+    kind: metrics.kind,
   });
-  return { markdown, event };
+  return { markdown, event, packet };
 }

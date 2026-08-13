@@ -1,10 +1,12 @@
 import {
   listClaims,
   listComponents,
+  listConversationNotes,
   listEdges,
   listFlows,
   type ClaimRow,
   type ComponentRow,
+  type ConversationNoteRow,
   type FlowRow,
 } from "./db.js";
 
@@ -13,6 +15,16 @@ function tokenize(text: string): string[] {
     .toLowerCase()
     .split(/[^a-z0-9_./-]+/)
     .filter((t) => t.length > 1);
+}
+
+function scoreNote(note: ConversationNoteRow, queryTokens: string[]): number {
+  if (queryTokens.length === 0) return 0;
+  const hay = note.text.toLowerCase();
+  let score = 0;
+  for (const token of queryTokens) {
+    if (hay.includes(token)) score += token.length > 4 ? 3 : 2;
+  }
+  return score;
 }
 
 function scoreClaim(claim: ClaimRow, queryTokens: string[]): number {
@@ -34,6 +46,7 @@ export type ContextPacket = {
   claims: Array<ClaimRow & { score: number }>;
   flows: FlowRow[];
   components: ComponentRow[];
+  notes: Array<ConversationNoteRow & { score: number }>;
 };
 
 export function buildContext(repoId: string, query: string, limit = 12): ContextPacket {
@@ -81,34 +94,50 @@ export function buildContext(repoId: string, query: string, limit = 12): Context
   const flows = listFlows(repoId).filter((f) => flowIds.has(f.id));
   const components = listComponents(repoId).filter((c) => componentIds.has(c.id));
 
-  return { query, claims: selected, flows, components };
+  const notesRaw = listConversationNotes(repoId, 40)
+    .map((n) => ({ ...n, score: scoreNote(n, queryTokens) }))
+    .filter((n) => (queryTokens.length === 0 ? true : n.score > 0))
+    .sort((a, b) => b.score - a.score || b.created_at.localeCompare(a.created_at))
+    .slice(0, 5);
+  const notes =
+    notesRaw.length > 0
+      ? notesRaw
+      : listConversationNotes(repoId, 5).map((n) => ({ ...n, score: 0 }));
+
+  return { query, claims: selected, flows, components, notes };
 }
 
 export function renderContextMarkdown(packet: ContextPacket): string {
   const lines: string[] = ["# Agent Memory Context", "", `Query: ${packet.query}`, ""];
 
-  if (packet.claims.length === 0) {
+  if (packet.claims.length === 0 && packet.notes.length === 0) {
     lines.push("No claims stored for this repository yet.", "");
     lines.push("Seed memory with the `amem-bootstrap` skill or `amem propose apply <file>`.");
     return lines.join("\n");
   }
 
-  lines.push("## Best Claims", "");
-  for (const claim of packet.claims) {
-    lines.push(`### ${claim.id}`);
-    lines.push(`Kind: \`${claim.kind}\``);
-    lines.push("");
-    lines.push(claim.text);
-    lines.push("");
-    let anchors: string[] = [];
-    try {
-      anchors = JSON.parse(claim.code_anchors) as string[];
-    } catch {
-      anchors = [];
-    }
-    if (anchors.length > 0) {
-      lines.push(`Anchors: ${anchors.map((a) => `\`${a}\``).join(", ")}`);
+  if (packet.claims.length === 0) {
+    lines.push("No durable claims yet — using recent conversation memory.", "");
+  }
+
+  if (packet.claims.length > 0) {
+    lines.push("## Best Claims", "");
+    for (const claim of packet.claims) {
+      lines.push(`### ${claim.id}`);
+      lines.push(`Kind: \`${claim.kind}\``);
       lines.push("");
+      lines.push(claim.text);
+      lines.push("");
+      let anchors: string[] = [];
+      try {
+        anchors = JSON.parse(claim.code_anchors) as string[];
+      } catch {
+        anchors = [];
+      }
+      if (anchors.length > 0) {
+        lines.push(`Anchors: ${anchors.map((a) => `\`${a}\``).join(", ")}`);
+        lines.push("");
+      }
     }
   }
 
@@ -129,8 +158,17 @@ export function renderContextMarkdown(packet: ContextPacket): string {
     lines.push("");
   }
 
+  if (packet.notes.length > 0) {
+    lines.push("## Recent conversation memory", "");
+    for (const note of packet.notes) {
+      const label = note.role === "user" ? "You asked" : note.role === "assistant" ? "Prior answer" : note.role;
+      lines.push(`- (${label}) ${note.text.replace(/\s+/g, " ").slice(0, 280)}`);
+    }
+    lines.push("");
+  }
+
   lines.push(
-    "_Memory is personal and local (`~/.amem`). Verify anchors in current code before changing anything._",
+    "_Memory is personal and local (`~/.amem`). Prefer these anchors over broad exploration. Verify current code before changing anything._",
   );
   return lines.join("\n");
 }

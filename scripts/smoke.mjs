@@ -2,13 +2,14 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = join(fileURLToPath(import.meta.url), "..", "..");
 const cli = join(root, "dist", "cli.js");
 const amemHome = mkdtempSync(join(tmpdir(), "amem-smoke-home-"));
 const repoDir = mkdtempSync(join(tmpdir(), "amem-smoke-repo-"));
+const extraDirs = [];
 
 function run(args, cwd = repoDir, envExtra = {}) {
   return execFileSync(process.execPath, [cli, ...args], {
@@ -164,6 +165,10 @@ try {
   if (graph.status !== 200 || !graph.body.claims?.length) {
     throw new Error("api/graph failed");
   }
+  const activityIds = (graph.body.activity?.nodes || []).map((n) => n.id);
+  if (!activityIds.includes("amem.local") || !activityIds.includes("llm.cursor")) {
+    throw new Error(`graph missing activity nodes: ${activityIds.join(",")}`);
+  }
 
   const usage = handleApi({
     method: "GET",
@@ -178,6 +183,18 @@ try {
   if (!(usage.body.aggregate.totals.estimatedTokensSaved > 0)) {
     throw new Error("expected estimated token savings");
   }
+  if (!(usage.body.aggregate.totals.estimatedMsSaved > 0)) {
+    throw new Error("expected estimated time savings");
+  }
+  if (usage.body.aggregate.totals.avgLocalMs == null) {
+    throw new Error("expected measured local lookup ms");
+  }
+  if (!(usage.body.aggregate.monthly?.estimatedTokensSaved > 0)) {
+    throw new Error("expected monthly token projection");
+  }
+  if (!(usage.body.aggregate.monthly?.queries > 0)) {
+    throw new Error("expected monthly call projection");
+  }
 
   const status = handleApi({
     method: "GET",
@@ -188,6 +205,258 @@ try {
   });
   if (status.status !== 200 || !status.body.repo) {
     throw new Error("api/status failed");
+  }
+  if (!Array.isArray(status.body.repos) || status.body.repos.length < 1) {
+    throw new Error("api/status missing repos list");
+  }
+
+  const repoDir2 = mkdtempSync(join(tmpdir(), "amem-smoke-repo2-"));
+  extraDirs.push(repoDir2);
+  execFileSync("git", ["init"], { cwd: repoDir2, stdio: "ignore" });
+  writeFileSync(join(repoDir2, "README.md"), "# smoke-two\n");
+  console.log(run(["init", "--platform", "cursor"], repoDir2));
+
+  const statusByPath = handleApi({
+    method: "GET",
+    pathname: "/api/status",
+    searchParams: new URLSearchParams({ path: repoDir2 }),
+    body: null,
+    cwd: repoDir,
+  });
+  if (statusByPath.status !== 200 || !statusByPath.body.repo) {
+    throw new Error("api/status?path= failed to resolve second repo");
+  }
+  if (statusByPath.body.repos.length !== 2) {
+    throw new Error(`expected 2 bound repos, got ${statusByPath.body.repos.length}`);
+  }
+
+  const graphByRepo = handleApi({
+    method: "GET",
+    pathname: "/api/graph",
+    searchParams: new URLSearchParams({ repo: statusByPath.body.repo.id, days: "30" }),
+    body: null,
+    cwd: repoDir,
+  });
+  if (graphByRepo.status !== 200) {
+    throw new Error("api/graph?repo= failed");
+  }
+
+  const scanRoot = mkdtempSync(join(tmpdir(), "amem-scan-root-"));
+  extraDirs.push(scanRoot);
+  const foundRepo = join(scanRoot, "found-app");
+  mkdirSync(foundRepo);
+  execFileSync("git", ["init"], { cwd: foundRepo, stdio: "ignore" });
+  writeFileSync(join(foundRepo, "README.md"), "# found\n");
+  process.env.AMEM_SCAN_ROOTS = scanRoot;
+
+  const scanRes = handleApi({
+    method: "GET",
+    pathname: "/api/scan",
+    searchParams: new URLSearchParams(),
+    body: null,
+    cwd: repoDir,
+  });
+  if (scanRes.status !== 200) {
+    throw new Error("api/scan failed");
+  }
+  const scannedPaths = (scanRes.body.repos || []).map((r) => r.path);
+  if (!scannedPaths.includes(foundRepo)) {
+    throw new Error(`api/scan missed ${foundRepo}; got ${scannedPaths.join(", ")}`);
+  }
+
+  const trackRes = handleApi({
+    method: "POST",
+    pathname: "/api/track",
+    searchParams: new URLSearchParams(),
+    body: { paths: [foundRepo], platforms: ["cursor"] },
+    cwd: repoDir,
+  });
+  if (trackRes.status !== 200 || !trackRes.body.tracked?.length) {
+    throw new Error(`api/track failed: ${JSON.stringify(trackRes.body)}`);
+  }
+  if (trackRes.body.repos.length < 3) {
+    throw new Error(`expected at least 3 bound repos after track, got ${trackRes.body.repos.length}`);
+  }
+
+  const serviceRes = handleApi({
+    method: "GET",
+    pathname: "/api/service",
+    searchParams: new URLSearchParams(),
+    body: null,
+    cwd: repoDir,
+  });
+  if (serviceRes.status !== 200 || typeof serviceRes.body.installed !== "boolean") {
+    throw new Error("api/service failed");
+  }
+
+  const hookOut = execFileSync(process.execPath, [cli, "hook"], {
+    cwd: repoDir,
+    encoding: "utf8",
+    input: JSON.stringify({
+      hook_event_name: "beforeSubmitPrompt",
+      prompt: "How does API boot order work in src/api.ts",
+      workspace_roots: [repoDir],
+      conversation_id: "smoke-conv",
+    }),
+    env: {
+      ...process.env,
+      AMEM_HOME: amemHome,
+      CURSOR_HOME: join(amemHome, "cursor-home"),
+      CLAUDE_HOME: join(amemHome, "claude-home"),
+    },
+  });
+  const hookJson = JSON.parse(hookOut);
+  if (!hookJson.additional_context || !hookJson.additional_context.includes("claim.api_entry")) {
+    throw new Error(`hook did not inject memory: ${hookOut}`);
+  }
+
+  execFileSync(process.execPath, [cli, "hook"], {
+    cwd: repoDir,
+    encoding: "utf8",
+    input: JSON.stringify({
+      hook_event_name: "afterAgentResponse",
+      text: "Boot flow initializes API before serving requests via src/api.ts",
+      workspace_roots: [repoDir],
+      conversation_id: "smoke-conv",
+    }),
+    env: {
+      ...process.env,
+      AMEM_HOME: amemHome,
+      CURSOR_HOME: join(amemHome, "cursor-home"),
+      CLAUDE_HOME: join(amemHome, "claude-home"),
+    },
+  });
+  execFileSync(process.execPath, [cli, "hook"], {
+    cwd: repoDir,
+    encoding: "utf8",
+    input: JSON.stringify({
+      hook_event_name: "stop",
+      workspace_roots: [repoDir],
+      conversation_id: "smoke-conv",
+    }),
+    env: {
+      ...process.env,
+      AMEM_HOME: amemHome,
+      CURSOR_HOME: join(amemHome, "cursor-home"),
+      CLAUDE_HOME: join(amemHome, "claude-home"),
+    },
+  });
+  const afterHook = run(["status"]);
+  if (!afterHook.includes("claims:")) {
+    throw new Error("status missing claims after hook");
+  }
+
+  console.log(run(["init", "--workspace", "luna", "--platform", "luna"]));
+  const lunaStatus = run(["status", "--workspace", "luna"]);
+  if (lunaStatus.includes("claims:   0")) {
+    throw new Error("workspace init did not seed facts");
+  }
+  console.log(
+    run([
+      "remember",
+      "Luna Client routes prompts through a local LLM client before the model call",
+      "--workspace",
+      "luna",
+    ]),
+  );
+  const lunaCtx = run([
+    "context",
+    "How does Luna route prompts?",
+    "--workspace",
+    "luna",
+    "--platform",
+    "luna",
+  ]);
+  if (!lunaCtx.includes("Luna Client")) {
+    throw new Error(`workspace context missed luna fact: ${lunaCtx}`);
+  }
+  const lunaApi = handleApi({
+    method: "POST",
+    pathname: "/api/context",
+    searchParams: new URLSearchParams({ workspace: "luna" }),
+    body: { query: "Luna routing", platform: "luna" },
+    cwd: repoDir,
+  });
+  if (lunaApi.status !== 200 || !lunaApi.body.markdown) {
+    throw new Error(`api/context?workspace=luna failed: ${JSON.stringify(lunaApi.body)}`);
+  }
+
+  function mcpRoundtrip(messages, framing) {
+    return new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [cli, "mcp"], {
+        cwd: repoDir,
+        env: {
+          ...process.env,
+          AMEM_HOME: amemHome,
+          AMEM_WORKSPACE: "luna",
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let out = "";
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error(`mcp ${framing} timeout: ${out.slice(0, 400)}`));
+      }, 8000);
+      let settled = false;
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          /* ignore */
+        }
+        if (err) reject(err);
+        else resolve(out);
+      };
+      child.stdout.on("data", (buf) => {
+        out += buf.toString("utf8");
+        if (out.includes("amem_context") && out.includes("amem_remember")) finish();
+      });
+      child.stderr.on("data", (buf) => {
+        out += buf.toString("utf8");
+      });
+      child.on("error", (err) => finish(err));
+      for (const msg of messages) {
+        const json = JSON.stringify(msg);
+        if (framing === "ndjson") {
+          child.stdin.write(`${json}\n`);
+        } else {
+          const payload = Buffer.from(json, "utf8");
+          child.stdin.write(`Content-Length: ${payload.length}\r\n\r\n`);
+          child.stdin.write(payload);
+        }
+      }
+    });
+  }
+
+  const initAndList = [
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "smoke", version: "0" },
+      },
+    },
+    { jsonrpc: "2.0", method: "notifications/initialized" },
+    { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+  ];
+  const ndjsonOut = await mcpRoundtrip(initAndList, "ndjson");
+  if (!ndjsonOut.includes("amem_context")) {
+    throw new Error(`ndjson mcp handshake failed: ${ndjsonOut}`);
+  }
+  const lspOut = await mcpRoundtrip(initAndList, "lsp");
+  if (!lspOut.includes("amem_context")) {
+    throw new Error(`lsp mcp handshake failed: ${lspOut}`);
+  }
+
+  const printed = run(["mcp", "--print-config", "--workspace", "luna"]);
+  if (!printed.includes("/mcp?workspace=luna")) {
+    throw new Error(`mcp --print-config missing http url: ${printed}`);
   }
 
   const apiAttest = handleApi({
@@ -217,4 +486,5 @@ try {
 } finally {
   rmSync(amemHome, { recursive: true, force: true });
   rmSync(repoDir, { recursive: true, force: true });
+  for (const dir of extraDirs) rmSync(dir, { recursive: true, force: true });
 }
