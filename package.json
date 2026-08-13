@@ -11,7 +11,8 @@
     "skills",
     "templates",
     "docs",
-    "ui-static"
+    "ui-static",
+    "scripts/mdm-offboard.sh"
   ],
   "scripts": {
     "build": "tsc",

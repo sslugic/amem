@@ -280,6 +280,14 @@ export function wipeRepo(repoId: string): void {
   openDb().prepare("DELETE FROM repos WHERE id = ?").run(repoId);
 }
 
+/** Delete every bound repo (cascade clears claims/flows/usage). Returns count wiped. */
+export function wipeAllRepos(): number {
+  const db = openDb();
+  const row = db.prepare("SELECT COUNT(*) AS c FROM repos").get() as { c: number };
+  db.exec("DELETE FROM repos");
+  return row.c;
+}
+
 export function touchSession(
   platform: string,
   sessionId: string,

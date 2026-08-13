@@ -193,12 +193,13 @@ amem usage report --event-id usage_… --saved 12000
 ```text
 amem init --platform cursor|claude
 amem status
-amem doctor
+amem doctor [--attest] [--json]
 amem context "<query>" [--platform cursor|claude]
 amem propose validate <file.json>
 amem propose apply <file.json>
 amem export [--out <file.json>]
 amem wipe --yes
+amem wipe --all --yes
 amem session touch --platform cursor|claude [--session-id <id>]
 amem usage report --saved <n> [--platform …] [--event-id …]
 amem ui [--port 7843] [--no-open]
@@ -259,6 +260,27 @@ Override the memory home for tests:
 
 ```bash
 AMEM_HOME=/tmp/amem-test amem status
+```
+
+---
+
+## Enterprise endpoint (IT-managed)
+
+amem stays personal and local. IT can still govern the **laptop fleet**:
+
+| Control | Mechanism |
+| --- | --- |
+| Policy | `/etc/amem/policy.toml` (system) or `AMEM_POLICY_PATH` |
+| Attestation | `amem doctor --attest` / `--json` |
+| Secret hygiene | Builtin + policy `deny_claim_patterns` |
+| Export lock | `allow_export = false` |
+| Offboarding | `amem wipe --all --yes` or `scripts/mdm-offboard.sh` |
+
+Example policy: [templates/policy.example.toml](templates/policy.example.toml)  
+IT runbook: [docs/enterprise-endpoint.md](docs/enterprise-endpoint.md)
+
+```bash
+amem doctor --attest --json   # attach to security / IT tickets
 ```
 
 ---

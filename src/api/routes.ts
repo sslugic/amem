@@ -21,9 +21,15 @@ import {
 import { buildContext, renderContextMarkdown } from "../context.js";
 import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
+import {
+  assertPlatformAllowed,
+  assertRemoteAllowed,
+  loadPolicy,
+} from "../policy.js";
 import { applyProposal, parseProposalJson, validateProposal } from "../proposal.js";
 import { detectRepoIdentity } from "../repo-identity.js";
 import { amemHome, dbPath } from "../paths.js";
+import { buildAttestReport } from "../attest.js";
 
 export type ApiRequest = {
   method: string;
@@ -134,12 +140,14 @@ export function handleApi(req: ApiRequest): ApiResponse {
 
   if (method === "GET" && pathname === "/api/status") {
     const setup = repo ? getSetupState(repo.id) : null;
+    const loaded = loadPolicy();
     return ok({
       amemHome: amemHome(),
       dbPath: dbPath(),
       identity,
       repo,
       setup,
+      policy: loaded.policy,
       doctor: doctorIssues(repo, identity.rootPath),
       counts: repo
         ? {
@@ -152,10 +160,22 @@ export function handleApi(req: ApiRequest): ApiResponse {
     });
   }
 
+  if (method === "GET" && pathname === "/api/attest") {
+    return ok(buildAttestReport(cwd));
+  }
+
   if (method === "POST" && pathname === "/api/setup") {
     const platforms = (body as { platforms?: string[] })?.platforms ?? [];
     const valid = platforms.filter((p) => p === "cursor" || p === "claude");
     if (valid.length === 0) return err(400, "Select at least one platform: cursor or claude");
+
+    const policy = loadPolicy().policy;
+    try {
+      assertRemoteAllowed(identity.remoteUrl, policy);
+      for (const platform of valid) assertPlatformAllowed(platform, policy);
+    } catch (e) {
+      return err(403, e instanceof Error ? e.message : String(e));
+    }
 
     let current = upsertRepo(identity, valid[0]);
     const results: unknown[] = [];
@@ -179,9 +199,15 @@ export function handleApi(req: ApiRequest): ApiResponse {
     if (!proposalRaw) return err(400, "Missing proposal");
     const proposal =
       typeof proposalRaw === "string" ? parseProposalJson(proposalRaw) : (proposalRaw as ReturnType<typeof parseProposalJson>);
-    const validated = validateProposal(proposal);
+    const policy = loadPolicy().policy;
+    try {
+      assertRemoteAllowed(identity.remoteUrl, policy);
+    } catch (e) {
+      return err(403, e instanceof Error ? e.message : String(e));
+    }
+    const validated = validateProposal(proposal, policy);
     if (!validated.ok) return err(400, validated.errors.join("; "));
-    const applied = applyProposal(repo.id, proposal);
+    const applied = applyProposal(repo.id, proposal, policy);
     upsertSetupState(
       repo.id,
       (() => {
