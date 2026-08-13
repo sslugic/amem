@@ -193,12 +193,13 @@ amem usage report --event-id usage_… --saved 12000
 ```text
 amem init --platform cursor|claude
 amem status
-amem doctor
+amem doctor [--attest] [--json]
 amem context "<query>" [--platform cursor|claude]
 amem propose validate <file.json>
 amem propose apply <file.json>
 amem export [--out <file.json>]
 amem wipe --yes
+amem wipe --all --yes
 amem session touch --platform cursor|claude [--session-id <id>]
 amem usage report --saved <n> [--platform …] [--event-id …]
 amem ui [--port 7843] [--no-open]
@@ -210,7 +211,9 @@ amem ui [--port 7843] [--no-open]
 | `context` | Retrieve a Markdown packet; log usage |
 | `propose apply` | Upsert structured memory locally |
 | `ui` | Setup wizard + brain + stats on localhost |
+| `doctor --attest` | Privacy/policy attestation for IT tickets |
 | `export` / `wipe` | Personal backup or delete (still local) |
+| `wipe --all --yes` | Offboard: wipe every repo and remove `~/.amem` |
 
 ---
 
@@ -248,11 +251,12 @@ npm link
 Layout:
 
 ```text
-src/           CLI, SQLite, installers, localhost API
+src/           CLI, SQLite, policy, attest, installers, localhost API
 ui-static/     Setup / Brain / Stats UI
 skills/        Agent skill markdown
-templates/     Cursor rule template
-docs/          Agent install prompt
+templates/     Cursor rule + example enterprise policy
+docs/          Agent install prompt + IT endpoint runbook
+scripts/       Smoke tests + MDM offboard helper
 ```
 
 Override the memory home for tests:
@@ -260,6 +264,49 @@ Override the memory home for tests:
 ```bash
 AMEM_HOME=/tmp/amem-test amem status
 ```
+
+---
+
+## Enterprise endpoint (IT-managed)
+
+amem is still **personal memory on the laptop** — not a shared wiki or cloud RAG.  
+IT / DevEx can govern the **fleet**: approved install, policy, attestation, offboarding.
+
+| Control | Mechanism |
+| --- | --- |
+| Policy | `/etc/amem/policy.toml` (system) overrides `~/.amem/policy.toml`; or `AMEM_POLICY_PATH` |
+| Attestation | `amem doctor --attest` / `--json` (also `GET /api/attest` on local UI) |
+| Secret hygiene | Builtin deny patterns + policy `deny_claim_patterns` on propose |
+| Export lock | `allow_export = false` |
+| Platform / repo allowlists | `allowed_platforms`, `allowed_remote_hosts` |
+| Offboarding | `amem wipe --all --yes` or [scripts/mdm-offboard.sh](scripts/mdm-offboard.sh) |
+
+Hard guarantees (not configurable away):
+
+- No telemetry  
+- UI binds to loopback only (`127.0.0.1`)  
+- Memory stays under `~/.amem` (mode `0700`)  
+
+### IT quick start
+
+```bash
+# 1) Pin / install amem on the endpoint (internal npm, pkg, or npm link)
+# 2) Deploy policy (root-owned on managed machines)
+sudo mkdir -p /etc/amem
+sudo cp templates/policy.example.toml /etc/amem/policy.toml
+
+# 3) Verify for security review
+amem doctor --attest --json
+
+# 4) On offboard / laptop return
+amem wipe --all --yes
+# or: scripts/mdm-offboard.sh
+```
+
+Example policy: [templates/policy.example.toml](templates/policy.example.toml)  
+Full IT runbook: [docs/enterprise-endpoint.md](docs/enterprise-endpoint.md)
+
+Suggested rollout: small DevEx pilot → MDM package + policy → signed builds/SBOM if procurement asks. Shared org memory is intentionally out of scope.
 
 ---
 

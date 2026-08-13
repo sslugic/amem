@@ -10,7 +10,7 @@ const cli = join(root, "dist", "cli.js");
 const amemHome = mkdtempSync(join(tmpdir(), "amem-smoke-home-"));
 const repoDir = mkdtempSync(join(tmpdir(), "amem-smoke-repo-"));
 
-function run(args, cwd = repoDir) {
+function run(args, cwd = repoDir, envExtra = {}) {
   return execFileSync(process.execPath, [cli, ...args], {
     cwd,
     encoding: "utf8",
@@ -19,6 +19,7 @@ function run(args, cwd = repoDir) {
       AMEM_HOME: amemHome,
       CURSOR_HOME: join(amemHome, "cursor-home"),
       CLAUDE_HOME: join(amemHome, "claude-home"),
+      ...envExtra,
     },
   });
 }
@@ -83,6 +84,71 @@ try {
 
   console.log(run(["doctor"]));
 
+  // Policy + attest
+  const policyPath = join(amemHome, "enterprise-policy.toml");
+  writeFileSync(
+    policyPath,
+    [
+      "telemetry = false",
+      'ui_bind = "127.0.0.1"',
+      "allow_export = false",
+      'allowed_platforms = ["cursor", "claude"]',
+      'deny_claim_patterns = ["supersecretvalue"]',
+      "",
+    ].join("\n"),
+  );
+
+  const attest = run(["doctor", "--attest", "--json"], repoDir, {
+    AMEM_POLICY_PATH: policyPath,
+  });
+  const attestJson = JSON.parse(attest);
+  if (attestJson.privacy.network_egress !== "none") {
+    throw new Error("attest missing network_egress none");
+  }
+  if (attestJson.privacy.telemetry !== false) {
+    throw new Error("attest telemetry should be false");
+  }
+  if (attestJson.policy.effective.allow_export !== false) {
+    throw new Error("attest did not pick up allow_export=false");
+  }
+  console.log("attest ok");
+
+  const blockedProposal = {
+    claims: [
+      {
+        id: "claim.leak",
+        kind: "constraint",
+        text: "token is supersecretvalue do not store",
+        code_anchors: ["src/api.ts"],
+      },
+    ],
+  };
+  const blockedPath = join(amemHome, "blocked.json");
+  writeFileSync(blockedPath, JSON.stringify(blockedProposal));
+  let blockedFailed = false;
+  try {
+    run(["propose", "validate", blockedPath], repoDir, {
+      AMEM_POLICY_PATH: policyPath,
+    });
+  } catch {
+    blockedFailed = true;
+  }
+  if (!blockedFailed) {
+    throw new Error("expected deny_claim_patterns to block proposal");
+  }
+  console.log("deny_claim_patterns ok");
+
+  let exportBlocked = false;
+  try {
+    run(["export"], repoDir, { AMEM_POLICY_PATH: policyPath });
+  } catch {
+    exportBlocked = true;
+  }
+  if (!exportBlocked) {
+    throw new Error("expected allow_export=false to block export");
+  }
+  console.log("export policy ok");
+
   // Exercise API layer used by UI
   const { handleApi } = await import(join(root, "dist", "api", "routes.js"));
   process.chdir(repoDir);
@@ -124,10 +190,27 @@ try {
     throw new Error("api/status failed");
   }
 
+  const apiAttest = handleApi({
+    method: "GET",
+    pathname: "/api/attest",
+    searchParams: new URLSearchParams(),
+    body: null,
+    cwd: repoDir,
+  });
+  if (apiAttest.status !== 200 || apiAttest.body.tool !== "amem") {
+    throw new Error("api/attest failed");
+  }
+
   // Static UI present
   const { existsSync } = await import("node:fs");
   if (!existsSync(join(root, "ui-static", "index.html"))) {
     throw new Error("ui-static missing");
+  }
+
+  // Offboard wipe
+  console.log(run(["wipe", "--all", "--yes"]));
+  if (existsSync(amemHome)) {
+    throw new Error("wipe --all should remove AMEM_HOME");
   }
 
   console.log("SMOKE OK");

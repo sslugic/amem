@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { buildAttestReport, formatAttestHuman } from "./attest.js";
 import { logContextUsage } from "./api/routes.js";
 import {
   closeDb,
@@ -14,11 +15,19 @@ import {
   touchSession,
   upsertRepo,
   upsertSetupState,
+  wipeAllRepos,
   wipeRepo,
 } from "./db.js";
 import { installClaude, claudeInstallHealth } from "./install/claude.js";
 import { installCursor, cursorInstallHealth } from "./install/cursor.js";
 import { amemHome, dbPath } from "./paths.js";
+import {
+  assertExportAllowed,
+  assertPlatformAllowed,
+  assertRemoteAllowed,
+  assertUiAllowed,
+  loadPolicy,
+} from "./policy.js";
 import {
   applyProposal,
   exportRepoMemory,
@@ -34,12 +43,13 @@ function usage(): never {
 Usage:
   amem init --platform cursor|claude
   amem status
-  amem doctor
+  amem doctor [--attest] [--json]
   amem context "<query>" [--platform cursor|claude]
   amem propose validate <file.json>
   amem propose apply <file.json>
   amem export [--out <file.json>]
   amem wipe --yes
+  amem wipe --all --yes
   amem session touch --platform cursor|claude [--session-id <id>]
   amem usage report --saved <n> [--platform cursor|claude] [--event-id <id>]
   amem ui [--port 7843] [--no-open]
@@ -47,6 +57,11 @@ Usage:
 Privacy:
   All memory stays in ${amemHome()} on this machine.
   Nothing is uploaded or written into the product git history.
+
+Enterprise:
+  Policy file: /etc/amem/policy.toml (system) or ~/.amem/policy.toml (user)
+  Override: AMEM_POLICY_PATH=/path/to/policy.toml
+  Attest: amem doctor --attest
 `);
   process.exit(1);
 }
@@ -90,7 +105,10 @@ async function main(): Promise<void> {
         if (platform !== "cursor" && platform !== "claude") {
           throw new Error("amem init requires --platform cursor|claude");
         }
+        const policy = loadPolicy().policy;
+        assertPlatformAllowed(platform, policy);
         const identity = detectRepoIdentity();
+        assertRemoteAllowed(identity.remoteUrl, policy);
         const repo = upsertRepo(identity, platform);
         let installInfo;
         if (platform === "cursor") {
@@ -120,11 +138,14 @@ async function main(): Promise<void> {
       case "status": {
         const identity = detectRepoIdentity();
         const repo = getRepoByCwd();
+        const policy = loadPolicy().policy;
         console.log(`cwd root: ${identity.rootPath}`);
         console.log(`repo key: ${identity.repoKey}`);
         console.log(`remote:   ${identity.remoteUrl ?? "(none)"}`);
         console.log(`amem home:${amemHome()}`);
         console.log(`db:       ${dbPath()}`);
+        console.log(`export:   ${policy.allow_export ? "allowed" : "blocked by policy"}`);
+        console.log(`ui:       ${policy.ui_enabled ? `enabled (${policy.ui_bind})` : "disabled by policy"}`);
         if (!repo) {
           console.log("binding:  not initialized");
         } else {
@@ -137,9 +158,26 @@ async function main(): Promise<void> {
         break;
       }
       case "doctor": {
+        if (flags.get("attest")) {
+          const report = buildAttestReport();
+          if (flags.get("json")) {
+            console.log(JSON.stringify(report, null, 2));
+          } else {
+            console.log(formatAttestHuman(report));
+            console.log("");
+            console.log("--- json ---");
+            console.log(JSON.stringify(report, null, 2));
+          }
+          if (!report.ok) process.exitCode = 1;
+          break;
+        }
         const identity = detectRepoIdentity();
         const repo = getRepoByCwd();
         const issues: string[] = [];
+        const loaded = loadPolicy();
+        for (const src of loaded.sources) {
+          if (src.error) issues.push(`Policy ${src.role}: ${src.error}`);
+        }
         if (!repo) issues.push("Repo not initialized — run amem init");
         const platform = repo?.platform ?? flagString(flags, "platform");
         if (platform === "cursor") {
@@ -167,6 +205,9 @@ async function main(): Promise<void> {
           flagString(flags, "platform") ??
           repo.platform ??
           "unknown";
+        if (platform === "cursor" || platform === "claude") {
+          assertPlatformAllowed(platform);
+        }
         const sessionId =
           flagString(flags, "session-id") ??
           process.env.AMEM_SESSION_ID ??
@@ -191,8 +232,9 @@ async function main(): Promise<void> {
         if ((sub !== "validate" && sub !== "apply") || !file) {
           throw new Error("Usage: amem propose validate|apply <file.json>");
         }
+        const policy = loadPolicy().policy;
         const proposal = loadProposalFile(resolve(file));
-        const validated = validateProposal(proposal);
+        const validated = validateProposal(proposal, policy);
         if (!validated.ok) {
           console.error("Invalid proposal:");
           for (const e of validated.errors) console.error(`- ${e}`);
@@ -203,14 +245,17 @@ async function main(): Promise<void> {
           console.log("Proposal is valid.");
           break;
         }
+        const identity = detectRepoIdentity();
+        assertRemoteAllowed(identity.remoteUrl, policy);
         const repo = requireRepo();
-        const result = applyProposal(repo.id, proposal);
+        const result = applyProposal(repo.id, proposal, policy);
         console.log(
           `Applied: ${result.claims} claims, ${result.flows} flows, ${result.components} components, ${result.edges} edges`,
         );
         break;
       }
       case "export": {
+        assertExportAllowed();
         const repo = requireRepo();
         const data = {
           exported_at: new Date().toISOString(),
@@ -239,6 +284,14 @@ async function main(): Promise<void> {
         if (!flags.get("yes")) {
           throw new Error("Refusing to wipe without --yes");
         }
+        if (flags.get("all")) {
+          const count = wipeAllRepos();
+          closeDb();
+          // Remove local memory home for IT offboarding (db + sessions + user policy).
+          rmSync(amemHome(), { recursive: true, force: true });
+          console.log(`Wiped all local amem data (${count} repos) under ${amemHome()}`);
+          break;
+        }
         const repo = requireRepo();
         wipeRepo(repo.id);
         console.log(`Wiped local memory for ${repo.repo_name}`);
@@ -251,6 +304,7 @@ async function main(): Promise<void> {
         if (platform !== "cursor" && platform !== "claude") {
           throw new Error("--platform cursor|claude required");
         }
+        assertPlatformAllowed(platform);
         const repo = getRepoByCwd();
         if (!repo) {
           process.exit(0);
@@ -290,13 +344,15 @@ async function main(): Promise<void> {
         break;
       }
       case "ui": {
+        assertUiAllowed();
+        const policy = loadPolicy().policy;
         const port = Number(flagString(flags, "port") ?? "7843");
         const openBrowser = !flags.get("no-open");
-        // Keep DB open while server runs
         const server = await startUiServer({
           port,
           cwd: process.cwd(),
           openBrowser,
+          host: policy.ui_bind,
         });
         console.log(`amem ui at ${server.url} (localhost only)`);
         console.log(`cwd: ${process.cwd()}`);

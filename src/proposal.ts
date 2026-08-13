@@ -11,6 +11,7 @@ import {
   type EdgeRow,
   type FlowRow,
 } from "./db.js";
+import { compiledDenyPatterns, type AmemPolicy } from "./policy.js";
 import { newId } from "./repo-identity.js";
 
 export type ProposalComponent = {
@@ -64,7 +65,10 @@ export function parseProposalJson(raw: string): Proposal {
   return data as Proposal;
 }
 
-export function validateProposal(proposal: Proposal): ValidationResult {
+export function validateProposal(
+  proposal: Proposal,
+  policy?: AmemPolicy,
+): ValidationResult {
   const errors: string[] = [];
   const componentIds = new Set<string>();
   const flowIds = new Set<string>();
@@ -108,7 +112,43 @@ export function validateProposal(proposal: Proposal): ValidationResult {
     errors.push("proposal is empty");
   }
 
+  errors.push(...checkProposalAgainstPolicy(proposal, policy));
+
   return { ok: errors.length === 0, errors, proposal };
+}
+
+/** Block claims that look like secrets / credentials (builtin + policy patterns). */
+export function checkProposalAgainstPolicy(
+  proposal: Proposal,
+  policy?: AmemPolicy,
+): string[] {
+  const errors: string[] = [];
+  let patterns: RegExp[];
+  try {
+    patterns = compiledDenyPatterns(policy);
+  } catch (err) {
+    return [err instanceof Error ? err.message : String(err)];
+  }
+
+  for (const claim of proposal.claims ?? []) {
+    const haystacks = [
+      claim.id ?? "",
+      claim.text ?? "",
+      claim.source_ref ?? "",
+      ...(claim.code_anchors ?? []),
+    ];
+    for (const re of patterns) {
+      for (const text of haystacks) {
+        if (text && re.test(text)) {
+          errors.push(
+            `claim ${claim.id ?? "(missing id)"} blocked by deny_claim_patterns /${re.source}/i`,
+          );
+          break;
+        }
+      }
+    }
+  }
+  return errors;
 }
 
 export function loadProposalFile(path: string): Proposal {
@@ -122,8 +162,12 @@ export type ApplyResult = {
   edges: number;
 };
 
-export function applyProposal(repoId: string, proposal: Proposal): ApplyResult {
-  const validated = validateProposal(proposal);
+export function applyProposal(
+  repoId: string,
+  proposal: Proposal,
+  policy?: AmemPolicy,
+): ApplyResult {
+  const validated = validateProposal(proposal, policy);
   if (!validated.ok) {
     throw new Error(`Invalid proposal:\n- ${validated.errors.join("\n- ")}`);
   }

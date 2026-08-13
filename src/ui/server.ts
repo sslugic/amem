@@ -73,7 +73,14 @@ export type UiServerOptions = {
   port?: number;
   cwd?: string;
   openBrowser?: boolean;
+  /** Loopback only — non-loopback values are forced to 127.0.0.1 */
+  host?: string;
 };
+
+function resolveLoopbackHost(host?: string): string {
+  if (!host || host === "localhost" || host === "127.0.0.1") return "127.0.0.1";
+  return "127.0.0.1";
+}
 
 export async function startUiServer(options: UiServerOptions = {}): Promise<{
   port: number;
@@ -82,10 +89,11 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<{
 }> {
   const port = options.port ?? 7843;
   const cwd = options.cwd ?? process.cwd();
+  const listenHost = resolveLoopbackHost(options.host);
 
   const server = createServer(async (req, res) => {
     try {
-      const host = req.headers.host ?? `127.0.0.1:${port}`;
+      const host = req.headers.host ?? `${listenHost}:${port}`;
       const url = new URL(req.url ?? "/", `http://${host}`);
       if (url.pathname.startsWith("/api/")) {
         const body = req.method === "GET" || req.method === "HEAD" ? null : await readBody(req);
@@ -108,10 +116,10 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<{
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => resolve());
+    server.listen(port, listenHost, () => resolve());
   });
 
-  const url = `http://127.0.0.1:${port}`;
+  const url = `http://${listenHost}:${port}`;
   if (options.openBrowser !== false) {
     try {
       const { execFile } = await import("node:child_process");
