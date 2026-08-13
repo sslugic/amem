@@ -1,0 +1,42 @@
+{
+  "name": "amem",
+  "version": "0.1.0",
+  "description": "Local personal agent memory for Cursor and Claude Code. Private to your machine — never shared.",
+  "type": "module",
+  "bin": {
+    "amem": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "templates",
+    "docs",
+    "ui-static"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepare": "npm run build",
+    "amem": "node dist/cli.js",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "agent-memory",
+    "cursor",
+    "claude-code",
+    "local",
+    "sqlite"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.9.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
+  }
+}
