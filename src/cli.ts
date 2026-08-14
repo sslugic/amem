@@ -7,6 +7,7 @@ import {
   closeDb,
   getRepoByCwd,
   getRepoByName,
+  renameWorkspace,
   listClaims,
   listComponents,
   listFlows,
@@ -36,7 +37,7 @@ import {
   loadProposalFile,
   validateProposal,
 } from "./proposal.js";
-import { detectRepoIdentity, workspaceIdentity } from "./repo-identity.js";
+import { detectRepoIdentity, parseWorkspaceSlug, workspaceIdentity } from "./repo-identity.js";
 import { startUiServer, buildUiLandingUrl, openUiInBrowser, isAddrInUse } from "./ui/server.js";
 import { installLoginService, isServiceInstalled, uninstallLoginService } from "./service.js";
 import { mcpClientConfig, runMcpServer } from "./mcp.js";
@@ -48,6 +49,7 @@ function usage(): never {
 Usage:
   amem init --platform cursor|claude
   amem init --workspace <name> [--path <dir>] [--platform luna|cursor|claude]
+  amem rename "<display name>" --workspace <slug>
   amem status [--workspace <name>]
   amem doctor [--attest] [--json]
   amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna]
@@ -205,12 +207,31 @@ async function main(): Promise<void> {
         if (!repo) {
           console.log("binding:  not initialized");
         } else {
+          const slug = parseWorkspaceSlug(repo.remote_url);
+          console.log(`kind:     ${slug ? "workspace" : "git repo"}`);
           console.log(`binding:  ${repo.repo_name} (${repo.id})`);
+          if (slug && slug !== repo.repo_name) {
+            console.log(`mcp id:   ${slug}`);
+          }
           console.log(`platform: ${repo.platform ?? "(unset)"}`);
           console.log(`claims:   ${listClaims(repo.id).length}`);
           console.log(`flows:    ${listFlows(repo.id).length}`);
           console.log(`components: ${listComponents(repo.id).length}`);
         }
+        break;
+      }
+      case "rename": {
+        const workspace = flagString(flags, "workspace") || process.env.AMEM_WORKSPACE;
+        const name = positional.slice(1).join(" ").trim();
+        if (!workspace || !name) {
+          throw new Error('Usage: amem rename "<display name>" --workspace <slug>');
+        }
+        const repo = getRepoByName(workspace);
+        if (!repo) throw new Error(`No workspace "${workspace}". Run: amem init --workspace ${workspace}`);
+        const updated = renameWorkspace(repo.id, name);
+        const slug = parseWorkspaceSlug(updated.remote_url);
+        console.log(`Renamed to "${updated.repo_name}"`);
+        if (slug) console.log(`MCP id unchanged: ${slug}  (claims stay on ${updated.id})`);
         break;
       }
       case "doctor": {

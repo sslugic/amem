@@ -7,6 +7,7 @@ import {
   getRepoByCwd,
   getRepoById,
   getRepoByName,
+  renameWorkspace,
   getSetupState,
   insertUsageEvent,
   listClaims,
@@ -34,6 +35,7 @@ import {
 } from "../policy.js";
 import { applyProposal, parseProposalJson, validateProposal } from "../proposal.js";
 import { detectRepoIdentity, normalizeRemoteUrl, parseWorkspaceSlug, slugifyWorkspace, workspaceIdentity, type RepoIdentity } from "../repo-identity.js";
+import { KNOWN_PLATFORMS, normalizePlatforms } from "../platforms.js";
 import { amemHome, dbPath } from "../paths.js";
 import { buildAttestReport } from "../attest.js";
 import { scanGitRepos } from "../scan.js";
@@ -112,6 +114,7 @@ function identityForRepo(repo: RepoRow): RepoIdentity {
 
 function summarizeRepo(r: RepoRow) {
   const setup = getSetupState(r.id);
+  const slug = parseWorkspaceSlug(r.remote_url);
   return {
     id: r.id,
     repo_key: r.repo_key,
@@ -119,7 +122,8 @@ function summarizeRepo(r: RepoRow) {
     root_path: r.root_path,
     remote_url: r.remote_url,
     platform: r.platform,
-    kind: parseWorkspaceSlug(r.remote_url) ? "workspace" : "git",
+    kind: slug ? "workspace" : "git",
+    slug,
     setup_completed: Boolean(setup?.setup_completed_at),
     counts: {
       claims: listClaims(r.id).length,
@@ -132,13 +136,17 @@ function summarizeRepo(r: RepoRow) {
 function statusPayload(identity: RepoIdentity, repo: RepoRow | null) {
   const setup = repo ? getSetupState(repo.id) : null;
   const loaded = loadPolicy();
+  const slug = repo ? parseWorkspaceSlug(repo.remote_url) : null;
   return {
     amemHome: amemHome(),
     dbPath: dbPath(),
     identity,
-    repo,
+    repo: repo ? { ...repo, kind: slug ? "workspace" : "git", slug } : null,
+    kind: repo ? (slug ? "workspace" : "git") : null,
+    slug,
     setup,
     policy: loaded.policy,
+    clients: KNOWN_PLATFORMS,
     doctor: doctorIssues(repo, identity.rootPath),
     counts: repo
       ? {
@@ -362,17 +370,40 @@ function createWorkspace(body: unknown): ApiResponse {
   const root = rawPath ? resolve(rawPath) : join(amemHome(), "workspaces", slug);
   mkdirSync(root, { recursive: true });
   const identity = workspaceIdentity(slug, root);
-  const repo = upsertRepo(identity, platform);
+  const created = upsertRepo(identity, platform);
+  const repo = name.trim() === slug ? created : renameWorkspace(created.id, name.trim());
   upsertSetupState(repo.id, [platform], true);
   const ready = provisionWorkspace(repo, platform);
   return ok({
     workspace: slug,
+    name: repo.repo_name,
     repo: summarizeRepo(repo),
     ready,
     mcp: {
       url: `http://127.0.0.1:7843/mcp?workspace=${encodeURIComponent(slug)}`,
     },
   });
+}
+
+function renameWorkspaceApi(body: unknown): ApiResponse {
+  const repoId = bodyField(body, "repoId") || bodyField(body, "id");
+  const name = bodyField(body, "name");
+  if (!repoId) return err(400, "repoId required");
+  if (!name) return err(400, "name required");
+  try {
+    const repo = renameWorkspace(repoId, name);
+    const slug = parseWorkspaceSlug(repo.remote_url);
+    return ok({
+      workspace: slug,
+      name: repo.repo_name,
+      repo: summarizeRepo(repo),
+      mcp: slug
+        ? { url: `http://127.0.0.1:7843/mcp?workspace=${encodeURIComponent(slug)}` }
+        : undefined,
+    });
+  } catch (error) {
+    return err(400, error instanceof Error ? error.message : String(error));
+  }
 }
 
 function runContext(repo: RepoRow, body: unknown, searchParams: URLSearchParams): ApiResponse {
@@ -438,6 +469,10 @@ export function handleApi(req: ApiRequest): ApiResponse {
     return createWorkspace(body);
   }
 
+  if (method === "POST" && pathname === "/api/workspaces/rename") {
+    return renameWorkspaceApi(body);
+  }
+
   if (method === "GET" && pathname === "/api/scan") {
     const scanned = scanGitRepos();
     const bound = listRepos();
@@ -457,9 +492,15 @@ export function handleApi(req: ApiRequest): ApiResponse {
   if (method === "POST" && pathname === "/api/track") {
     const payload = body && typeof body === "object" ? (body as { paths?: string[]; platforms?: string[] }) : {};
     const paths = (payload.paths ?? []).filter((p) => typeof p === "string" && p.trim());
-    const platforms = (payload.platforms ?? []).filter((p) => p === "cursor" || p === "claude");
+    const platforms = normalizePlatforms(payload.platforms);
     if (paths.length === 0) return err(400, "Select at least one repository");
-    if (platforms.length === 0) return err(400, "Select at least one platform: cursor or claude");
+    if (platforms.length === 0) return err(400, "Select at least one LLM client");
+    const policy = loadPolicy().policy;
+    try {
+      for (const platform of platforms) assertPlatformAllowed(platform, policy);
+    } catch (e) {
+      return err(403, e instanceof Error ? e.message : String(e));
+    }
     const tracked: unknown[] = [];
     for (const raw of paths) {
       const root = resolve(raw);
@@ -469,7 +510,7 @@ export function handleApi(req: ApiRequest): ApiResponse {
       for (const platform of platforms) {
         current = upsertRepo(identity, platform);
         if (platform === "cursor") installCursor(identity.rootPath);
-        else installClaude(identity.rootPath);
+        else if (platform === "claude") installClaude(identity.rootPath);
       }
       upsertSetupState(current.id, platforms, true);
       tracked.push(summarizeRepo(current));
@@ -518,8 +559,8 @@ export function handleApi(req: ApiRequest): ApiResponse {
 
   if (method === "POST" && pathname === "/api/setup") {
     const platforms = (body as { platforms?: string[] })?.platforms ?? [];
-    const valid = platforms.filter((p) => p === "cursor" || p === "claude");
-    if (valid.length === 0) return err(400, "Select at least one platform: cursor or claude");
+    const valid = normalizePlatforms(platforms);
+    if (valid.length === 0) return err(400, "Select at least one LLM client");
 
     const policy = loadPolicy().policy;
     try {
@@ -534,7 +575,7 @@ export function handleApi(req: ApiRequest): ApiResponse {
     for (const platform of valid) {
       current = upsertRepo(identity, platform);
       if (platform === "cursor") results.push(installCursor(identity.rootPath));
-      else results.push(installClaude(identity.rootPath));
+      else if (platform === "claude") results.push(installClaude(identity.rootPath));
     }
     const setup = upsertSetupState(current.id, valid, true);
     return ok({

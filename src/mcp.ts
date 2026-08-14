@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { handleApi } from "./api/routes.js";
-import { getRepoByName, requireRepo } from "./db.js";
+import { getRepoByName } from "./db.js";
 
 export type JsonRpc = {
   jsonrpc?: string;
@@ -24,12 +24,12 @@ const TOOLS = [
   {
     name: "amem_context",
     description:
-      "Retrieve compact local amem memory for a query. Use before exploring files or calling a remote LLM with a large prompt. Pass workspace for named app memory (e.g. luna-ai), not only git repos.",
+      "Retrieve compact local amem memory for a query. Use before exploring files or calling a remote LLM with a large prompt. Pass workspace for named app memory, not only git repos.",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string" },
-        workspace: { type: "string", description: "Named workspace such as luna-ai" },
+        workspace: { type: "string", description: "Named workspace (not a git repo)" },
         platform: { type: "string" },
         sessionId: { type: "string" },
       },
@@ -51,8 +51,51 @@ const TOOLS = [
     },
   },
   {
+    name: "amem_repos",
+    description:
+      "List what amem is monitoring. Each item has kind git or workspace. Workspaces also have a stable slug (MCP id); the display name can differ. Use when asked which projects, workspaces, or repos amem knows about.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: {
+          type: "string",
+          description: "all (default), git, or workspace",
+        },
+      },
+    },
+  },
+  {
+    name: "amem_stats",
+    description:
+      "Usage and savings stats (local lookup time, estimated tokens/ms saved, hit rate) for one workspace/repo or everything. Use when asked how much amem helped, how often it hit, or usage over time.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace: { type: "string" },
+        days: { type: "number", description: "Lookback window (default 30)" },
+        scope: {
+          type: "string",
+          description: "all (every tracked repo/workspace) or current (the given workspace / cwd)",
+        },
+      },
+    },
+  },
+  {
+    name: "amem_graph",
+    description:
+      "Dump stored facts for a workspace or git repo: claims, components, flows, and recent activity. Use when asked what amem remembers about a project. Prefer amem_context for a ranked packet for the current question.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace: { type: "string" },
+        days: { type: "number", description: "Activity lookback (default 30)" },
+      },
+    },
+  },
+  {
     name: "amem_status",
-    description: "Show amem binding, claim counts, and workspace info.",
+    description:
+      "Binding, policy, and counts for one workspace/repo, plus the full monitored inventory. Omit workspace for a machine-wide overview.",
     inputSchema: {
       type: "object",
       properties: { workspace: { type: "string" } },
@@ -73,9 +116,17 @@ function defaultWorkspace(explicit?: unknown, fallback?: string): string | undef
   return process.env.AMEM_WORKSPACE || undefined;
 }
 
-function api(method: string, pathname: string, body: unknown, workspace?: string) {
+function api(
+  method: string,
+  pathname: string,
+  body: unknown,
+  opts?: { workspace?: string; query?: Record<string, string> },
+) {
   const searchParams = new URLSearchParams();
-  if (workspace) searchParams.set("workspace", workspace);
+  if (opts?.workspace) searchParams.set("workspace", opts.workspace);
+  for (const [key, value] of Object.entries(opts?.query ?? {})) {
+    if (value) searchParams.set(key, value);
+  }
   return handleApi({
     method,
     pathname,
@@ -83,6 +134,73 @@ function api(method: string, pathname: string, body: unknown, workspace?: string
     body,
     cwd: process.cwd(),
   });
+}
+
+function jsonResult(value: unknown, isError = false) {
+  return textResult(JSON.stringify(value, null, 2), isError);
+}
+
+function apiResult(result: { status: number; body: unknown }) {
+  if (result.status >= 400) return jsonResult(result.body, true);
+  return jsonResult(result.body);
+}
+
+function parseDays(value: unknown, fallback = 30): string {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : fallback;
+  if (!Number.isFinite(n) || n <= 0) return String(fallback);
+  return String(Math.min(365, Math.floor(n)));
+}
+
+function compactGraph(body: unknown) {
+  if (!body || typeof body !== "object") return body;
+  const g = body as {
+    claims?: Array<{ id: string; kind: string; text: string; code_anchors: string }>;
+    components?: Array<{ id: string; name: string; code_anchor: string | null }>;
+    flows?: Array<{ id: string; name: string }>;
+    recentClaimIds?: string[];
+    activity?: { nodes?: unknown[]; links?: unknown[] };
+  };
+  const claims = (g.claims ?? []).slice(0, 80).map((c) => ({
+    id: c.id,
+    kind: c.kind,
+    text: c.text,
+    anchors: (() => {
+      try {
+        return JSON.parse(c.code_anchors) as string[];
+      } catch {
+        return c.code_anchors;
+      }
+    })(),
+  }));
+  return {
+    claims,
+    claimCount: (g.claims ?? []).length,
+    truncated: (g.claims ?? []).length > claims.length,
+    components: (g.components ?? []).map((c) => ({
+      id: c.id,
+      name: c.name,
+      anchor: c.code_anchor,
+    })),
+    flows: g.flows ?? [],
+    recentClaimIds: g.recentClaimIds ?? [],
+    activity: g.activity,
+  };
+}
+
+function compactStats(body: unknown) {
+  if (!body || typeof body !== "object") return body;
+  const s = body as {
+    scope?: string;
+    days?: number;
+    aggregate?: unknown;
+    repos?: unknown;
+  };
+  return {
+    scope: s.scope,
+    days: s.days,
+    aggregate: s.aggregate,
+    repos: s.repos,
+  };
 }
 
 function callTool(name: string, args: Record<string, unknown>, fallbackWorkspace?: string) {
@@ -99,7 +217,7 @@ function callTool(name: string, args: Record<string, unknown>, fallbackWorkspace
         platform: typeof args.platform === "string" ? args.platform : "mcp",
         sessionId: typeof args.sessionId === "string" ? args.sessionId : undefined,
       },
-      workspace,
+      { workspace },
     );
     if (result.status >= 400) {
       return textResult(JSON.stringify(result.body), true);
@@ -120,24 +238,53 @@ function callTool(name: string, args: Record<string, unknown>, fallbackWorkspace
         anchors: args.anchors,
         source: "mcp",
       },
-      workspace,
+      { workspace },
     );
     if (result.status >= 400) return textResult(JSON.stringify(result.body), true);
     return textResult(JSON.stringify(result.body));
+  }
+  if (name === "amem_repos") {
+    const result = api("GET", "/api/repos", null);
+    if (result.status >= 400) return apiResult(result);
+    const kind = typeof args.kind === "string" ? args.kind.trim().toLowerCase() : "all";
+    const repos = ((result.body as { repos?: Array<{ kind?: string }> }).repos ?? []).filter((r) => {
+      if (kind === "git" || kind === "workspace") return r.kind === kind;
+      return true;
+    });
+    return jsonResult({
+      count: repos.length,
+      kind: kind === "git" || kind === "workspace" ? kind : "all",
+      repos,
+    });
+  }
+  if (name === "amem_stats") {
+    const scope =
+      typeof args.scope === "string" && args.scope.trim()
+        ? args.scope.trim()
+        : workspace
+          ? "current"
+          : "all";
+    const result = api("GET", "/api/usage", null, {
+      workspace,
+      query: { scope, days: parseDays(args.days) },
+    });
+    if (result.status >= 400) return apiResult(result);
+    return jsonResult(compactStats(result.body));
+  }
+  if (name === "amem_graph") {
+    const result = api("GET", "/api/graph", null, {
+      workspace,
+      query: { days: parseDays(args.days) },
+    });
+    if (result.status >= 400) return apiResult(result);
+    return jsonResult(compactGraph(result.body));
   }
   if (name === "amem_status") {
     if (workspace && !getRepoByName(workspace)) {
       return textResult(`Workspace not found: ${workspace}`, true);
     }
-    if (!workspace) {
-      try {
-        requireRepo();
-      } catch (error) {
-        return textResult(error instanceof Error ? error.message : String(error), true);
-      }
-    }
-    const result = api("GET", "/api/status", null, workspace);
-    return textResult(JSON.stringify(result.body, null, 2), result.status >= 400);
+    const result = api("GET", "/api/status", null, { workspace });
+    return apiResult(result);
   }
   return textResult(`Unknown tool: ${name}`, true);
 }
@@ -313,11 +460,6 @@ export function mcpClientConfig(workspace = "my-app", port = 7843) {
       },
     },
     http: { url: httpUrl },
-    lunaHttp: {
-      name: "amem",
-      transport: "http",
-      url: httpUrl,
-    },
   };
 }
 

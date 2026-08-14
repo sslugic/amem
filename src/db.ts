@@ -520,18 +520,45 @@ export function getRepoById(id: string): RepoRow | null {
 export function getRepoByName(name: string): RepoRow | null {
   const byId = getRepoById(name);
   if (byId) return byId;
+  const raw = name.trim();
+  if (!raw) return null;
   let slug: string;
   try {
-    slug = slugifyWorkspace(name);
+    slug = slugifyWorkspace(raw);
   } catch {
     return null;
   }
   const rows = listRepos();
+  const lower = raw.toLowerCase();
   return (
     rows.find((r) => parseWorkspaceSlug(r.remote_url) === slug) ??
-    rows.find((r) => r.repo_name.toLowerCase() === slug) ??
+    rows.find((r) => r.repo_name.toLowerCase() === lower) ??
+    rows.find((r) => {
+      try {
+        return slugifyWorkspace(r.repo_name) === slug;
+      } catch {
+        return false;
+      }
+    }) ??
     null
   );
+}
+
+/** Change a workspace display name. Keeps id, repo_key, and amem:// slug so memory stays bound. */
+export function renameWorkspace(repoId: string, displayName: string): RepoRow {
+  const repo = getRepoById(repoId);
+  if (!repo) throw new Error("Workspace not found");
+  if (!parseWorkspaceSlug(repo.remote_url)) {
+    throw new Error("Only named workspaces can be renamed (git repos follow the folder / remote name)");
+  }
+  const label = displayName.trim().replace(/\s+/g, " ").slice(0, 80);
+  if (!label) throw new Error("Name required");
+  slugifyWorkspace(label);
+  const ts = nowIso();
+  openDb()
+    .prepare("UPDATE repos SET repo_name = ?, updated_at = ? WHERE id = ?")
+    .run(label, ts, repoId);
+  return getRepoById(repoId)!;
 }
 
 export function insertConversationNote(input: {

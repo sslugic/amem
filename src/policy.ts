@@ -3,6 +3,8 @@ import { platform as osPlatform } from "node:os";
 import { join } from "node:path";
 import { amemHome } from "./paths.js";
 
+import { KNOWN_PLATFORMS } from "./platforms.js";
+
 export type AmemPolicy = {
   telemetry: boolean;
   ui_enabled: boolean;
@@ -41,7 +43,7 @@ export const DEFAULT_POLICY: AmemPolicy = {
   ui_enabled: true,
   ui_bind: "127.0.0.1",
   allow_export: true,
-  allowed_platforms: ["cursor", "claude"],
+  allowed_platforms: KNOWN_PLATFORMS.map((p) => p.id),
   allowed_remote_hosts: [],
   deny_claim_patterns: [],
 };

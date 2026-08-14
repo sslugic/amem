@@ -242,7 +242,7 @@ await fetch("http://127.0.0.1:7843/api/remember", {
 });
 ```
 
-MCP config (Cursor / Claude / Luna / any MCP host):
+MCP config (any MCP host):
 
 Keep `amem ui` running (or `amem service install` so it starts at login). GUI apps often cannot find `amem` on `PATH`, which shows up as “live tool discovery failed” / MCP `error` — not a sign-in prompt. Prefer HTTP:
 
@@ -262,7 +262,22 @@ Stdio also works if the host can spawn the binary. Print a config with absolute 
 amem mcp --print-config --workspace my-app
 ```
 
-Same localhost DB as git-repo memory. Workspaces show up in the UI switcher; create one from Setup or `amem init --workspace`.
+Same localhost DB as git-repo memory. The UI switcher groups **Git repos** and **Workspaces**. Rename a workspace's display name anytime — the MCP slug (`workspace=luna-ai`) and stored claims stay on the same id.
+
+```bash
+amem rename "Luna Client" --workspace luna-ai
+```
+
+MCP tools (stdio or HTTP) — any connected client can ask these:
+
+| Tool | When to use |
+| --- | --- |
+| `amem_context` | Ranked memory packet for the current question |
+| `amem_remember` | Store a durable fact after an outcome |
+| `amem_repos` | What is monitored (git repos + named workspaces) |
+| `amem_stats` | Lookup time, estimated tokens/ms saved, hit rate |
+| `amem_graph` | Claims / components / flows stored for a workspace or repo |
+| `amem_status` | Binding + counts; omit workspace for a machine-wide overview |
 
 ---
 
@@ -271,6 +286,7 @@ Same localhost DB as git-repo memory. Workspaces show up in the UI switcher; cre
 ```text
 amem init --platform cursor|claude
 amem init --workspace <name> [--path <dir>] [--platform app]
+amem rename "<display name>" --workspace <slug>
 amem status [--workspace <name>]
 amem doctor [--attest] [--json]
 amem context "<query>" [--workspace <name>] [--platform …]
@@ -290,6 +306,7 @@ amem service install|uninstall|status
 | Command | Purpose |
 | --- | --- |
 | `init` | Bind a git repo or a named app workspace |
+| `rename` | Change a workspace display name; MCP slug and memory stay bound |
 | `context` | Retrieve a Markdown packet; log usage |
 | `remember` | Store one local fact |
 | `mcp` | Stdio MCP tools; HTTP MCP is at `http://127.0.0.1:7843/mcp` while the UI is running |

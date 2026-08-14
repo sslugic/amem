@@ -274,6 +274,31 @@ try {
   if (trackRes.status !== 200 || !trackRes.body.tracked?.length) {
     throw new Error(`api/track failed: ${JSON.stringify(trackRes.body)}`);
   }
+  const trackMulti = handleApi({
+    method: "POST",
+    pathname: "/api/track",
+    searchParams: new URLSearchParams(),
+    body: { paths: [foundRepo], platforms: ["cursor", "claude", "copilot"] },
+    cwd: repoDir,
+  });
+  if (trackMulti.status !== 200) {
+    throw new Error(`api/track multi-platform failed: ${JSON.stringify(trackMulti.body)}`);
+  }
+  const trackedId = trackMulti.body.tracked?.[0]?.id;
+  const trackedStatus = handleApi({
+    method: "GET",
+    pathname: "/api/status",
+    searchParams: new URLSearchParams(trackedId ? { repo: trackedId } : {}),
+    body: null,
+    cwd: foundRepo,
+  });
+  const savedPlatforms = JSON.parse(trackedStatus.body?.setup?.platforms || "[]");
+  if (!savedPlatforms.includes("cursor") || !savedPlatforms.includes("claude") || !savedPlatforms.includes("copilot")) {
+    throw new Error(`setup platforms not persisted: ${JSON.stringify(savedPlatforms)}`);
+  }
+  if (!Array.isArray(trackedStatus.body?.clients) || trackedStatus.body.clients.length < 5) {
+    throw new Error("status missing LLM client catalog");
+  }
   if (trackRes.body.repos.length < 3) {
     throw new Error(`expected at least 3 bound repos after track, got ${trackRes.body.repos.length}`);
   }
@@ -381,7 +406,64 @@ try {
     throw new Error(`api/context?workspace=luna failed: ${JSON.stringify(lunaApi.body)}`);
   }
 
-  function mcpRoundtrip(messages, framing) {
+  const lunaBefore = handleApi({
+    method: "GET",
+    pathname: "/api/status",
+    searchParams: new URLSearchParams({ workspace: "luna" }),
+    body: null,
+    cwd: repoDir,
+  });
+  const lunaRepoId = lunaBefore.body?.repo?.id;
+  const lunaClaims = lunaBefore.body?.counts?.claims;
+  if (!lunaRepoId || !lunaClaims) {
+    throw new Error(`workspace status missing id/claims: ${JSON.stringify(lunaBefore.body)}`);
+  }
+  console.log(run(["rename", "Luna Client", "--workspace", "luna"]));
+  const lunaRenamed = handleApi({
+    method: "GET",
+    pathname: "/api/status",
+    searchParams: new URLSearchParams({ workspace: "luna" }),
+    body: null,
+    cwd: repoDir,
+  });
+  if (lunaRenamed.body?.repo?.id !== lunaRepoId) {
+    throw new Error("rename changed workspace id");
+  }
+  if (lunaRenamed.body?.counts?.claims !== lunaClaims) {
+    throw new Error("rename changed claim count");
+  }
+  if (lunaRenamed.body?.repo?.repo_name !== "Luna Client") {
+    throw new Error(`rename did not update display name: ${lunaRenamed.body?.repo?.repo_name}`);
+  }
+  if (lunaRenamed.body?.slug !== "luna" || lunaRenamed.body?.kind !== "workspace") {
+    throw new Error(`rename lost MCP slug: ${JSON.stringify({ slug: lunaRenamed.body?.slug, kind: lunaRenamed.body?.kind })}`);
+  }
+  const lunaAfterCtx = handleApi({
+    method: "POST",
+    pathname: "/api/context",
+    searchParams: new URLSearchParams({ workspace: "luna" }),
+    body: { query: "Luna routing", platform: "luna" },
+    cwd: repoDir,
+  });
+  if (lunaAfterCtx.status !== 200 || !String(lunaAfterCtx.body.markdown || "").includes("Luna Client")) {
+    throw new Error(`context after rename missed luna fact: ${JSON.stringify(lunaAfterCtx.body)}`);
+  }
+  const inventory = handleApi({
+    method: "GET",
+    pathname: "/api/repos",
+    searchParams: new URLSearchParams(),
+    body: null,
+    cwd: repoDir,
+  });
+  const kinds = new Set((inventory.body?.repos || []).map((r) => r.kind));
+  if (!kinds.has("git") || !kinds.has("workspace")) {
+    throw new Error(`api/repos missing git/workspace kinds: ${JSON.stringify(inventory.body)}`);
+  }
+
+  function mcpRoundtrip(messages, framing, until) {
+    const ready =
+      until ??
+      ((out) => out.includes("amem_context") && out.includes("amem_remember") && out.includes("amem_repos"));
     return new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [cli, "mcp"], {
         cwd: repoDir,
@@ -412,7 +494,8 @@ try {
       };
       child.stdout.on("data", (buf) => {
         out += buf.toString("utf8");
-        if (out.includes("amem_context") && out.includes("amem_remember")) finish();
+        const ok = typeof ready === "function" ? ready(out) : out.includes(ready);
+        if (ok) finish();
       });
       child.stderr.on("data", (buf) => {
         out += buf.toString("utf8");
@@ -446,12 +529,49 @@ try {
     { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
   ];
   const ndjsonOut = await mcpRoundtrip(initAndList, "ndjson");
-  if (!ndjsonOut.includes("amem_context")) {
+  if (!ndjsonOut.includes("amem_context") || !ndjsonOut.includes("amem_repos") || !ndjsonOut.includes("amem_stats")) {
     throw new Error(`ndjson mcp handshake failed: ${ndjsonOut}`);
   }
   const lspOut = await mcpRoundtrip(initAndList, "lsp");
   if (!lspOut.includes("amem_context")) {
     throw new Error(`lsp mcp handshake failed: ${lspOut}`);
+  }
+
+  const initMsg = initAndList[0];
+  const inited = initAndList[1];
+  const reposOut = await mcpRoundtrip(
+    [
+      initMsg,
+      inited,
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "amem_repos", arguments: {} },
+      },
+    ],
+    "ndjson",
+    "workspace",
+  );
+  if (!reposOut.includes("luna")) {
+    throw new Error(`amem_repos missed workspace: ${reposOut}`);
+  }
+  const statsOut = await mcpRoundtrip(
+    [
+      initMsg,
+      inited,
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "amem_stats", arguments: { scope: "all" } },
+      },
+    ],
+    "ndjson",
+    "estimatedTokensSaved",
+  );
+  if (!statsOut.includes("estimatedTokensSaved")) {
+    throw new Error(`amem_stats missing aggregate: ${statsOut}`);
   }
 
   const printed = run(["mcp", "--print-config", "--workspace", "luna"]);

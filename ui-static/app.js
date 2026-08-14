@@ -1,4 +1,62 @@
+const PLATFORM_STORAGE = "amem.selectedPlatforms";
+const FALLBACK_CLIENTS = [
+  { id: "cursor", label: "Cursor", hint: "Rules, skills, hooks" },
+  { id: "claude", label: "Claude Code", hint: "Skills and settings hooks" },
+  { id: "copilot", label: "GitHub Copilot", hint: "MCP / HTTP API" },
+  { id: "codex", label: "ChatGPT / Codex", hint: "MCP / HTTP API" },
+  { id: "gemini", label: "Gemini", hint: "MCP / HTTP API" },
+  { id: "windsurf", label: "Windsurf", hint: "MCP / HTTP API" },
+  { id: "grok", label: "Grok", hint: "MCP / HTTP API" },
+];
+
+function parsePlatformList(raw) {
+  if (Array.isArray(raw)) return raw.filter((p) => typeof p === "string" && p.trim());
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((p) => typeof p === "string" && p.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadStoredPlatforms() {
+  try {
+    return parsePlatformList(localStorage.getItem(PLATFORM_STORAGE));
+  } catch {
+    return [];
+  }
+}
+
+function persistPlatforms() {
+  try {
+    localStorage.setItem(PLATFORM_STORAGE, JSON.stringify([...state.selected]));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function hydratePlatforms(status) {
+  const stored = loadStoredPlatforms();
+  const fromSetup = parsePlatformList(status?.setup?.platforms);
+  if (stored.length) {
+    state.selected = new Set(stored);
+    return;
+  }
+  if (fromSetup.length) {
+    state.selected = new Set(fromSetup);
+    persistPlatforms();
+  }
+}
+
+function knownClients() {
+  const fromStatus = state.status?.clients;
+  if (Array.isArray(fromStatus) && fromStatus.length) return fromStatus;
+  return FALLBACK_CLIENTS;
+}
+
 const initialUrl = new URLSearchParams(location.search);
+const storedPlatforms = loadStoredPlatforms();
 
 const state = {
   tab: ["setup", "brain", "stats"].includes(initialUrl.get("tab"))
@@ -10,7 +68,7 @@ const state = {
   repos: [],
   graph: null,
   usage: null,
-  selected: new Set(["cursor"]),
+  selected: new Set(storedPlatforms.length ? storedPlatforms : ["cursor"]),
   picked: new Set(),
   scan: null,
   scanFilter: "",
@@ -19,6 +77,7 @@ const state = {
   selectedNode: null,
   activeEventId: null,
   brainFilter: "files",
+  selectedFile: null,
   anim: 0,
   graphTick: 0,
 };
@@ -139,6 +198,7 @@ async function refreshStatus() {
     state.status = await api("/api/status");
   }
   syncFocusFromStatus();
+  hydratePlatforms(state.status);
 }
 
 async function refreshGraph() {
@@ -186,6 +246,32 @@ async function loadScan({ force = false } = {}) {
   }
 }
 
+function isWorkspace(r) {
+  if (!r) return false;
+  return r.kind === "workspace" || Boolean(r.slug) || String(r.remote_url || "").startsWith("amem://workspace/");
+}
+
+function shortPath(p) {
+  if (!p) return "";
+  const home = String(p).replace(/^\/Users\/[^/]+/, "~");
+  const parts = home.split(/[/\\]/).filter(Boolean);
+  if (parts.length <= 3) return home;
+  return `…/${parts.slice(-3).join("/")}`;
+}
+
+function switcherLabel(r) {
+  const n = r.counts?.claims ?? 0;
+  const facts = `${n} fact${n === 1 ? "" : "s"}`;
+  if (isWorkspace(r)) {
+    const slug = r.slug || r.repo_name;
+    if (String(r.repo_name).toLowerCase() !== String(slug).toLowerCase()) {
+      return `${r.repo_name} · ${slug} · ${facts}`;
+    }
+    return `${r.repo_name} · ${facts}`;
+  }
+  return `${r.repo_name} · ${shortPath(r.root_path)}`;
+}
+
 function fillRepoSelect() {
   const select = $("#repoSelect");
   if (!select) return;
@@ -198,14 +284,28 @@ function fillRepoSelect() {
   const currentPath = state.status?.identity?.rootPath || state.path;
   const inList = Boolean(bound || (currentId && repos.some((r) => r.id === currentId)));
 
-  for (const r of repos) {
-    const opt = document.createElement("option");
-    opt.value = `repo:${r.id}`;
-    const n = r.counts?.claims ?? 0;
-    opt.textContent = `${r.repo_name} · ${n} claim${n === 1 ? "" : "s"}`;
-    if (r.id === currentId || samePath(r.root_path, currentPath)) opt.selected = true;
-    select.appendChild(opt);
-  }
+  const addGroup = (label, items) => {
+    if (!items.length) return;
+    const group = document.createElement("optgroup");
+    group.label = label;
+    for (const r of items) {
+      const opt = document.createElement("option");
+      opt.value = `repo:${r.id}`;
+      opt.textContent = switcherLabel(r);
+      if (r.id === currentId || samePath(r.root_path, currentPath)) opt.selected = true;
+      group.appendChild(opt);
+    }
+    select.appendChild(group);
+  };
+
+  addGroup(
+    "Git repos",
+    repos.filter((r) => !isWorkspace(r)),
+  );
+  addGroup(
+    "Workspaces",
+    repos.filter(isWorkspace),
+  );
 
   if (!inList && currentPath) {
     const opt = document.createElement("option");
@@ -217,11 +317,42 @@ function fillRepoSelect() {
 
   const add = document.createElement("option");
   add.value = "__add__";
-  add.textContent = "Add repo…";
+  add.textContent = "Add git repo…";
   select.appendChild(add);
 
   if (!select.value && previous && previous !== "__add__") {
     select.value = previous;
+  }
+
+  const renameBtn = $("#renameWsBtn");
+  if (renameBtn) {
+    const current = repos.find((r) => `repo:${r.id}` === select.value) || matchBoundRepo() || state.status?.repo;
+    renameBtn.classList.toggle("hidden", !isWorkspace(current));
+  }
+}
+
+async function renameWorkspaceUi(repo) {
+  if (!repo?.id || !isWorkspace(repo)) return;
+  const slug = repo.slug || "";
+  const next = prompt(
+    slug
+      ? `Display name for this workspace.\nMCP still uses workspace=${slug} — memory is unchanged.`
+      : "Display name for this workspace",
+    repo.repo_name || "",
+  );
+  if (next == null) return;
+  const name = next.trim();
+  if (!name || name === repo.repo_name) return;
+  try {
+    await apiUnscoped("/api/workspaces/rename", {
+      method: "POST",
+      body: JSON.stringify({ repoId: repo.id, name }),
+    });
+    state.repos = (await apiUnscoped("/api/repos")).repos || [];
+    await refreshStatus();
+    await render();
+  } catch (e) {
+    alert(e.message);
   }
 }
 
@@ -303,7 +434,8 @@ function renderSetup() {
   const configured = Boolean(s?.setup?.setup_completed_at || s?.repo || bound);
   const main = $("#main");
   const repos = listedRepos();
-  const boundCount = repos.length;
+  const gitBound = repos.filter((r) => !isWorkspace(r));
+  const workspaces = repos.filter(isWorkspace);
   const scanned = state.scan?.repos || [];
   const filter = state.scanFilter.trim().toLowerCase();
   const visible = scanned.filter((r) => {
@@ -312,6 +444,9 @@ function renderSetup() {
   });
   const pickedCount = [...state.picked].length;
   const serviceOn = Boolean(state.service?.installed);
+  const focused = bound || s?.repo;
+  const focusedWs = isWorkspace(focused);
+  const focusedSlug = focused?.slug || "";
 
   const issues = (s.doctor || []).filter((i) => !(bound && i === "Repo not initialized"));
 
@@ -319,16 +454,16 @@ function renderSetup() {
     <section class="hero">
       <div class="hero-inner setup-wide">
         <h1>amem</h1>
-        <p>Pick the git repos on this machine to track. Memory stays in ~/.amem and never leaves localhost.</p>
+        <p>Track git repos and named workspaces separately. Memory stays in ~/.amem and never leaves localhost.</p>
         <div class="platform-row">
-          <button class="chip ${state.selected.has("cursor") ? "selected" : ""}" data-platform="cursor">
-            <strong>Cursor</strong>
-            <span>Rules, skills, hooks</span>
-          </button>
-          <button class="chip ${state.selected.has("claude") ? "selected" : ""}" data-platform="claude">
-            <strong>Claude Code</strong>
-            <span>Skills and settings hooks</span>
-          </button>
+          ${knownClients()
+            .map(
+              (p) => `<button class="chip ${state.selected.has(p.id) ? "selected" : ""}" data-platform="${esc(p.id)}" type="button">
+            <strong>${esc(p.label)}</strong>
+            <span>${esc(p.hint)}</span>
+          </button>`,
+            )
+            .join("")}
         </div>
         ${
           state.service?.supported === false
@@ -341,7 +476,7 @@ function renderSetup() {
             <div class="note" style="margin:0.25rem 0 0">${
               state.scanLoading
                 ? "Scanning your home folder…"
-                : `${scanned.length} found · ${boundCount} already tracking${state.scan?.truncated ? " · scan capped" : ""}`
+                : `${scanned.length} found · ${gitBound.length} git repo${gitBound.length === 1 ? "" : "s"} tracking${state.scan?.truncated ? " · scan capped" : ""}`
             }</div>
           </div>
           <div class="scan-actions">
@@ -374,24 +509,52 @@ function renderSetup() {
         <div class="actions">
           <button class="btn" id="trackBtn">Start tracking selected (${pickedCount || visible.filter((r) => r.tracking).length})</button>
         </div>
+        <div class="scan-head">
+          <div>
+            <strong>Named workspaces</strong>
+            <div class="note" style="margin:0.25rem 0 0">Not git checkouts. Rename the label anytime — the MCP id and memory stay put.</div>
+          </div>
+        </div>
+        <div class="repo-list" id="workspaceList">
+          ${
+            workspaces.length === 0
+              ? `<div class="note">None yet. Create one below for Luna or any MCP host.</div>`
+              : workspaces
+                  .map((w) => {
+                    const slug = w.slug || "";
+                    const n = w.counts?.claims ?? 0;
+                    const active = focused?.id === w.id;
+                    return `<div class="repo-row workspace-row ${active ? "tracking" : ""}" data-focus-ws="${esc(w.id)}">
+                      <span>
+                        <b>${esc(w.repo_name)}</b>
+                        <em>workspace</em>
+                        <small>MCP id ${esc(slug)} · ${n} fact${n === 1 ? "" : "s"}</small>
+                      </span>
+                      <button class="btn secondary small" type="button" data-rename-ws="${esc(w.id)}">Rename</button>
+                    </div>`;
+                  })
+                  .join("")
+          }
+        </div>
         <div class="workspace-add">
-          <label class="note">Named workspace for any LLM client (no git repo required)</label>
+          <label class="note">Create a workspace (no git repo required)</label>
           <div class="add-repo-row">
-            <input id="wsName" type="text" placeholder="luna" />
+            <input id="wsName" type="text" placeholder="Luna Client" />
             <button class="btn secondary" id="wsBtn" type="button">Create workspace</button>
           </div>
-          <p class="note">Luna / any MCP host: keep this UI running, then connect to <code>http://127.0.0.1:7843/mcp?workspace=NAME</code> (not a bare <code>amem</code> command — GUI apps often cannot see Homebrew on PATH).</p>
+          <p class="note">Any MCP host: keep this UI running, then connect to <code>http://127.0.0.1:7843/mcp?workspace=SLUG</code> (not a bare <code>amem</code> command — GUI apps often cannot see Homebrew on PATH).</p>
         </div>
         ${
           configured
             ? `<div class="status-grid" style="margin-top:1.5rem">
-          <div class="stat-line"><span>Focused repo</span><b>${s.repo?.repo_name || bound?.repo_name || s?.identity?.repoName || "—"}</b></div>
+          <div class="stat-line"><span>Focused ${focusedWs ? "workspace" : "git repo"}</span><b>${esc(focused?.repo_name || s?.identity?.repoName || "—")}</b></div>
+          ${focusedWs && focusedSlug && focusedSlug !== focused?.repo_name ? `<div class="stat-line"><span>MCP id</span><b>${esc(focusedSlug)}</b></div>` : ""}
           <div class="stat-line"><span>Claims</span><b>${s.counts?.claims ?? 0}</b></div>
           <div class="stat-line"><span>DB</span><b>${s.dbPath}</b></div>
         </div>
         ${issues.length ? `<div class="issues">${issues.map((i) => `• ${i}`).join("<br/>")}</div>` : ""}
         <div class="bootstrap">
-          <label class="note">Bootstrap proposal (applied only to the focused repo)</label>
+          <label class="note">Bootstrap proposal (applied only to the focused ${focusedWs ? "workspace" : "repo"})</label>
           <textarea id="proposal">${defaultProposal()}</textarea>
           <div class="actions">
             <button class="btn" id="applyBootstrap">Apply bootstrap</button>
@@ -406,8 +569,14 @@ function renderSetup() {
   main.querySelectorAll("[data-platform]").forEach((el) => {
     el.addEventListener("click", () => {
       const p = el.dataset.platform;
-      if (state.selected.has(p)) state.selected.delete(p);
-      else state.selected.add(p);
+      if (!p) return;
+      if (state.selected.has(p)) {
+        if (state.selected.size === 1) return;
+        state.selected.delete(p);
+      } else {
+        state.selected.add(p);
+      }
+      persistPlatforms();
       renderSetup();
     });
   });
@@ -465,6 +634,7 @@ function renderSetup() {
         method: "POST",
         body: JSON.stringify({ paths, platforms }),
       });
+      persistPlatforms();
       state.repos = tracked.repos || [];
       if (tracked.tracked?.[0]?.id) {
         state.repoId = tracked.tracked[0].id;
@@ -495,9 +665,12 @@ function renderSetup() {
       }
       await refreshStatus();
       const checks = (created.ready?.checks || []).join("\n");
+      const label = created.name || created.workspace;
       const mcpUrl = created.mcp?.url || `http://127.0.0.1:7843/mcp?workspace=${created.workspace}`;
+      const slugNote =
+        created.workspace && created.workspace !== label ? `\nMCP id stays: ${created.workspace}` : "";
       alert(
-        `Workspace "${created.workspace}" is ready.${checks ? `\n${checks}` : ""}\n\nLuna MCP URL:\n${mcpUrl}`,
+        `Workspace "${label}" is ready.${checks ? `\n${checks}` : ""}${slugNote}\n\nMCP URL:\n${mcpUrl}`,
       );
       render();
     } catch (err) {
@@ -520,6 +693,20 @@ function renderSetup() {
     }
   });
   $("#openBrain")?.addEventListener("click", () => setTab("brain"));
+  main.querySelectorAll("[data-rename-ws]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = el.dataset.renameWs;
+      const repo = workspaces.find((w) => w.id === id);
+      if (repo) renameWorkspaceUi(repo);
+    });
+  });
+  main.querySelectorAll("[data-focus-ws]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.focusWs;
+      if (id && id !== focused?.id) focusRepo({ repoId: id, tab: "setup" });
+    });
+  });
 }
 
 function esc(value) {
@@ -655,7 +842,7 @@ function renderBrain() {
       <div class="brain-toolbar">
         <div>
           <h1>What amem knows</h1>
-          <p>Facts grouped by file — what Cursor can skip reading. Teal means used in a recent query.</p>
+          <p>The map is coverage: each tile is a file, sized by how many facts. Teal was used in a recent query. Click a tile or a recent use to see what was injected.</p>
         </div>
         <div class="brain-kpis">
           <span><b>${g.claims?.length ?? 0}</b> facts</span>
@@ -681,6 +868,7 @@ function renderBrain() {
     btn.addEventListener("click", () => {
       state.brainFilter = btn.dataset.filter;
       state.selectedNode = null;
+      state.selectedFile = null;
       renderBrain();
     });
   });
@@ -690,6 +878,7 @@ function renderBrain() {
 function paintBrain() {
   renderBrainFeed();
   renderBrainMap();
+  bindCoverageResize();
   if (state.selectedNode) showBrainDetail(state.selectedNode);
   else showBrainOverview();
 }
@@ -725,7 +914,172 @@ function renderBrainFeed() {
         state.graph.recentClaimIds = [];
       }
       state.selectedNode = { type: "event", id: ev.id, detail: ev };
+      const files = [...eventFiles(ev)];
+      state.selectedFile = files[0] || null;
       paintBrain();
+    });
+  });
+}
+
+function fileLabel(path) {
+  const parts = String(path || "").split(/[/\\]/).filter(Boolean);
+  if (parts.length <= 2) return path;
+  return parts.slice(-2).join("/");
+}
+
+function coverageGroups() {
+  return fileGroups(state.graph?.claims || []);
+}
+
+function matchingFiles() {
+  return new Set(fileGroups(visibleClaims()).map((g) => g.file));
+}
+
+function eventFiles(ev) {
+  const ids = eventClaimIds(ev);
+  const files = new Set();
+  for (const id of ids) {
+    const claim = (state.graph?.claims || []).find((c) => c.id === id);
+    if (!claim) continue;
+    for (const a of claimAnchors(claim)) files.add(a);
+  }
+  return files;
+}
+
+function layoutTreemap(items, x, y, w, h) {
+  if (!items.length) return [];
+  if (items.length === 1) return [{ ...items[0], x, y, w, h }];
+  const total = items.reduce((s, i) => s + i.weight, 0) || 1;
+  let acc = 0;
+  let split = 1;
+  for (let i = 0; i < items.length; i++) {
+    acc += items[i].weight;
+    split = i + 1;
+    if (acc >= total / 2) break;
+  }
+  const left = items.slice(0, split);
+  const right = items.slice(split);
+  if (!right.length) return [{ ...left[0], x, y, w, h }];
+  const leftW = left.reduce((s, i) => s + i.weight, 0);
+  const frac = Math.min(0.85, Math.max(0.15, leftW / total));
+  if (w >= h) {
+    const lw = w * frac;
+    return [...layoutTreemap(left, x, y, lw, h), ...layoutTreemap(right, x + lw, y, w - lw, h)];
+  }
+  const lh = h * frac;
+  return [...layoutTreemap(left, x, y, w, lh), ...layoutTreemap(right, x, y + lh, w, h - lh)];
+}
+
+let coverageRo = null;
+function bindCoverageResize() {
+  const host = $("#coverageHost");
+  if (coverageRo) {
+    coverageRo.disconnect();
+    coverageRo = null;
+  }
+  if (!host || typeof ResizeObserver === "undefined") return;
+  coverageRo = new ResizeObserver(() => renderCoverageMap());
+  coverageRo.observe(host);
+}
+
+function renderCoverageMap() {
+  const host = $("#coverageHost");
+  if (!host) return;
+  const legendH = 28;
+  const pad = 2;
+  const w = Math.max(160, Math.floor(host.clientWidth));
+  const h = Math.max(140, Math.floor(host.clientHeight - legendH));
+  const groups = coverageGroups();
+  const matching = matchingFiles();
+  const hot = new Set(state.graph?.recentClaimIds || []);
+  const selectedFile = state.selectedFile;
+  const eventHotFiles =
+    state.selectedNode?.type === "event" ? eventFiles(state.selectedNode.detail) : new Set();
+
+  if (!groups.length) {
+    host.innerHTML = `
+      <div class="coverage-legend">No files in memory yet — bootstrap on Setup or keep working in this repo.</div>
+      <svg class="coverage-svg" viewBox="0 0 ${w} ${h}" role="img" aria-label="Empty coverage map">
+        <rect x="8" y="8" width="${w - 16}" height="${h - 16}" rx="10" fill="none" stroke="rgba(232,238,242,0.14)" stroke-dasharray="6 6"/>
+        <text x="${w / 2}" y="${h / 2}" text-anchor="middle" fill="#8fa3b0" font-size="13">amem has no file coverage here</text>
+      </svg>`;
+    return;
+  }
+
+  const items = groups.map((g) => ({
+    file: g.file,
+    weight: Math.max(1, g.items.length),
+    count: g.items.length,
+    used: g.used,
+    session: g.items.every(isSessionClaim),
+  }));
+  const gap = 3;
+  const rects = layoutTreemap(items, pad, pad, w - pad * 2, h - pad * 2).map((r) => ({
+    ...r,
+    x: r.x + gap / 2,
+    y: r.y + gap / 2,
+    w: Math.max(2, r.w - gap),
+    h: Math.max(2, r.h - gap),
+  }));
+
+  const tiles = rects
+    .map((r) => {
+      const match = matching.has(r.file);
+      const selected = selectedFile === r.file;
+      const fromEvent = eventHotFiles.has(r.file);
+      const classes = [
+        "cov-tile",
+        r.used || fromEvent ? "used" : "",
+        r.session ? "session" : "",
+        match ? "" : "dim",
+        selected ? "selected" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const showLabel = r.w > 72 && r.h > 32;
+      const showCount = r.w > 72 && r.h > 48;
+      const label = fileLabel(r.file);
+      return `<g class="${classes}" data-file="${esc(r.file)}" role="button" tabindex="0">
+        <title>${esc(r.file)} · ${r.count} fact${r.count === 1 ? "" : "s"}${r.used ? " · used recently" : ""}</title>
+        <rect x="${r.x.toFixed(1)}" y="${r.y.toFixed(1)}" width="${r.w.toFixed(1)}" height="${r.h.toFixed(1)}" rx="7"/>
+        ${
+          showLabel
+            ? `<text class="cov-name" x="${(r.x + 8).toFixed(1)}" y="${(r.y + 18).toFixed(1)}">${esc(label)}</text>`
+            : ""
+        }
+        ${
+          showCount
+            ? `<text class="cov-count" x="${(r.x + 8).toFixed(1)}" y="${(r.y + 34).toFixed(1)}">${r.count} fact${r.count === 1 ? "" : "s"}</text>`
+            : ""
+        }
+      </g>`;
+    })
+    .join("");
+
+  host.innerHTML = `
+    <div class="coverage-legend">
+      <span class="swatch used"></span> used recently
+      <span class="swatch file"></span> known file
+      <span class="swatch dim"></span> hidden by this tab
+      <span class="legend-note">tile size = facts</span>
+    </div>
+    <svg class="coverage-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="File coverage map">${tiles}</svg>`;
+
+  host.querySelectorAll("[data-file]").forEach((node) => {
+    const pick = () => {
+      const file = node.getAttribute("data-file");
+      const group = coverageGroups().find((g) => g.file === file);
+      if (!group) return;
+      state.selectedFile = file;
+      state.selectedNode = { type: "file", id: file, detail: group };
+      paintBrain();
+    };
+    node.addEventListener("click", pick);
+    node.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
     });
   });
 }
@@ -735,24 +1089,32 @@ function renderBrainMap() {
   if (!el) return;
   const claims = visibleClaims();
   const groups = fileGroups(claims);
+  const selectedFile = state.selectedFile;
+  const shown = selectedFile
+    ? coverageGroups().filter((g) => g.file === selectedFile)
+    : groups;
   const hot = new Set(state.graph?.recentClaimIds || []);
   const selectedId = state.selectedNode?.type === "claim" ? state.selectedNode.id : null;
+  const filterHint =
+    state.brainFilter === "used"
+      ? "Highlighting files that were injected in a recent query."
+      : state.brainFilter === "chats"
+        ? "Highlighting chat takeaways. Other files stay on the map, dimmed."
+        : "Every tile is a file amem can inject instead of a repo search.";
 
-  if (!groups.length) {
-    const empty =
-      state.brainFilter === "used"
-        ? "Nothing in this repo has been used in a context query yet."
-        : state.brainFilter === "chats"
-          ? "No session takeaways yet. After a Cursor chat, stop-hook claims land here."
-          : "No facts yet. Apply a bootstrap on Setup, or keep working in this repo.";
-    el.innerHTML = `<div class="brain-empty">${empty}</div>`;
-    return;
-  }
-
-  el.innerHTML = groups
-    .map((group) => {
-      const usedClass = group.used ? "used" : "";
-      return `<article class="file-card ${usedClass}">
+  const list =
+    shown.length === 0
+      ? `<div class="brain-empty">${
+          state.brainFilter === "used"
+            ? "Nothing in this repo has been used in a context query yet — the map still shows what is stored."
+            : state.brainFilter === "chats"
+              ? "No session takeaways yet. After a chat, stop-hook claims land here."
+              : "No facts yet. Apply a bootstrap on Setup, or keep working in this repo."
+        }</div>`
+      : shown
+          .map((group) => {
+            const usedClass = group.used ? "used" : "";
+            return `<article class="file-card ${usedClass}">
         <header>
           <code>${esc(group.file)}</code>
           <span>${group.items.length} fact${group.items.length === 1 ? "" : "s"}${group.used ? " · used recently" : ""}</span>
@@ -778,13 +1140,24 @@ function renderBrainMap() {
             .join("")}
         </ul>
       </article>`;
-    })
-    .join("");
+          })
+          .join("");
+
+  el.innerHTML = `
+    <div class="coverage-host" id="coverageHost"></div>
+    <div class="brain-facts">
+      <h2>${selectedFile ? esc(fileLabel(selectedFile)) : "Facts"} <span>${esc(filterHint)}</span></h2>
+      ${list}
+    </div>`;
+
+  renderCoverageMap();
 
   el.querySelectorAll("[data-claim]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const claim = (state.graph.claims || []).find((c) => c.id === btn.dataset.claim);
       if (!claim) return;
+      const anchors = claimAnchors(claim);
+      if (anchors[0]) state.selectedFile = anchors[0];
       state.selectedNode = { type: "claim", id: claim.id, detail: claim };
       paintBrain();
     });
@@ -800,9 +1173,9 @@ function showBrainOverview() {
   drawer.innerHTML = `
     <h2>${esc(state.status.repo.repo_name)}</h2>
     <div class="meta">Local memory map</div>
-    <p>This is the knowledge Cursor gets <em>before</em> it greps. Each card is a file; each row is a fact amem can inject.</p>
+    <p>The map is what amem can inject instead of a repo search. Bigger tiles have more facts. Teal tiles were used in a recent query.</p>
     <div class="meta">${durable} durable facts · ${chats} chat takeaways · ${g.flows?.length ?? 0} flows · ${g.components?.length ?? 0} components</div>
-    <p class="note" style="margin:0">Click a recent use to see what was injected. Click a fact to read it. “Had to explore” means amem missed and the agent likely read files.</p>`;
+    <p class="note" style="margin:0">Click a tile to read that file’s facts. Click a recent use to see what was injected. “Had to explore” means amem missed.</p>`;
 }
 
 function showBrainDetail(node) {
@@ -823,6 +1196,25 @@ function showBrainDetail(node) {
       ${
         claims.length
           ? `<ul class="detail-list">${claims.map((c) => `<li><strong>${esc(claimPreview(c, 90))}</strong><div class="meta">${claimAnchors(c).map((a) => `<code>${esc(a)}</code>`).join(" ") || ""}</div></li>`).join("")}</ul>`
+          : ""
+      }`;
+    return;
+  }
+  if (node.type === "file") {
+    const group = node.detail || coverageGroups().find((g) => g.file === node.id);
+    const items = group?.items || [];
+    drawer.innerHTML = `
+      <h2>${esc(fileLabel(node.id))}</h2>
+      <div class="meta"><code>${esc(node.id)}</code> · ${items.length} fact${items.length === 1 ? "" : "s"}</div>
+      <p>amem can inject these instead of grepping this file. Teal on the map means a recent query already used one of them.</p>
+      ${
+        items.length
+          ? `<ul class="detail-list">${items
+              .map(
+                (c) =>
+                  `<li><strong>${esc(claimPreview(c, 90))}</strong><div class="meta">${esc(c.kind || "fact")}</div></li>`,
+              )
+              .join("")}</ul>`
           : ""
       }`;
     return;
@@ -1083,6 +1475,9 @@ $("#repoSelect")?.addEventListener("change", async (e) => {
 });
 
 $("#addRepoBtn")?.addEventListener("click", () => setAddPanel(true));
+$("#renameWsBtn")?.addEventListener("click", () => {
+  renameWorkspaceUi(matchBoundRepo() || state.status?.repo);
+});
 $("#addRepoCancel")?.addEventListener("click", () => setAddPanel(false));
 $("#addRepoGo")?.addEventListener("click", () => openAddedPath());
 $("#addRepoPath")?.addEventListener("keydown", (e) => {
