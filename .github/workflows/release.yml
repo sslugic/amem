@@ -20,13 +20,12 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run pack:check
+      # Note: step `env` is not visible to `if` — check the secret itself.
       - name: publish
-        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        if: ${{ secrets.NPM_TOKEN != '' }}
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: skip publish (no token)
-        if: ${{ env.NODE_AUTH_TOKEN == '' }}
+        if: ${{ secrets.NPM_TOKEN == '' }}
         run: echo "NPM_TOKEN is not set — pack is ready, publish skipped. See docs/npm-release.md."
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
