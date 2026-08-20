@@ -5,7 +5,7 @@
  */
 import { createServer } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyShopEnv, loadShopEnvFromText, parseDotEnv, pickShopEnv } from "./env.mjs";
 import {
@@ -75,6 +75,25 @@ async function licenseFns() {
   return import(join(REPO, "dist", "license.js"));
 }
 
+function siteChrome(active, body) {
+  const tab = (href, id, label) =>
+    `<a class="nav-tab${active === id ? " active" : ""}" href="${href}">${label}</a>`;
+  return htmlPage(
+    active === "plans" ? "amem — plans" : "amem — get started",
+    `<div class="shell">
+  <header class="top">
+    <a class="brand" href="/">amem</a>
+    <nav class="nav" aria-label="Site">
+      ${tab("/", "start", "Get started")}
+      ${tab("/plans", "plans", "Plans")}
+    </nav>
+  </header>
+  ${body}
+</div>
+${cmdScript()}`,
+  );
+}
+
 function htmlPage(title, body) {
   return `<!doctype html>
 <html lang="en"><head>
@@ -83,172 +102,103 @@ function htmlPage(title, body) {
 <title>${title}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <style>
 :root{
-  --bg0:#0f1418;--bg1:#172028;--ink:#e8eef2;--muted:#8fa3b0;
-  --accent:#2ec4b6;--accent-dim:#1a7a72;--line:rgba(232,238,242,.1);
+  --bg0:#0b0f12;--bg1:#141b21;--bg2:#1a232b;--ink:#e8eef2;--muted:#8fa3b0;
+  --accent:#2ec4b6;--accent-dim:#1a7a72;--line:rgba(232,238,242,.1);--claim:#7eb8ff;
 }
 *{box-sizing:border-box}
 html,body{margin:0;min-height:100%;color:var(--ink);
-  font:16px/1.5 "IBM Plex Sans",system-ui,sans-serif;
+  font:15px/1.45 "IBM Plex Sans",system-ui,sans-serif;
+  background:var(--bg0)}
+body{
   background:
-    radial-gradient(1200px 600px at 10% -10%,rgba(46,196,182,.12),transparent 55%),
-    radial-gradient(900px 500px at 90% 0%,rgba(126,184,255,.08),transparent 50%),
+    radial-gradient(900px 480px at 12% -8%,rgba(46,196,182,.14),transparent 55%),
+    radial-gradient(700px 420px at 88% 0%,rgba(126,184,255,.08),transparent 50%),
     var(--bg0)}
-.wrap{max-width:920px;margin:0 auto;padding:2.5rem 1.25rem 3.5rem}
-.brand{display:flex;align-items:center;gap:1rem;margin:0 0 .75rem}
-.logo{width:4.25rem;height:4.25rem;border-radius:1.25rem;display:grid;place-items:center;
-  background:linear-gradient(160deg,var(--accent),var(--accent-dim));color:#062925;
-  font-family:Fraunces,Georgia,serif;font-size:2.35rem;font-weight:700;letter-spacing:-.06em;
-  box-shadow:0 12px 40px rgba(46,196,182,.18)}
-h1{margin:0;font-family:Fraunces,Georgia,serif;font-size:2.1rem;font-weight:700;letter-spacing:-.03em}
-.lead{margin:0 0 1.5rem;max-width:40rem;color:var(--muted);font-size:1.05rem}
-.plan-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.85rem;margin:0 0 1rem}
-.plan-card{display:flex;flex-direction:column;gap:.65rem;padding:1.15rem 1.15rem 1.2rem;
-  border:1px solid var(--line);border-radius:16px;background:var(--bg1);min-width:0}
-.plan-card.featured{border-color:rgba(46,196,182,.45)}
-.plan-card h2{margin:0;font-size:1.05rem}
-.plan-price{margin:0;font-family:Fraunces,Georgia,serif;font-size:1.85rem;letter-spacing:-.03em}
-.plan-price span{font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:.8rem;color:var(--muted);font-weight:500}
-.plan-card ul{margin:0 0 .4rem;padding:0 0 0 1.1rem;color:var(--muted);font-size:.88rem;line-height:1.45;flex:1}
-.plan-card li+li{margin-top:.35rem}
+.shell{min-height:100vh;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;justify-content:space-between;gap:1rem;
+  padding:.85rem 1.5rem;border-bottom:1px solid var(--line);
+  background:rgba(11,15,18,.88);backdrop-filter:blur(10px);position:sticky;top:0;z-index:5}
+.brand{color:var(--ink);text-decoration:none;font-weight:700;font-size:1.15rem;letter-spacing:-.03em}
+.nav{display:flex;align-items:center;gap:.35rem}
+.nav-tab{color:var(--muted);text-decoration:none;font-size:.88rem;font-weight:500;
+  padding:.4rem .85rem;border-radius:999px;border:1px solid transparent}
+.nav-tab:hover{color:var(--ink)}
+.nav-tab.active{color:var(--ink);border-color:rgba(126,184,255,.55);background:rgba(126,184,255,.08)}
+.hero{position:relative;flex:1;display:grid;align-items:center;min-height:calc(100vh - 3.4rem);
+  padding:2rem 1.25rem 2.5rem;overflow:hidden}
+.hero-art{position:absolute;inset:0;pointer-events:none}
+.hero-art img{width:100%;height:100%;object-fit:cover;object-position:center 28%;
+  opacity:.42;filter:saturate(1.05) contrast(1.05)}
+.hero-art::after{content:"";position:absolute;inset:0;
+  background:
+    linear-gradient(180deg,rgba(11,15,18,.55) 0%,rgba(11,15,18,.78) 42%,rgba(11,15,18,.94) 100%),
+    radial-gradient(ellipse 70% 55% at 50% 40%,transparent 20%,rgba(11,15,18,.75) 100%)}
+.hero-panel{position:relative;z-index:1;width:min(560px,100%);margin:0 auto;
+  padding:1.6rem 1.45rem 1.5rem;border:1px solid var(--line);border-radius:18px;
+  background:rgba(20,27,33,.78);backdrop-filter:blur(14px);
+  box-shadow:0 24px 80px rgba(0,0,0,.45)}
+.hero-kicker{margin:0 0 .35rem;color:var(--accent);font-size:.78rem;font-weight:600;
+  letter-spacing:.08em;text-transform:uppercase}
+.hero-brand{margin:0 0 .55rem;font-size:clamp(2.4rem,7vw,3.4rem);font-weight:700;
+  letter-spacing:-.05em;line-height:1}
+.hero h1{margin:0 0 .45rem;font-size:clamp(1.35rem,3.5vw,1.7rem);font-weight:600;letter-spacing:-.02em}
+.hero-lead{margin:0 0 1.15rem;color:var(--muted);font-size:.95rem;max-width:28rem}
+.cmd-box{border:1px solid var(--line);border-radius:14px;background:rgba(11,15,18,.72);overflow:hidden}
+.cmd-tabs{display:flex;gap:.3rem;padding:.5rem .55rem;border-bottom:1px solid var(--line)}
+.cmd-tab{appearance:none;border:1px solid transparent;background:transparent;color:var(--muted);
+  font:inherit;font-size:.8rem;font-weight:500;padding:.35rem .7rem;border-radius:999px;cursor:pointer}
+.cmd-tab.active{color:var(--ink);border-color:var(--line);background:var(--bg2)}
+.cmd-row{display:flex;align-items:center;gap:.75rem;padding:.8rem .95rem}
+.cmd-row code{flex:1;min-width:0;font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  font-size:.9rem;letter-spacing:.01em;overflow:auto;white-space:nowrap}
+.cmd-panel{display:none}
+.cmd-panel.active{display:block}
+.cmd-hint{margin:.75rem 0 0;color:var(--muted);font-size:.8rem}
+.cmd-hint a{color:var(--accent)}
 a.btn,button.btn{appearance:none;display:block;width:100%;text-align:center;text-decoration:none;border:0;cursor:pointer;
   background:var(--accent);color:#062925;font:inherit;font-weight:600;padding:.85rem 1.2rem;border-radius:999px}
 a.btn.secondary,button.btn.secondary{background:transparent;color:var(--ink);border:1px solid var(--line)}
-button.btn.compact{width:auto;padding:.55rem .95rem;font-size:.85rem;flex-shrink:0}
-.note{margin:0;color:var(--muted);font-size:.88rem}
-.fine{margin:0 0 2rem;color:var(--muted);font-size:.82rem}
-.start{margin:2rem 0 0;scroll-margin-top:1.5rem}
-.start-head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.75rem 1rem;align-items:end;margin:0 0 1rem}
-.start-head h2{margin:0;font-family:Fraunces,Georgia,serif;font-size:1.55rem;letter-spacing:-.02em}
-.start-head p{margin:0;color:var(--muted);font-size:.92rem;max-width:28rem}
-.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;margin:0 0 1rem}
-.step{padding:1rem 1.05rem;border:1px solid var(--line);border-radius:16px;background:var(--bg1);min-width:0}
-.step-num{display:inline-grid;place-items:center;width:1.6rem;height:1.6rem;border-radius:999px;
-  background:rgba(46,196,182,.16);color:var(--accent);font-size:.78rem;font-weight:600;margin-bottom:.55rem}
-.step h3{margin:0 0 .3rem;font-size:.95rem}
-.step p{margin:0;color:var(--muted);font-size:.84rem;line-height:1.45}
-.cmd-box{border:1px solid var(--line);border-radius:18px;background:var(--bg1);overflow:hidden}
-.cmd-tabs{display:flex;gap:.35rem;padding:.55rem .65rem;border-bottom:1px solid var(--line);background:rgba(15,20,24,.45)}
-.cmd-tab{appearance:none;border:1px solid transparent;background:transparent;color:var(--muted);
-  font:inherit;font-size:.82rem;font-weight:500;padding:.4rem .75rem;border-radius:999px;cursor:pointer}
-.cmd-tab.active{color:var(--ink);border-color:var(--line);background:var(--bg0)}
-.cmd-row{display:flex;align-items:center;gap:.75rem;padding:.85rem 1rem}
-.cmd-row code{flex:1;min-width:0;font-size:.95rem;letter-spacing:.01em;overflow:auto;white-space:nowrap}
-.cmd-panel{display:none}
-.cmd-panel.active{display:block}
-.cmd-hint{margin:.7rem 0 0;color:var(--muted);font-size:.82rem}
+button.btn.compact{width:auto;padding:.5rem .9rem;font-size:.82rem;flex-shrink:0}
 .copied{color:#062925 !important;background:var(--accent) !important;border-color:transparent !important}
-code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em}
+.plans-wrap{max-width:920px;margin:0 auto;padding:2rem 1.25rem 3rem;width:100%}
+.plans-wrap h1{margin:0 0 .4rem;font-size:1.65rem;letter-spacing:-.02em}
+.plans-lead{margin:0 0 1.25rem;color:var(--muted);max-width:36rem}
+.plan-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.85rem;margin:0 0 1rem}
+.plan-card{display:flex;flex-direction:column;gap:.65rem;padding:1.15rem;
+  border:1px solid var(--line);border-radius:16px;background:rgba(20,27,33,.85);min-width:0}
+.plan-card.featured{border-color:rgba(46,196,182,.45)}
+.plan-card h2{margin:0;font-size:1.05rem}
+.plan-price{margin:0;font-size:1.85rem;font-weight:700;letter-spacing:-.03em}
+.plan-price span{font-size:.8rem;color:var(--muted);font-weight:500}
+.plan-card ul{margin:0 0 .4rem;padding:0 0 0 1.1rem;color:var(--muted);font-size:.88rem;line-height:1.45;flex:1}
+.plan-card li+li{margin-top:.35rem}
+.fine{margin:0;color:var(--muted);font-size:.82rem}
+.note{margin:0;color:var(--muted);font-size:.88rem}
+code,pre{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:.86em}
 code{background:transparent;padding:0}
-pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;overflow:auto;color:var(--ink)}
+pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;overflow:auto}
+.page{max-width:640px;margin:0 auto;padding:2.5rem 1.25rem}
 .page h1{margin:0 0 .75rem}
 .page p{color:var(--muted);max-width:36rem}
 .page .actions{display:flex;flex-wrap:wrap;gap:.6rem;margin:1.25rem 0}
 .page a.btn{width:auto;display:inline-block}
+.page .brand-row{display:flex;align-items:center;gap:.75rem;margin:0 0 .75rem}
+.page .brand-row .mark{width:2.5rem;height:2.5rem;border-radius:.75rem;display:grid;place-items:center;
+  background:linear-gradient(160deg,var(--accent),var(--accent-dim));color:#062925;font-weight:700}
 @media(max-width:800px){
-  .plan-grid,.steps{grid-template-columns:1fr}
-  .logo{width:3.5rem;height:3.5rem;font-size:1.9rem}
+  .plan-grid{grid-template-columns:1fr}
   .cmd-row{flex-wrap:wrap}
+  .hero{padding:1.5rem 1rem 2rem;align-items:end}
+  .hero-art img{object-position:center 18%;opacity:.35}
 }
-</style></head><body><div class="wrap">${body}</div></body></html>`;
-}
-
-function dollars(cents) {
-  return `$${(Number(cents) / 100).toFixed(0)}`;
+</style></head><body>${body}</body></html>`;
 }
 
-function landing() {
-  const pro = dollars(TIERS.pro.amountCents);
-  const it = dollars(TIERS.it.amountCents);
-  return htmlPage(
-    "amem — plans",
-    `<div class="brand">
-  <div class="logo" aria-hidden="true">a</div>
-  <h1>amem</h1>
-</div>
-<p class="lead">Local agent memory for Cursor and any MCP host. Facts stay in <code>~/.amem</code> on your machine. Pay only if you want extras — free already remembers, retrieves, and backs up.</p>
-<div class="plan-grid">
-  <article class="plan-card">
-    <h2>Free</h2>
-    <p class="plan-price">$0</p>
-    <ul>
-      <li>Memory, MCP, and Stats</li>
-      <li>Lock and local backup</li>
-      <li>Hashing embedder — no download</li>
-    </ul>
-    <a class="btn secondary" href="#install">Get started</a>
-  </article>
-  <article class="plan-card featured">
-    <h2>Pro</h2>
-    <p class="plan-price">${pro} <span>once</span></p>
-    <ul>
-      <li>Everything in Free</li>
-      <li>Local n-gram or external embedder</li>
-      <li>Hygiene inbox — decay and merge</li>
-      <li>Pin facts → Cursor rules</li>
-    </ul>
-    <a class="btn" href="/buy/pro">Buy Pro</a>
-  </article>
-  <article class="plan-card">
-    <h2>IT</h2>
-    <p class="plan-price">${it} <span>once</span></p>
-    <ul>
-      <li>Everything in Pro</li>
-      <li>Richer <code>amem doctor --attest</code></li>
-      <li><code>amem it-pack</code> for local rollout</li>
-    </ul>
-    <a class="btn secondary" href="/buy/it">Buy IT</a>
-  </article>
-</div>
-<p class="fine">After pay, apply <code>amem-license.json</code> in <code>amem ui</code>. Memory never uploads.</p>
-
-<section class="start" id="install">
-  <div class="start-head">
-    <div>
-      <h2>Start free</h2>
-      <p>Node 20+. One command on your machine — not an app dependency.</p>
-    </div>
-  </div>
-  <div class="steps">
-    <article class="step">
-      <div class="step-num">1</div>
-      <h3>Install</h3>
-      <p>Copy a command below. Needs network once for npm.</p>
-    </article>
-    <article class="step">
-      <div class="step-num">2</div>
-      <h3>Open the UI</h3>
-      <p>Run <code>amem ui</code> for Plans, Memory, and Setup.</p>
-    </article>
-    <article class="step">
-      <div class="step-num">3</div>
-      <h3>Wire a host</h3>
-      <p>In a repo: <code>amem init --platform cursor</code></p>
-    </article>
-  </div>
-  <div class="cmd-box">
-    <div class="cmd-tabs" role="tablist">
-      <button type="button" class="cmd-tab active" data-cmd="npx" role="tab" aria-selected="true">Quick (npx)</button>
-      <button type="button" class="cmd-tab" data-cmd="global" role="tab" aria-selected="false">Global CLI</button>
-    </div>
-    <div class="cmd-panel active" data-panel="npx">
-      <div class="cmd-row">
-        <code id="cmd-npx">npx amem setup</code>
-        <button type="button" class="btn compact" data-copy="cmd-npx">Copy</button>
-      </div>
-    </div>
-    <div class="cmd-panel" data-panel="global">
-      <div class="cmd-row">
-        <code id="cmd-global">npm i -g amem &amp;&amp; amem setup</code>
-        <button type="button" class="btn compact" data-copy="cmd-global">Copy</button>
-      </div>
-    </div>
-  </div>
-  <p class="cmd-hint">Live after the first npm publish. Until then, clone from <a href="https://github.com/sslugic/amem" style="color:var(--accent)">GitHub</a>.</p>
-</section>
-<script>
+function cmdScript() {
+  return `<script>
 (() => {
   const tabs = [...document.querySelectorAll(".cmd-tab")];
   const panels = [...document.querySelectorAll(".cmd-panel")];
@@ -282,7 +232,96 @@ function landing() {
     });
   });
 })();
-</script>`,
+</script>`;
+}
+
+function installCommands() {
+  return `<div class="cmd-box">
+  <div class="cmd-tabs" role="tablist">
+    <button type="button" class="cmd-tab active" data-cmd="npx" role="tab" aria-selected="true">Quick (npx)</button>
+    <button type="button" class="cmd-tab" data-cmd="global" role="tab" aria-selected="false">Global CLI</button>
+  </div>
+  <div class="cmd-panel active" data-panel="npx">
+    <div class="cmd-row">
+      <code id="cmd-npx">npx amem setup</code>
+      <button type="button" class="btn compact" data-copy="cmd-npx">Copy</button>
+    </div>
+  </div>
+  <div class="cmd-panel" data-panel="global">
+    <div class="cmd-row">
+      <code id="cmd-global">npm i -g amem &amp;&amp; amem setup</code>
+      <button type="button" class="btn compact" data-copy="cmd-global">Copy</button>
+    </div>
+  </div>
+</div>
+<p class="cmd-hint">Node 20+. Then <code>amem ui</code>. Until npm is live, clone from <a href="https://github.com/sslugic/amem">GitHub</a>.</p>`;
+}
+
+function dollars(cents) {
+  return `$${(Number(cents) / 100).toFixed(0)}`;
+}
+
+function landing() {
+  return siteChrome(
+    "start",
+    `<main class="hero">
+  <div class="hero-art" aria-hidden="true">
+    <img src="/public/amem-ui.png" alt="" width="1600" height="1000"/>
+  </div>
+  <div class="hero-panel">
+    <p class="hero-kicker">Local agent memory</p>
+    <p class="hero-brand">amem</p>
+    <h1>Get started for free</h1>
+    <p class="hero-lead">Facts stay in <code>~/.amem</code> on your machine. One command — then open the UI.</p>
+    ${installCommands()}
+  </div>
+</main>`,
+  );
+}
+
+function plansPage() {
+  const pro = dollars(TIERS.pro.amountCents);
+  const it = dollars(TIERS.it.amountCents);
+  return siteChrome(
+    "plans",
+    `<main class="plans-wrap">
+  <h1>Plans</h1>
+  <p class="plans-lead">Free already remembers, retrieves, and backs up. Pay only if you want extras — memory never uploads.</p>
+  <div class="plan-grid">
+    <article class="plan-card">
+      <h2>Free</h2>
+      <p class="plan-price">$0</p>
+      <ul>
+        <li>Memory, MCP, and Stats</li>
+        <li>Lock and local backup</li>
+        <li>Hashing embedder — no download</li>
+      </ul>
+      <a class="btn secondary" href="/">Get started</a>
+    </article>
+    <article class="plan-card featured">
+      <h2>Pro</h2>
+      <p class="plan-price">${pro} <span>once</span></p>
+      <ul>
+        <li>Everything in Free</li>
+        <li>Local n-gram or external embedder</li>
+        <li>Hygiene inbox — decay and merge</li>
+        <li>Pin facts → Cursor rules</li>
+      </ul>
+      <a class="btn" href="/buy/pro">Buy Pro</a>
+    </article>
+    <article class="plan-card">
+      <h2>IT</h2>
+      <p class="plan-price">${it} <span>once</span></p>
+      <ul>
+        <li>Everything in Pro</li>
+        <li>Richer <code>amem doctor --attest</code></li>
+        <li><code>amem it-pack</code> for local rollout</li>
+      </ul>
+      <a class="btn secondary" href="/buy/it">Buy IT</a>
+    </article>
+  </div>
+  <p class="fine">After pay, apply <code>amem-license.json</code> in <code>amem ui</code>.</p>
+</main>`,
   );
 }
 
@@ -292,14 +331,14 @@ function successPage(result) {
       "amem · thanks",
       `<div class="page"><h1>Payment received</h1>
 <p>If the license did not appear, reopen this page from Stripe’s success redirect (it includes a session id).</p>
-<p class="actions"><a class="btn secondary" href="/">Back to plans</a></p></div>`,
+<p class="actions"><a class="btn secondary" href="/plans">Back to plans</a></p></div>`,
     );
   }
   if (result.pending) {
     return htmlPage(
       "amem · pending",
       `<div class="page"><h1>Payment not finished</h1><p>${escapeHtml(result.reason || "Not paid yet.")}</p>
-<p class="actions"><a class="btn secondary" href="/">Back to plans</a></p></div>`,
+<p class="actions"><a class="btn secondary" href="/plans">Back to plans</a></p></div>`,
     );
   }
   if (!result.ok) {
@@ -308,7 +347,7 @@ function successPage(result) {
       `<div class="page"><h1>Paid, license not issued</h1>
 <p>${escapeHtml(result.reason || "unknown")}</p>
 <p>Keep this tab and retry, or open the Mailtrap inbox. Do not pay again.</p>
-<p class="actions"><a class="btn secondary" href="/">Back to plans</a></p></div>`,
+<p class="actions"><a class="btn secondary" href="/plans">Back to plans</a></p></div>`,
     );
   }
   const mailNote = result.emailed
@@ -318,14 +357,14 @@ function successPage(result) {
     : `<p>Email did not send (${escapeHtml(result.mailReason || "skipped")}). Use the download.</p>`;
   return htmlPage(
     "amem · thanks",
-    `<div class="page"><div class="brand"><div class="logo" aria-hidden="true">a</div><h1>Your ${escapeHtml(result.tier === "it" ? "amem IT" : "amem Pro")} license</h1></div>
+    `<div class="page"><div class="brand-row"><div class="mark" aria-hidden="true">a</div><h1>Your ${escapeHtml(result.tier === "it" ? "amem IT" : "amem Pro")} license</h1></div>
 <p>Download the file, then open <code>amem ui</code> → Plans/Setup → <strong>Apply license</strong> (paste or choose file). Or from a terminal:</p>
 <p class="actions"><a class="btn" href="/license/${encodeURIComponent(result.sessionId)}" download="amem-license.json">Download amem-license.json</a></p>
 <pre>amem license apply --file ~/Downloads/amem-license.json
 amem license status</pre>
 <p class="note">Then use <strong>Turn on Pro retrieval</strong> in the UI to enable n-gram + reindex.</p>
 ${mailNote}
-<p class="actions"><a class="btn secondary" href="/">Back to plans</a></p></div>`,
+<p class="actions"><a class="btn secondary" href="/">Get started</a><a class="btn secondary" href="/plans">Plans</a></p></div>`,
   );
 }
 
@@ -333,7 +372,7 @@ function cancelPage() {
   return htmlPage(
     "amem · cancelled",
     `<div class="page"><h1>Checkout cancelled</h1><p>No charge.</p>
-<p class="actions"><a class="btn" href="/">Back to plans</a></p></div>`,
+<p class="actions"><a class="btn" href="/plans">Back to plans</a></p></div>`,
   );
 }
 
@@ -461,6 +500,39 @@ function html(res, status, body) {
   res.end(body);
 }
 
+function servePublic(res, rel) {
+  const PUBLIC = join(ROOT, "public");
+  const cleaned = normalize(String(rel || "").replace(/^[/\\]+/, ""));
+  if (!cleaned || cleaned === "." || cleaned.includes("..") || cleaned.includes(sep + "..")) {
+    json(res, 404, { error: "not found" });
+    return;
+  }
+  const file = join(PUBLIC, cleaned);
+  if (!file.startsWith(PUBLIC + sep) && file !== PUBLIC) {
+    json(res, 404, { error: "not found" });
+    return;
+  }
+  if (!existsSync(file)) {
+    json(res, 404, { error: "not found" });
+    return;
+  }
+  const ext = extname(file).toLowerCase();
+  const types = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+  };
+  res.writeHead(200, {
+    "Content-Type": types[ext] || "application/octet-stream",
+    "Cache-Control": "public, max-age=86400",
+  });
+  res.end(readFileSync(file));
+}
+
 function readRaw(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -503,6 +575,14 @@ async function onRequest(req, res) {
     }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       html(res, 200, landing());
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/plans") {
+      html(res, 200, plansPage());
+      return;
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/public/")) {
+      servePublic(res, url.pathname.slice("/public/".length));
       return;
     }
     if (req.method === "GET" && url.pathname === "/success") {

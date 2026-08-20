@@ -7,6 +7,7 @@ COPY shop/package.json shop/package-lock.json ./shop/
 RUN cd shop && npm ci --omit=dev
 
 COPY shop/*.mjs ./shop/
+COPY shop/public ./shop/public
 # Signing only needs these two compiled modules (no native sqlite).
 COPY dist/license.js dist/paths.js ./dist/
 
