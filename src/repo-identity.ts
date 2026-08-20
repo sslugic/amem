@@ -30,7 +30,8 @@ export function findGitRoot(startPath: string = process.cwd()): string | null {
 
 /** Normalize remotes so ssh/https clones of the same repo share a key. */
 export function normalizeRemoteUrl(url: string): string {
-  let u = url.trim().replace(/\.git$/i, "");
+  // Strip trailing slashes before ".git" so "repo.git/" still collapses to "repo".
+  let u = url.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
   const scp = /^git@([^:]+):(.+)$/.exec(u);
   if (scp) {
     u = `https://${scp[1]}/${scp[2]}`;
@@ -38,7 +39,7 @@ export function normalizeRemoteUrl(url: string): string {
   u = u.replace(/^ssh:\/\/git@/i, "https://");
   u = u.replace(/^git:\/\//i, "https://");
   u = u.replace(/^(https?:\/\/)[^@]+@/i, "$1");
-  return u.toLowerCase().replace(/\/+$/, "");
+  return u.toLowerCase().replace(/\/+$/, "").replace(/\.git$/i, "");
 }
 
 export function detectRepoIdentity(cwd: string = process.cwd()): RepoIdentity {
