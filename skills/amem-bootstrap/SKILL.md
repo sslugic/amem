@@ -8,7 +8,7 @@ Create an initial local memory proposal for this repository.
 
 ## Privacy
 
-Memory is personal and stored only under `~/.amem` on this machine. Do not commit proposal files, exports, or database copies to shared git remotes.
+Memory is personal and stored only under `~/.amem` on this machine. Do not commit proposal files, exports, backups, or database copies to shared git remotes.
 
 ## Steps
 
@@ -16,7 +16,11 @@ Memory is personal and stored only under `~/.amem` on this machine. Do not commi
    ```bash
    amem status
    ```
-   If not initialized, ask the user which platform (`cursor` or `claude`) and run `amem init --platform <platform>`.
+   If not initialized, ask the user which platform (`cursor`, `claude`, or another host) and run:
+   ```bash
+   amem setup --personal
+   amem init --platform <platform>
+   ```
 
 2. Inspect the repo at a high level (README, top-level dirs, obvious entrypoints). Do not dump proprietary prompt strategy into claims.
 
@@ -25,6 +29,8 @@ Memory is personal and stored only under `~/.amem` on this machine. Do not commi
    - `flows`: important workflows
    - `claims`: concrete facts with at least one `code_anchors` path each
    - `edges`: link claims→flows and flows→components when useful
+
+Prefer claim kinds: `constraint`, `gotcha`, `owner`, `howto`, `structure` (avoid noisy `session` for bootstrap).
 
 Example shape:
 
@@ -65,12 +71,13 @@ Example shape:
 
 When correcting a prior fact under a new claim id, include `"supersedes": ["claim.old_id"]` so the old claim is archived locally.
 
-4. Validate and apply locally:
+4. Validate, preview, and apply locally:
 
 ```bash
 amem propose validate /tmp/amem-bootstrap.json
+amem propose diff /tmp/amem-bootstrap.json
 amem propose apply /tmp/amem-bootstrap.json
 amem context "What should I know before changing this repository?"
 ```
 
-5. Tell the user in one line that baseline local memory was applied. Do not print the full proposal unless asked.
+5. Tell the user in one line that baseline local memory was applied. Mention `amem ui` → Brain for future session drafts. Do not print the full proposal unless asked.

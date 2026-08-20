@@ -14,10 +14,12 @@ Personal memory stays on the laptop. IT governs **install, policy, attestation, 
 | Export control | `allow_export = false` in system policy |
 | Platform allowlist | `allowed_platforms` |
 | Repo allowlist | `allowed_remote_hosts` |
+| Draft auto-apply | `auto_apply_kinds` (default empty = Brain approve only) |
+| Optional at-rest encryption | User/local `amem lock` + encrypted `amem backup` (still no sync) |
 
 ## Install (DevEx / IT)
 
-1. Ship a pinned amem build (internal npm, pkg, or `npm link` from a mirrored clone).
+1. Ship a pinned amem build (internal npm, pkg, or `npm link` from a mirrored clone). Node 20+ required (`better-sqlite3`).
 2. Deploy policy:
 
 ```bash
@@ -27,6 +29,7 @@ sudo chmod 644 /etc/amem/policy.toml
 ```
 
 3. Optional MDM: install binary + copy policy + run doctor on first login.
+4. End users typically run `amem setup` then `amem ui` (or `amem service install` for login auto-start on macOS / Linux / Windows).
 
 ## Attestation (ticket attachment)
 
@@ -48,9 +51,12 @@ See [templates/policy.example.toml](../templates/policy.example.toml).
 | --- | --- |
 | `allow_export` | Blocks `amem export` when false |
 | `ui_enabled` | Blocks `amem ui` when false |
-| `allowed_platforms` | Restricts `init` / setup |
+| `allowed_platforms` | Restricts `init` / setup (cursor, claude, windsurf, …) |
 | `allowed_remote_hosts` | Restricts which git remotes can init/apply |
 | `deny_claim_patterns` | Extra regexes blocked in claim text/anchors |
+| `auto_apply_kinds` | Draft kinds that may auto-apply without Brain (empty = never) |
+
+Hard stops (not overridable): telemetry stays off; UI bind forced to loopback.
 
 ## Offboarding
 
@@ -58,11 +64,14 @@ See [templates/policy.example.toml](../templates/policy.example.toml).
 amem wipe --all --yes
 ```
 
-Deletes all local repos in the DB and removes `~/.amem` (memory, sessions, user policy). Safe to run from MDM logout scripts — see [scripts/mdm-offboard.sh](../scripts/mdm-offboard.sh).
+Deletes all local repos in the DB and removes `~/.amem` (memory, sessions, user policy, local backups under that home). Safe to run from MDM logout scripts — see [scripts/mdm-offboard.sh](../scripts/mdm-offboard.sh).
+
+If the DB was locked (`graph.db.enc`), wipe still removes the amem home after unlock/offboard per your runbook; prefer unlocking or wiping the whole home directory.
 
 ## Support checklist
 
 - Pin Node 20+ and amem version in the internal package
-- Re-run `amem doctor --attest` after Cursor / Claude Code updates
+- Re-run `amem doctor --attest` after Cursor / Claude Code / host updates
 - Keep `/etc/amem/policy.toml` root-owned
-- Do not commit personal exports to product git history
+- Do not commit personal exports or encrypted backup blobs to product git history
+- Leave `auto_apply_kinds` empty unless DevEx intentionally allows low-risk kinds

@@ -18,4 +18,5 @@ allowed_platforms = ["cursor", "claude"]
 # deny_claim_patterns = ["customer[_-]?ssn", "prod[_-]?password"]
 
 # Optional: auto-apply low-risk draft kinds without Brain approve (empty = never).
+# Prefer leaving this empty on managed fleets.
 # auto_apply_kinds = ["structure"]
