@@ -4,6 +4,13 @@ import { resolve } from "node:path";
 import { dbPath, ensureAmemHome } from "./paths.js";
 import { detectRepoIdentity, newId, parseWorkspaceSlug, slugifyWorkspace, type RepoIdentity } from "./repo-identity.js";
 import { ensureClaimsFts, reindexAllClaimsFts, reindexRepoClaimsFts, removeClaimFts, upsertClaimFts } from "./search.js";
+import {
+  ensureClaimsEmbed,
+  reindexRepoEmbeds,
+  removeClaimEmbed,
+  upsertClaimEmbed,
+} from "./embed.js";
+import { isDbEncryptedAtRest, resolvePassphrase, unlockDatabase } from "./crypto.js";
 
 export type RepoRow = {
   id: string;
@@ -239,6 +246,16 @@ let cached: Database.Database | null = null;
 export function openDb(): Database.Database {
   if (cached) return cached;
   ensureAmemHome();
+  if (isDbEncryptedAtRest()) {
+    try {
+      unlockDatabase(resolvePassphrase(process.env.AMEM_PASSPHRASE));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `amem database is encrypted at rest. Unlock with \`amem unlock --passphrase …\` or set AMEM_PASSPHRASE. (${detail})`,
+      );
+    }
+  }
   const db = new Database(dbPath());
   db.pragma("journal_mode = WAL");
   db.pragma("busy_timeout = 5000");
@@ -249,6 +266,7 @@ export function openDb(): Database.Database {
   ensureClaimsFts(db);
   migrateClaimsFtsBootstrap(db);
   ensureProposalDrafts(db);
+  ensureClaimsEmbed(db);
   cached = db;
   return db;
 }
@@ -466,7 +484,10 @@ export function updateClaim(
     )
     .run(text, kind, anchors, pinned, ts, repoId, claimId);
   const updated = getClaim(repoId, claimId);
-  if (updated) upsertClaimFts(openDb(), updated);
+  if (updated) {
+    upsertClaimFts(openDb(), updated);
+    upsertClaimEmbed(openDb(), updated);
+  }
   return updated;
 }
 
@@ -477,13 +498,16 @@ export function setClaimPinned(repoId: string, claimId: string, pinned: boolean)
 export function deleteClaim(repoId: string, claimId: string): boolean {
   const db = openDb();
   removeClaimFts(db, repoId, claimId);
+  removeClaimEmbed(db, repoId, claimId);
   const result = db.prepare(`DELETE FROM claims WHERE repo_id = ? AND id = ?`).run(repoId, claimId);
   return Number(result.changes ?? 0) > 0;
 }
 
-/** Reindex FTS for one repo (after propose apply / wipe helpers). */
+/** Reindex FTS + local embeddings for one repo (after propose apply / wipe helpers). */
 export function reindexClaimsSearch(repoId: string): void {
-  reindexRepoClaimsFts(openDb(), repoId);
+  const db = openDb();
+  reindexRepoClaimsFts(db, repoId);
+  reindexRepoEmbeds(db, repoId);
 }
 
 export function listComponents(repoId: string): ComponentRow[] {
@@ -511,6 +535,7 @@ export function wipeRepo(repoId: string): void {
     .all(repoId) as Array<{ id: string }>;
   for (const c of claimIds) {
     removeClaimFts(db, repoId, c.id);
+    removeClaimEmbed(db, repoId, c.id);
   }
   db.prepare("DELETE FROM repos WHERE id = ?").run(repoId);
 }
@@ -526,6 +551,7 @@ export function wipeAllRepos(): number {
       .all(r.id) as Array<{ id: string }>;
     for (const c of claimIds) {
       removeClaimFts(db, r.id, c.id);
+      removeClaimEmbed(db, r.id, c.id);
     }
   }
   db.exec("DELETE FROM repos");

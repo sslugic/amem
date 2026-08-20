@@ -196,6 +196,7 @@ function handleHookPayloadInner(raw: string): HookResponse {
         sessionId: sid,
         prompt: lastUser.text,
         answer: lastAssistant?.text,
+        notes: recent.slice(0, 8).map((n) => ({ role: n.role, text: n.text })),
       });
     }
     return {};

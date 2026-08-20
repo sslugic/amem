@@ -16,3 +16,6 @@ allowed_platforms = ["cursor", "claude"]
 
 # Extra deny regexes (case-insensitive). Builtin secret patterns always apply.
 # deny_claim_patterns = ["customer[_-]?ssn", "prod[_-]?password"]
+
+# Optional: auto-apply low-risk draft kinds without Brain approve (empty = never).
+# auto_apply_kinds = ["structure"]

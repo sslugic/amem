@@ -6,6 +6,14 @@
   "bin": {
     "amem": "./dist/cli.js"
   },
+  "main": "./dist/cli.js",
+  "exports": {
+    ".": "./dist/cli.js"
+  },
+  "preferGlobal": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "dist",
     "skills",

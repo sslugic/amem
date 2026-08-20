@@ -1,6 +1,6 @@
 # amem backlog (next)
 
-Updated after miss→learn, kind-weighted ranking, why-injected, propose diff, and Claude hook parity.
+Updated after completing the prior “next candidates” set (hosts, personal prefs, encrypt/backup, local embeddings, smarter drafts, auto-apply policy).
 
 ## Shipped recently
 
@@ -12,17 +12,21 @@ Updated after miss→learn, kind-weighted ranking, why-injected, propose diff, a
 - **Claim-kind ranking** + **Why:** explainability in context packets
 - **`amem propose diff`** before apply
 - Claude Code hooks call full `amem hook` pipeline
+- **`amem setup`** / npx-ready package metadata
+- Thin installers: **Windsurf, Continue, Aider, Zed**
+- Cross-repo **personal** prefs workspace (`amem init --personal`)
+- Optional **AES-256-GCM lock/unlock** + encrypted **backup** / schedule
+- On-device **hashing embeddings** hybrid with FTS
+- Smarter multi-turn draft compaction + **`auto_apply_kinds`** policy
 
 ## Next candidates
 
-1. **One-command install** — publish to npm so `npx amem` / `npm i -g amem` works (native `better-sqlite3` story).
-2. **More hosts** — Windsurf, Continue, Aider, Zed, etc. (thin installers on the same local DB).
-3. **Cross-repo personal prefs** — optional local “how I work” memory spanning projects (not org wiki).
-4. **Optional encrypted-at-rest `~/.amem`**
-5. **Scheduled local encrypted backup** to a user-chosen path (still no sync).
-6. **Local embeddings** (optional, still on-device) for hybrid search beyond FTS.
-7. **Smarter draft quality** — LLM-free summarization heuristics / multi-turn compaction.
-8. **Auto-apply low-risk kinds** with policy allowlist (still local).
+1. **Publish to npm** — land `npx amem setup` for real (CI release, prebuilds for `better-sqlite3`).
+2. **Brain UX polish** — personal workspace switcher, backup status, lock indicator.
+3. **Richer host adapters** — Continue/Zed deep links as those MCP shapes stabilize.
+4. **Optional on-device embedding model** (still local) if hashing hybrid plateaus.
+5. **Draft quality scoring** — confidence / reject noisy session-end drafts in Brain.
+6. **Conflict UI** — surface supersede suggestions before apply in Brain.
 
 ## Explicit non-goals (keep)
 

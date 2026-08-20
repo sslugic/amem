@@ -68,7 +68,26 @@ git clone <this-repo-url> amem
 cd amem
 npm install
 npm link          # puts `amem` on your PATH
+amem setup        # personal prefs workspace + next steps
 amem status       # sanity check from any directory
+```
+
+Once published to npm: `npx amem setup` or `npm i -g amem` (Node 20+; builds native `better-sqlite3`).
+
+Other hosts (thin installers on the same local DB):
+
+```bash
+amem init --platform windsurf|continue|aider|zed
+amem init --personal   # cross-repo “how I work” prefs
+```
+
+Optional encrypt-at-rest and local backups:
+
+```bash
+amem lock --passphrase '…'     # or AMEM_PASSPHRASE
+amem unlock --passphrase '…'
+amem backup --passphrase '…'   # ~/.amem/backups by default
+amem backup schedule           # daily local timer (no cloud)
 ```
 
 ---

@@ -5,12 +5,14 @@ import {
   insertProposalDraft,
   listProposalDrafts,
   listUsageEvents,
+  setProposalDraftStatus,
   type ProposalDraftRow,
   type RepoRow,
   type UsageEventRow,
 } from "./db.js";
-import { compactClaimText, inferClaimKind, isDurableCapture } from "./kinds.js";
-import type { Proposal } from "./proposal.js";
+import { compactClaimText, compactFromNotes, inferClaimKind, isDurableCapture } from "./kinds.js";
+import { loadPolicy } from "./policy.js";
+import { applyProposal, type Proposal } from "./proposal.js";
 
 const TRIVIAL = /^(ok|okay|yes|yep|no|nah|thanks|thank you|continue|go ahead|sure|please)\.?$/i;
 const SECRET = /password|api[_-]?key|secret|token\s*[:=]|begin (rsa |openssh )?private/i;
@@ -50,12 +52,10 @@ function buildClaimDraft(input: {
     `${input.prompt}\n${input.answer ?? ""}`,
     input.repoRoot,
   );
-  // Prefer real code anchors; allow README only for strongly durable kinds
   const kind = input.forceKind ?? inferClaimKind(input.prompt, input.answer ?? "");
   const usableAnchors =
     anchors.length > 0 ? anchors : kind === "constraint" || kind === "gotcha" ? ["README.md"] : [];
   if (!isDurableCapture(input.prompt, input.answer, usableAnchors.length)) {
-    // Still allow weak session drafts when we have some path signal
     if (usableAnchors.length === 0) return null;
   }
   const text = compactClaimText(input.prompt, input.answer);
@@ -78,41 +78,81 @@ function buildClaimDraft(input: {
   };
 }
 
-/**
- * Build a pending proposal draft from the latest user/assistant turn.
- * Does not write durable claims until the user applies the draft in the UI/CLI.
- */
+function maybeAutoApplyDraft(
+  repoId: string,
+  draft: ProposalDraftRow,
+  proposal: Proposal,
+): ProposalDraftRow {
+  const kinds = loadPolicy().policy.auto_apply_kinds ?? [];
+  if (kinds.length === 0) return draft;
+  const claimKind = proposal.claims?.[0]?.kind;
+  if (!claimKind || !kinds.map((k) => k.toLowerCase()).includes(claimKind.toLowerCase())) {
+    return draft;
+  }
+  try {
+    applyProposal(repoId, proposal, loadPolicy().policy);
+    return setProposalDraftStatus(draft.id, "applied") ?? draft;
+  } catch {
+    return draft;
+  }
+}
+
+function storeDraft(input: {
+  repo: RepoRow;
+  platform: string;
+  sessionId?: string | null;
+  title: string;
+  source: string;
+  built: { proposal: Proposal; id: string };
+}): ProposalDraftRow | null {
+  if (draftExistsWithSource(input.repo.id, input.source)) return null;
+  const draft = insertProposalDraft({
+    repoId: input.repo.id,
+    platform: input.platform,
+    sessionId: input.sessionId,
+    title: input.title || input.built.id,
+    proposal: input.built.proposal,
+    source: input.source,
+  });
+  return maybeAutoApplyDraft(input.repo.id, draft, input.built.proposal);
+}
+
 export function captureSessionDraft(input: {
   repo: RepoRow;
   platform: string;
   sessionId?: string | null;
   prompt: string;
   answer?: string;
+  notes?: Array<{ role: string; text: string }>;
 }): ProposalDraftRow | null {
+  let prompt = input.prompt;
+  let answer = input.answer;
+  if (input.notes && input.notes.length >= 2) {
+    const compacted = compactFromNotes(input.notes);
+    if (compacted) {
+      prompt = compacted.prompt;
+      answer = compacted.answer || answer;
+    }
+  }
   const built = buildClaimDraft({
-    prompt: input.prompt,
-    answer: input.answer,
+    prompt,
+    answer,
     repoRoot: input.repo.root_path,
     idPrefix: "claim.session",
     sourceRef: "session-end-draft",
   });
   if (!built) return null;
 
-  const source = `session-end:${built.id}`;
-  if (draftExistsWithSource(input.repo.id, source)) return null;
-
-  const title = input.prompt.trim().replace(/\s+/g, " ").slice(0, 96);
-  return insertProposalDraft({
-    repoId: input.repo.id,
+  return storeDraft({
+    repo: input.repo,
     platform: input.platform,
     sessionId: input.sessionId,
-    title: title || built.id,
-    proposal: built.proposal,
-    source,
+    title: prompt.trim().replace(/\s+/g, " ").slice(0, 96),
+    source: `session-end:${built.id}`,
+    built,
   });
 }
 
-/** Recent context lookups that returned no durable claims (a miss). */
 export function findRecentContextMisses(
   repoId: string,
   opts: { sessionId?: string | null; limit?: number } = {},
@@ -129,10 +169,6 @@ export function findRecentContextMisses(
     .slice(0, limit);
 }
 
-/**
- * After a miss, if the agent answer cites real files, queue a durable draft.
- * This is the miss → learn loop.
- */
 export function captureMissLearnDraft(input: {
   repo: RepoRow;
   platform: string;
@@ -156,19 +192,17 @@ export function captureMissLearnDraft(input: {
     forceKind: inferClaimKind(prompt, input.answer) === "session" ? "gotcha" : undefined,
   });
   if (!built) return null;
-  // Miss-learn requires at least one real code path (not only README)
   const realAnchors = built.anchors.filter((a) => a !== "README.md");
   if (realAnchors.length === 0) return null;
   built.proposal.claims![0]!.code_anchors = realAnchors;
 
-  const title = `Learned: ${prompt.replace(/\s+/g, " ").slice(0, 80)}`;
-  return insertProposalDraft({
-    repoId: input.repo.id,
+  return storeDraft({
+    repo: input.repo,
     platform: input.platform,
     sessionId: input.sessionId,
-    title,
-    proposal: built.proposal,
+    title: `Learned: ${prompt.replace(/\s+/g, " ").slice(0, 80)}`,
     source,
+    built,
   });
 }
 

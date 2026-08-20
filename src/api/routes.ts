@@ -35,14 +35,22 @@ import {
 import { buildContext, renderContextMarkdown } from "../context.js";
 import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
+import { installHost } from "../install/hosts.js";
 import {
   assertPlatformAllowed,
   assertRemoteAllowed,
   loadPolicy,
 } from "../policy.js";
 import { applyProposal, parseProposalJson, validateProposal } from "../proposal.js";
-import { detectRepoIdentity, normalizeRemoteUrl, parseWorkspaceSlug, slugifyWorkspace, workspaceIdentity, type RepoIdentity } from "../repo-identity.js";
-import { KNOWN_PLATFORMS, normalizePlatforms } from "../platforms.js";
+import {
+  detectRepoIdentity,
+  normalizeRemoteUrl,
+  parseWorkspaceSlug,
+  slugifyWorkspace,
+  workspaceIdentity,
+  type RepoIdentity,
+} from "../repo-identity.js";
+import { HOST_INSTALL_IDS, KNOWN_PLATFORMS, normalizePlatforms } from "../platforms.js";
 import { amemHome, dbPath } from "../paths.js";
 import { buildAttestReport } from "../attest.js";
 import { scanGitRepos } from "../scan.js";
@@ -521,6 +529,12 @@ export function handleApi(req: ApiRequest): ApiResponse {
         current = upsertRepo(identity, platform);
         if (platform === "cursor") installCursor(identity.rootPath);
         else if (platform === "claude") installClaude(identity.rootPath);
+        else if (HOST_INSTALL_IDS.has(platform)) {
+          installHost(platform, {
+            repoRoot: identity.rootPath,
+            workspace: identity.repoName,
+          });
+        }
       }
       upsertSetupState(current.id, platforms, true);
       tracked.push(summarizeRepo(current));
@@ -587,6 +601,14 @@ export function handleApi(req: ApiRequest): ApiResponse {
       current = upsertRepo(identity, platform);
       if (platform === "cursor") results.push(installCursor(identity.rootPath));
       else if (platform === "claude") results.push(installClaude(identity.rootPath));
+      else if (HOST_INSTALL_IDS.has(platform)) {
+        results.push(
+          installHost(platform, {
+            repoRoot: identity.rootPath,
+            workspace: identity.repoName,
+          }),
+        );
+      }
     }
     const setup = upsertSetupState(current.id, valid, true);
     return ok({
