@@ -348,7 +348,9 @@ Reload Cursor if skills/rules do not appear immediately.
 cd amem
 npm install
 npm run build
-npm run smoke
+npm run test          # unit + integration (node:test)
+npm run smoke         # end-to-end CLI/API smoke
+npm run test:all      # both
 npm link
 ```
 
