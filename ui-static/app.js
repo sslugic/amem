@@ -78,6 +78,7 @@ const state = {
   activeEventId: null,
   brainFilter: "files",
   selectedFile: null,
+  brainSearch: "",
   anim: 0,
   graphTick: 0,
 };
@@ -467,8 +468,14 @@ function renderSetup() {
         </div>
         ${
           state.service?.supported === false
-            ? `<p class="note">Login auto-start is currently macOS-only.</p>`
-            : `<label class="autostart"><input type="checkbox" id="autostart" ${serviceOn ? "checked" : ""}/> Start amem ui when this computer logs in</label>`
+            ? `<p class="note">Login auto-start is not supported on this OS.</p>`
+            : `<label class="autostart"><input type="checkbox" id="autostart" ${serviceOn ? "checked" : ""}/> Start amem ui when this computer logs in${
+                state.service?.servicePlatform === "linux"
+                  ? " (systemd user unit)"
+                  : state.service?.servicePlatform === "win32"
+                    ? " (Startup folder)"
+                    : ""
+              }</label>`
         }
         <div class="scan-head">
           <div>
@@ -793,11 +800,18 @@ function visibleClaims() {
   const claims = g.claims || [];
   const hot = new Set(g.recentClaimIds || []);
   const filter = state.brainFilter || "files";
+  const q = (state.brainSearch || "").trim().toLowerCase();
   return claims.filter((c) => {
+    if (q) {
+      const hay = `${c.id} ${c.kind || ""} ${c.text || ""} ${claimAnchors(c).join(" ")}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
     if (filter === "durable") return !isSessionClaim(c);
     if (filter === "files") return !isSessionClaim(c);
     if (filter === "chats") return isSessionClaim(c);
     if (filter === "used") return hot.has(c.id);
+    if (filter === "pinned") return Number(c.pinned || 0) > 0;
+    if (filter === "drafts") return false; // drafts render separately
     return true;
   });
 }
@@ -830,32 +844,39 @@ function renderBrain() {
     $("#toSetup").onclick = () => setTab("setup");
     return;
   }
-  const g = state.graph || { claims: [], components: [], flows: [], recentEvents: [], recentClaimIds: [] };
+  const g = state.graph || { claims: [], components: [], flows: [], recentEvents: [], recentClaimIds: [], drafts: [] };
   const events = g.recentEvents || [];
   const hits = events.filter((e) => eventKindOf(e) === "local_hit").length;
   const trips = events.filter((e) => eventKindOf(e) === "server_trip").length;
   const files = new Set((g.claims || []).flatMap(claimAnchors)).size;
   const used = (g.recentClaimIds || []).length;
+  const drafts = (g.drafts || []).filter((d) => d.status === "pending");
 
   main.innerHTML = `
     <div class="brain-v2">
       <div class="brain-toolbar">
         <div>
           <h1>What amem knows</h1>
-          <p>The map is coverage: each tile is a file, sized by how many facts. Teal was used in a recent query. Click a tile or a recent use to see what was injected.</p>
+          <p>The map is coverage: each tile is a file, sized by how many facts. Teal was used in a recent query. Click a tile or a recent use to see what was injected. Edit, pin, or delete facts in the drawer.</p>
         </div>
         <div class="brain-kpis">
           <span><b>${g.claims?.length ?? 0}</b> facts</span>
+          <span><b>${drafts.length}</b> drafts</span>
           <span><b>${files}</b> files</span>
           <span><b>${used}</b> used recently</span>
           <span><b>${hits}</b> local hits</span>
           <span><b>${trips}</b> misses</span>
         </div>
       </div>
+      <div class="brain-tools">
+        <input id="brainSearch" type="search" placeholder="Search facts…" value="${esc(state.brainSearch || "")}" />
+      </div>
       <div class="brain-filters" id="brainFilters">
         <button type="button" data-filter="files" class="${state.brainFilter === "files" ? "active" : ""}">By file</button>
+        <button type="button" data-filter="drafts" class="${state.brainFilter === "drafts" ? "active" : ""}">Drafts${drafts.length ? ` (${drafts.length})` : ""}</button>
         <button type="button" data-filter="chats" class="${state.brainFilter === "chats" ? "active" : ""}">Recent chats</button>
         <button type="button" data-filter="used" class="${state.brainFilter === "used" ? "active" : ""}">Used recently</button>
+        <button type="button" data-filter="pinned" class="${state.brainFilter === "pinned" ? "active" : ""}">Pinned</button>
       </div>
       <div class="brain-body">
         <aside class="brain-feed" id="brainFeed"></aside>
@@ -864,6 +885,10 @@ function renderBrain() {
       </div>
     </div>`;
 
+  $("#brainSearch")?.addEventListener("input", (e) => {
+    state.brainSearch = e.target.value;
+    paintBrain();
+  });
   $("#brainFilters")?.querySelectorAll("button").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.brainFilter = btn.dataset.filter;
@@ -886,23 +911,51 @@ function paintBrain() {
 function renderBrainFeed() {
   const el = $("#brainFeed");
   if (!el) return;
+  const drafts = (state.graph?.drafts || []).filter((d) => d.status === "pending").slice(0, 12);
   const events = (state.graph?.recentEvents || []).slice(0, 16);
-  if (!events.length) {
-    el.innerHTML = `<h2>Recent uses</h2><p class="note" style="margin:0">No <code>amem context</code> hits yet. Ask Cursor something in this repo — local hits show up here.</p>`;
+  const draftBlock =
+    drafts.length === 0
+      ? ""
+      : `<h2>Pending drafts</h2>${drafts
+          .map((d) => {
+            const active = state.selectedNode?.type === "draft" && state.selectedNode.id === d.id;
+            return `<button type="button" class="feed-item draft ${active ? "active" : ""}" data-draft="${esc(d.id)}">
+              <div class="feed-top"><span>${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))}</span><span class="pill warn">approve?</span></div>
+              <div class="feed-q">${esc(d.title || d.id)}</div>
+              <div class="feed-meta">Session capture — apply to store, or dismiss</div>
+            </button>`;
+          })
+          .join("")}`;
+
+  if (!events.length && !drafts.length) {
+    el.innerHTML = `<h2>Recent uses</h2><p class="note" style="margin:0">No <code>amem context</code> hits yet. Ask Cursor something in this repo — local hits show up here. Session-end drafts for approval also land here.</p>`;
     return;
   }
-  el.innerHTML = `<h2>Recent uses</h2>${events
-    .map((e) => {
-      const kind = eventKindOf(e);
-      const ids = eventClaimIds(e);
-      const active = state.activeEventId === e.id;
-      return `<button type="button" class="feed-item ${kind} ${active ? "active" : ""}" data-event="${esc(e.id)}">
+  el.innerHTML = `${draftBlock}<h2>Recent uses</h2>${
+    events.length
+      ? events
+          .map((e) => {
+            const kind = eventKindOf(e);
+            const ids = eventClaimIds(e);
+            const active = state.activeEventId === e.id;
+            return `<button type="button" class="feed-item ${kind} ${active ? "active" : ""}" data-event="${esc(e.id)}">
         <div class="feed-top"><span>${esc(e.platform || "agent")} · ${esc(formatWhen(e.created_at))}</span><span class="pill ${kind === "local_hit" ? "ok" : "warn"}">${kind === "local_hit" ? "local hit" : "had to explore"}</span></div>
         <div class="feed-q">${esc(eventQueryLabel(e))}</div>
         <div class="feed-meta">${kind === "local_hit" ? `${ids.length} fact${ids.length === 1 ? "" : "s"} · ~${formatTokens(e.estimated_tokens_saved)} tok` : "amem had nothing useful"}</div>
       </button>`;
-    })
-    .join("")}`;
+          })
+          .join("")
+      : `<p class="note" style="margin:0">No context hits yet.</p>`
+  }`;
+  el.querySelectorAll("[data-draft]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const draft = (state.graph.drafts || []).find((x) => x.id === btn.dataset.draft);
+      if (!draft) return;
+      state.activeEventId = null;
+      state.selectedNode = { type: "draft", id: draft.id, detail: draft };
+      paintBrain();
+    });
+  });
   el.querySelectorAll("[data-event]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const ev = (state.graph.recentEvents || []).find((x) => x.id === btn.dataset.event);
@@ -1087,6 +1140,32 @@ function renderCoverageMap() {
 function renderBrainMap() {
   const el = $("#brainMap");
   if (!el) return;
+
+  if (state.brainFilter === "drafts") {
+    const drafts = (state.graph?.drafts || []).filter((d) => d.status === "pending");
+    const selectedId = state.selectedNode?.type === "draft" ? state.selectedNode.id : null;
+    el.innerHTML =
+      drafts.length === 0
+        ? `<div class="brain-empty">No pending drafts. When a Cursor session ends, amem will queue a capture here for you to approve.</div>`
+        : `<div class="draft-grid">${drafts
+            .map((d) => {
+              return `<button type="button" class="draft-card ${selectedId === d.id ? "selected" : ""}" data-draft-map="${esc(d.id)}">
+                <strong>${esc(d.title || d.id)}</strong>
+                <span class="meta">${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))}</span>
+              </button>`;
+            })
+            .join("")}</div>`;
+    el.querySelectorAll("[data-draft-map]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const draft = (state.graph.drafts || []).find((x) => x.id === btn.dataset.draftMap);
+        if (!draft) return;
+        state.selectedNode = { type: "draft", id: draft.id, detail: draft };
+        paintBrain();
+      });
+    });
+    return;
+  }
+
   const claims = visibleClaims();
   const groups = fileGroups(claims);
   const selectedFile = state.selectedFile;
@@ -1100,7 +1179,9 @@ function renderBrainMap() {
       ? "Highlighting files that were injected in a recent query."
       : state.brainFilter === "chats"
         ? "Highlighting chat takeaways. Other files stay on the map, dimmed."
-        : "Every tile is a file amem can inject instead of a repo search.";
+        : state.brainFilter === "pinned"
+          ? "Only pinned facts — these rank higher in retrieval."
+          : "Every tile is a file amem can inject instead of a repo search.";
 
   const list =
     shown.length === 0
@@ -1108,8 +1189,12 @@ function renderBrainMap() {
           state.brainFilter === "used"
             ? "Nothing in this repo has been used in a context query yet — the map still shows what is stored."
             : state.brainFilter === "chats"
-              ? "No session takeaways yet. After a chat, stop-hook claims land here."
-              : "No facts yet. Apply a bootstrap on Setup, or keep working in this repo."
+              ? "No session takeaways yet. Approve a draft or keep chatting."
+              : state.brainFilter === "pinned"
+                ? "No pinned facts yet. Open a claim in the drawer and pin it."
+                : state.brainSearch
+                  ? "No facts match that search."
+                  : "No facts yet. Apply a bootstrap on Setup, or keep working in this repo."
         }</div>`
       : shown
           .map((group) => {
@@ -1124,6 +1209,7 @@ function renderBrainMap() {
             .map((c) => {
               const rel = relatedForClaim(c.id);
               const tags = [
+                Number(c.pinned || 0) > 0 ? "pinned" : null,
                 c.kind,
                 ...rel.flows.map((f) => f.name),
                 ...rel.components.map((x) => x.name),
@@ -1219,17 +1305,119 @@ function showBrainDetail(node) {
       }`;
     return;
   }
+  if (node.type === "draft") {
+    let proposal = {};
+    try {
+      proposal = JSON.parse(d.proposal_json || "{}");
+    } catch {
+      proposal = {};
+    }
+    const claims = Array.isArray(proposal.claims) ? proposal.claims : [];
+    drawer.innerHTML = `
+      <h2>Pending draft</h2>
+      <div class="meta">${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))} · ${esc(d.source || "session-end")}</div>
+      <p>${esc(d.title || d.id)}</p>
+      ${
+        claims.length
+          ? `<ul class="detail-list">${claims
+              .map(
+                (c) =>
+                  `<li><strong>${esc((c.text || "").slice(0, 160))}</strong><div class="meta">${esc(c.kind || "fact")} · ${(c.code_anchors || []).map((a) => `<code>${esc(a)}</code>`).join(" ")}</div></li>`,
+              )
+              .join("")}</ul>`
+          : `<p class="note">Empty proposal</p>`
+      }
+      <div class="drawer-actions">
+        <button class="btn" type="button" id="draftApply">Apply to memory</button>
+        <button class="btn secondary" type="button" id="draftDismiss">Dismiss</button>
+      </div>`;
+    $("#draftApply")?.addEventListener("click", async () => {
+      try {
+        await api("/api/drafts/apply", { method: "POST", body: JSON.stringify({ id: d.id }) });
+        state.selectedNode = null;
+        await refreshGraph();
+        renderBrain();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+    $("#draftDismiss")?.addEventListener("click", async () => {
+      try {
+        await api("/api/drafts/dismiss", { method: "POST", body: JSON.stringify({ id: d.id }) });
+        state.selectedNode = null;
+        await refreshGraph();
+        renderBrain();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+    return;
+  }
   if (node.type === "claim") {
     const anchors = claimAnchors(d);
     const rel = relatedForClaim(d.id);
+    const pinned = Number(d.pinned || 0) > 0;
     drawer.innerHTML = `
-      <h2>${esc(d.kind || "fact")}</h2>
+      <h2>${esc(d.kind || "fact")}${pinned ? " · pinned" : ""}</h2>
       <div class="meta">${esc(d.id)}</div>
-      <p>${esc(d.text)}</p>
-      <div class="meta">Files: ${anchors.map((a) => `<code>${esc(a)}</code>`).join(" ") || "—"}</div>
+      <label class="drawer-label">Text</label>
+      <textarea id="claimText" rows="6">${esc(d.text || "")}</textarea>
+      <label class="drawer-label">Kind</label>
+      <input id="claimKind" type="text" value="${esc(d.kind || "")}" />
+      <label class="drawer-label">Anchors (comma-separated)</label>
+      <input id="claimAnchors" type="text" value="${esc(anchors.join(", "))}" />
+      <div class="drawer-actions">
+        <button class="btn" type="button" id="claimSave">Save</button>
+        <button class="btn secondary" type="button" id="claimPin">${pinned ? "Unpin" : "Pin"}</button>
+        <button class="btn secondary danger" type="button" id="claimDelete">Delete</button>
+      </div>
       ${rel.flows.length ? `<div class="meta">Flows: ${rel.flows.map((f) => esc(f.name)).join(", ")}</div>` : ""}
       ${rel.components.length ? `<div class="meta">Components: ${rel.components.map((c) => esc(c.name)).join(", ")}</div>` : ""}
-      <p class="note" style="margin:0">Agents should read these files instead of searching the whole repo.</p>`;
+      <p class="note" style="margin:0">Pinned facts rank higher in <code>amem context</code>. Delete removes the claim from local memory only.</p>`;
+    $("#claimSave")?.addEventListener("click", async () => {
+      try {
+        const text = $("#claimText")?.value ?? "";
+        const kind = $("#claimKind")?.value ?? "";
+        const anchorsRaw = $("#claimAnchors")?.value ?? "";
+        const code_anchors = anchorsRaw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const result = await api("/api/claims", {
+          method: "PATCH",
+          body: JSON.stringify({ id: d.id, text, kind, code_anchors }),
+        });
+        state.selectedNode = { type: "claim", id: d.id, detail: result.claim };
+        await refreshGraph();
+        paintBrain();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+    $("#claimPin")?.addEventListener("click", async () => {
+      try {
+        const result = await api("/api/claims/pin", {
+          method: "POST",
+          body: JSON.stringify({ id: d.id, pinned: !pinned }),
+        });
+        state.selectedNode = { type: "claim", id: d.id, detail: result.claim };
+        await refreshGraph();
+        paintBrain();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+    $("#claimDelete")?.addEventListener("click", async () => {
+      if (!confirm(`Delete ${d.id} from local memory?`)) return;
+      try {
+        await api(`/api/claims?id=${encodeURIComponent(d.id)}`, { method: "DELETE" });
+        state.selectedNode = null;
+        await refreshGraph();
+        renderBrain();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
     return;
   }
   showBrainOverview();

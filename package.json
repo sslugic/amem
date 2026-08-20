@@ -32,6 +32,14 @@
     "sqlite"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sslugic/amem.git"
+  },
+  "homepage": "https://github.com/sslugic/amem#readme",
+  "bugs": {
+    "url": "https://github.com/sslugic/amem/issues"
+  },
   "dependencies": {
     "better-sqlite3": "^12.11.1"
   },

@@ -48,7 +48,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers":
       "Content-Type, Accept, mcp-session-id, mcp-protocol-version, x-amem-workspace",
   });
@@ -57,7 +57,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 const MCP_CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
   "Access-Control-Allow-Headers":
     "Content-Type, Accept, mcp-session-id, mcp-protocol-version, x-amem-workspace",
   "Access-Control-Expose-Headers": "mcp-session-id, mcp-protocol-version",

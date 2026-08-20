@@ -74,9 +74,10 @@ export function buildContext(
       const freshness = assessClaimFreshness(rootPath, c);
       const keyword = keywordScoreClaim(c, queryTokens);
       const boost = ftsBoost.get(c.id) ?? 0;
-      const raw = keyword + boost;
+      const pinBoost = (c.pinned ?? 0) > 0 ? 40 : 0;
+      const raw = keyword + boost + pinBoost;
       // If FTS alone hit, give a floor so stem matches still surface
-      const withFloor = raw > 0 || boost > 0 ? Math.max(raw, boost > 0 ? boost : raw) : 0;
+      const withFloor = raw > 0 || boost > 0 || pinBoost > 0 ? Math.max(raw, boost > 0 ? boost + pinBoost : raw) : 0;
       const score = withFloor * freshnessScoreMultiplier(freshness.status);
       return { ...c, score, freshness };
     })
@@ -172,6 +173,9 @@ export function renderContextMarkdown(packet: ContextPacket): string {
     for (const claim of packet.claims) {
       lines.push(`### ${claim.id}`);
       lines.push(`Kind: \`${claim.kind}\``);
+      if ((claim.pinned ?? 0) > 0) {
+        lines.push(`Pinned: \`yes\``);
+      }
       const fl = freshnessLabel(claim.freshness.status);
       if (fl) {
         const detail =
