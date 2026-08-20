@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { logContextUsage } from "./api/routes.js";
+import { captureSessionDraft, isUsefulCaptureText } from "./capture.js";
 import {
   getRepoByCwd,
   insertConversationNote,
@@ -9,7 +9,6 @@ import {
   upsertRepo,
   type RepoRow,
 } from "./db.js";
-import { applyProposal } from "./proposal.js";
 import { detectRepoIdentity } from "./repo-identity.js";
 
 export type HookPayload = {
@@ -24,9 +23,7 @@ export type HookPayload = {
 
 export type HookResponse = Record<string, unknown>;
 
-const TRIVIAL = /^(ok|okay|yes|yep|no|nah|thanks|thank you|continue|go ahead|sure|please)\.?$/i;
 const SECRET = /password|api[_-]?key|secret|token\s*[:=]|begin (rsa |openssh )?private/i;
-const PATH_RE = /\b(?:[\w.-]+\/)*[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|md|json|yml|yaml|sql)\b/g;
 
 function workspaceRoot(payload: HookPayload): string {
   const roots = payload.workspace_roots;
@@ -55,21 +52,6 @@ function cap(text: string, max = 2400): string {
   return `${text.slice(0, max)}\n\n_[amem truncated]_`;
 }
 
-function isUsefulPrompt(prompt: string): boolean {
-  const t = prompt.trim();
-  if (t.length < 16) return false;
-  if (TRIVIAL.test(t)) return false;
-  if (SECRET.test(t)) return false;
-  return true;
-}
-
-function extractAnchors(text: string, repoRoot: string): string[] {
-  const found = [...text.matchAll(PATH_RE)].map((m) => m[0]);
-  const unique = [...new Set(found)].slice(0, 6);
-  const existing = unique.filter((p) => existsSync(resolve(repoRoot, p)));
-  return existing.length > 0 ? existing : ["README.md"];
-}
-
 function hookPlatform(): "cursor" | "claude" {
   if (process.env.CLAUDE_PROJECT_DIR && !process.env.CURSOR_PROJECT_DIR) return "claude";
   return "cursor";
@@ -84,26 +66,6 @@ function injectPacket(repo: RepoRow, query: string, session: string, platform: s
   });
   if (packet.claims.length === 0 && packet.notes.length === 0) return null;
   return cap(markdown);
-}
-
-function saveSessionClaim(repo: RepoRow, prompt: string, answer?: string): void {
-  if (!isUsefulPrompt(prompt)) return;
-  const id = `claim.session_${createHash("sha256").update(prompt).digest("hex").slice(0, 12)}`;
-  const takeaway = answer?.replace(/\s+/g, " ").trim().slice(0, 240) ?? "";
-  const text = takeaway
-    ? `${prompt.trim().slice(0, 280)}\n\nPrior outcome: ${takeaway}`
-    : prompt.trim().slice(0, 400);
-  applyProposal(repo.id, {
-    claims: [
-      {
-        id,
-        kind: "session",
-        text,
-        code_anchors: extractAnchors(`${prompt}\n${answer ?? ""}`, repo.root_path),
-        source_ref: "cursor-hook",
-      },
-    ],
-  });
 }
 
 export function handleHookPayload(raw: string): HookResponse {
@@ -145,7 +107,7 @@ function handleHookPayloadInner(raw: string): HookResponse {
 
   if (event === "beforeSubmitPrompt") {
     const prompt = typeof payload.prompt === "string" ? payload.prompt : "";
-    if (isUsefulPrompt(prompt)) {
+    if (isUsefulCaptureText(prompt)) {
       insertConversationNote({
         repoId: repo.id,
         platform,
@@ -154,7 +116,7 @@ function handleHookPayloadInner(raw: string): HookResponse {
         text: prompt,
       });
     }
-    const context = isUsefulPrompt(prompt) ? injectPacket(repo, prompt, sid, platform) : null;
+    const context = isUsefulCaptureText(prompt) ? injectPacket(repo, prompt, sid, platform) : null;
     return context
       ? {
           continue: true,
@@ -178,10 +140,19 @@ function handleHookPayloadInner(raw: string): HookResponse {
   }
 
   if (event === "stop" || event === "sessionEnd") {
+    // Draft for human approve in Brain UI — do not auto-apply durable claims.
     const recent = listConversationNotes(repo.id, 12);
     const lastUser = recent.find((n) => n.role === "user");
     const lastAssistant = recent.find((n) => n.role === "assistant");
-    if (lastUser) saveSessionClaim(repo, lastUser.text, lastAssistant?.text);
+    if (lastUser) {
+      captureSessionDraft({
+        repo,
+        platform,
+        sessionId: sid,
+        prompt: lastUser.text,
+        answer: lastAssistant?.text,
+      });
+    }
     return {};
   }
 

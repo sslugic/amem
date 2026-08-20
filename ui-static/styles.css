@@ -979,3 +979,69 @@ main {
     overflow: visible;
   }
 }
+
+.brain-tools {
+  padding: 0 1.25rem 0.75rem;
+}
+.brain-tools input[type="search"] {
+  width: min(420px, 100%);
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  color: inherit;
+  font: inherit;
+}
+.drawer-label {
+  display: block;
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted, #8fa3b0);
+}
+.drawer textarea,
+.drawer input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+}
+.drawer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.9rem 0;
+}
+.btn.danger {
+  border-color: rgba(220, 90, 90, 0.55);
+  color: #f2b4b4;
+}
+.feed-item.draft {
+  border-left: 3px solid rgba(230, 180, 80, 0.7);
+}
+.draft-grid {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+.draft-card {
+  text-align: left;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+  color: inherit;
+  cursor: pointer;
+}
+.draft-card.selected,
+.draft-card:hover {
+  border-color: rgba(120, 200, 180, 0.55);
+}
+.draft-card strong {
+  display: block;
+  margin-bottom: 0.35rem;
+}

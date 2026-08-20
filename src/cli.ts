@@ -39,7 +39,7 @@ import {
 } from "./proposal.js";
 import { detectRepoIdentity, parseWorkspaceSlug, workspaceIdentity } from "./repo-identity.js";
 import { startUiServer, buildUiLandingUrl, openUiInBrowser, isAddrInUse } from "./ui/server.js";
-import { installLoginService, isServiceInstalled, uninstallLoginService } from "./service.js";
+import { installLoginService, isServiceInstalled, isServiceSupported, uninstallLoginService } from "./service.js";
 import { mcpClientConfig, runMcpServer } from "./mcp.js";
 import { provisionWorkspace } from "./workspace-setup.js";
 
@@ -497,18 +497,20 @@ async function main(): Promise<void> {
       case "service": {
         const sub = positional[1];
         if (sub === "status") {
+          console.log(`platform: ${process.platform}`);
+          console.log(`supported: ${isServiceSupported() ? "yes" : "no"}`);
           console.log(`login item: ${isServiceInstalled() ? "installed" : "not installed"}`);
           break;
         }
         if (sub === "install") {
           const result = installLoginService();
-          console.log(`Installed login item: ${result.path}`);
+          console.log(`Installed login item (${result.platform}): ${result.path}`);
           console.log("amem ui will start on login (localhost only).");
           break;
         }
         if (sub === "uninstall") {
           const result = uninstallLoginService();
-          console.log(`Removed login item: ${result.path}`);
+          console.log(`Removed login item (${result.platform}): ${result.path}`);
           break;
         }
         throw new Error("Usage: amem service install|uninstall|status");

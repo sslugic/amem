@@ -84,7 +84,7 @@ That opens `http://127.0.0.1:7843` on the **Setup** tab. It scans your home fold
 Optional: check **Start amem ui when this computer logs in** so the localhost server comes back after a reboot (macOS LaunchAgent). Same thing from the CLI:
 
 ```bash
-amem service install    # start on login
+amem service install    # start on login (macOS LaunchAgent, Linux systemd --user, or Windows Startup)
 amem service status
 amem service uninstall
 ```
@@ -92,7 +92,7 @@ amem service uninstall
 Tabs after setup:
 
 1. **Setup** — scan/select repos, platforms, login auto-start, bootstrap proposal  
-2. **Brain** — facts grouped by file, plus recent Cursor hits/misses (what was injected vs what had to be explored)  
+2. **Brain** — facts by file, pending session drafts (approve/dismiss), edit/pin/delete, search, recent hits/misses  
 3. **Stats** — estimated tokens saved per LLM (clearly labeled as estimates)
 
 Server-only (no browser open):
@@ -314,7 +314,7 @@ amem service install|uninstall|status
 | `mcp` | Stdio MCP tools; HTTP MCP is at `http://127.0.0.1:7843/mcp` while the UI is running |
 | `propose apply` | Upsert structured memory locally |
 | `ui` | Setup wizard + brain + stats on localhost |
-| `service` | Install a macOS login item so `amem ui` starts after reboot |
+| `service` | Install a login item so `amem ui` starts after reboot (macOS / Linux / Windows) |
 | `doctor --attest` | Privacy/policy attestation for IT tickets |
 | `export` / `wipe` | Personal backup or delete (still local) |
 | `wipe --all --yes` | Offboard: wipe every repo and remove `~/.amem` |

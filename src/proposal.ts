@@ -309,8 +309,8 @@ export function applyProposal(
      ON CONFLICT(repo_id, id) DO UPDATE SET name = excluded.name`,
   );
   const upsertClaim = db.prepare(
-    `INSERT INTO claims (repo_id, id, kind, text, code_anchors, source_ref, created_at, updated_at, status, superseded_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL)
+    `INSERT INTO claims (repo_id, id, kind, text, code_anchors, source_ref, created_at, updated_at, status, superseded_by, pinned)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 0)
      ON CONFLICT(repo_id, id) DO UPDATE SET
        kind = excluded.kind,
        text = excluded.text,
