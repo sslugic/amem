@@ -6,6 +6,7 @@ import {
   listFlows,
   nowIso,
   openDb,
+  reindexClaimsSearch,
   type ClaimRow,
   type ComponentRow,
   type EdgeRow,
@@ -13,6 +14,8 @@ import {
 } from "./db.js";
 import { compiledDenyPatterns, type AmemPolicy } from "./policy.js";
 import { newId } from "./repo-identity.js";
+import { parseAnchors } from "./freshness.js";
+import { tokenJaccard } from "./search.js";
 
 export type ProposalComponent = {
   id: string;
@@ -31,6 +34,8 @@ export type ProposalClaim = {
   text: string;
   code_anchors?: string[];
   source_ref?: string;
+  /** Claim ids this claim replaces; those become status=superseded */
+  supersedes?: string[];
 };
 
 export type ProposalEdge = {
@@ -52,10 +57,12 @@ export type Proposal = {
 export type ValidationResult = {
   ok: boolean;
   errors: string[];
+  warnings: string[];
   proposal: Proposal;
 };
 
 const OBJECT_TYPES = new Set(["claim", "flow", "component"]);
+const CONFLICT_JACCARD = 0.45;
 
 export function parseProposalJson(raw: string): Proposal {
   const data = JSON.parse(raw) as unknown;
@@ -65,11 +72,97 @@ export function parseProposalJson(raw: string): Proposal {
   return data as Proposal;
 }
 
+function normalizeSupersedes(claim: ProposalClaim): string[] {
+  if (!claim.supersedes) return [];
+  return [...new Set(claim.supersedes.filter((id) => typeof id === "string" && id.trim()))];
+}
+
+/** Collect explicit supersede targets from claims + supersedes edges. */
+export function collectSupersedeTargets(proposal: Proposal): Map<string, string> {
+  // oldId -> newId
+  const map = new Map<string, string>();
+  for (const claim of proposal.claims ?? []) {
+    for (const oldId of normalizeSupersedes(claim)) {
+      if (oldId !== claim.id) map.set(oldId, claim.id);
+    }
+  }
+  for (const edge of proposal.edges ?? []) {
+    if (edge.kind === "supersedes" && edge.from_type === "claim" && edge.to_type === "claim") {
+      if (edge.from_id && edge.to_id && edge.from_id !== edge.to_id) {
+        map.set(edge.to_id, edge.from_id);
+      }
+    }
+  }
+  return map;
+}
+
+function shareAnchor(a: string[], b: string[]): boolean {
+  const set = new Set(a);
+  return b.some((x) => set.has(x));
+}
+
+/**
+ * Likely conflict: share ≥1 code_anchor and high text overlap, different ids,
+ * and the older claim is not explicitly superseded by this proposal.
+ */
+export function findConflictWarnings(
+  proposal: Proposal,
+  existingActive: ClaimRow[],
+): string[] {
+  const warnings: string[] = [];
+  const supersedeTargets = collectSupersedeTargets(proposal);
+  const incomingIds = new Set((proposal.claims ?? []).map((c) => c.id));
+
+  for (const claim of proposal.claims ?? []) {
+    const anchors = claim.code_anchors ?? [];
+    if (anchors.length === 0 || !claim.text) continue;
+
+    for (const other of existingActive) {
+      if (other.id === claim.id) continue;
+      if (incomingIds.has(other.id) && (proposal.claims ?? []).some((c) => c.id === other.id)) {
+        // Another claim in the same proposal — check pairwise once (id order)
+        continue;
+      }
+      if (supersedeTargets.get(other.id) === claim.id) continue;
+      if (supersedeTargets.has(other.id)) continue;
+
+      const otherAnchors = parseAnchors(other.code_anchors);
+      if (!shareAnchor(anchors, otherAnchors)) continue;
+      const sim = tokenJaccard(claim.text, other.text);
+      if (sim >= CONFLICT_JACCARD) {
+        warnings.push(
+          `claim ${claim.id} may conflict with active ${other.id} (shared anchors, text similarity ${(sim * 100).toFixed(0)}%). Add "supersedes": ["${other.id}"] if this replaces it.`,
+        );
+      }
+    }
+
+    // Conflicts within the same proposal
+    for (const peer of proposal.claims ?? []) {
+      if (peer.id <= claim.id) continue;
+      const peerAnchors = peer.code_anchors ?? [];
+      if (!shareAnchor(anchors, peerAnchors)) continue;
+      if (normalizeSupersedes(claim).includes(peer.id) || normalizeSupersedes(peer).includes(claim.id)) {
+        continue;
+      }
+      const sim = tokenJaccard(claim.text, peer.text ?? "");
+      if (sim >= CONFLICT_JACCARD) {
+        warnings.push(
+          `claims ${claim.id} and ${peer.id} look conflicting in the same proposal — set supersedes on the winner.`,
+        );
+      }
+    }
+  }
+
+  return warnings;
+}
+
 export function validateProposal(
   proposal: Proposal,
   policy?: AmemPolicy,
+  opts: { existingClaims?: ClaimRow[] } = {},
 ): ValidationResult {
   const errors: string[] = [];
+  const warnings: string[] = [];
   const componentIds = new Set<string>();
   const flowIds = new Set<string>();
   const claimIds = new Set<string>();
@@ -89,6 +182,11 @@ export function validateProposal(
       claimIds.add(claim.id);
       if (!claim.code_anchors || claim.code_anchors.length === 0) {
         errors.push(`claim ${claim.id} should include at least one code_anchor`);
+      }
+      for (const oldId of normalizeSupersedes(claim)) {
+        if (oldId === claim.id) {
+          errors.push(`claim ${claim.id} cannot supersede itself`);
+        }
       }
     }
   }
@@ -114,7 +212,23 @@ export function validateProposal(
 
   errors.push(...checkProposalAgainstPolicy(proposal, policy));
 
-  return { ok: errors.length === 0, errors, proposal };
+  const existing = opts.existingClaims ?? [];
+  const activeExisting = existing.filter((c) => (c.status ?? "active") === "active");
+  warnings.push(...findConflictWarnings(proposal, activeExisting));
+
+  // dangling supersedes targets (informational)
+  const existingIds = new Set(existing.map((c) => c.id));
+  for (const claim of proposal.claims ?? []) {
+    for (const oldId of normalizeSupersedes(claim)) {
+      if (!existingIds.has(oldId) && !claimIds.has(oldId)) {
+        warnings.push(
+          `claim ${claim.id} supersedes unknown id ${oldId} (will no-op if missing at apply)`,
+        );
+      }
+    }
+  }
+
+  return { ok: errors.length === 0, errors, warnings, proposal };
 }
 
 /** Block claims that look like secrets / credentials (builtin + policy patterns). */
@@ -160,6 +274,7 @@ export type ApplyResult = {
   flows: number;
   claims: number;
   edges: number;
+  superseded: number;
 };
 
 export function applyProposal(
@@ -167,7 +282,8 @@ export function applyProposal(
   proposal: Proposal,
   policy?: AmemPolicy,
 ): ApplyResult {
-  const validated = validateProposal(proposal, policy);
+  const existing = listClaims(repoId, { includeSuperseded: true });
+  const validated = validateProposal(proposal, policy, { existingClaims: existing });
   if (!validated.ok) {
     throw new Error(`Invalid proposal:\n- ${validated.errors.join("\n- ")}`);
   }
@@ -178,6 +294,7 @@ export function applyProposal(
   let flows = 0;
   let claims = 0;
   let edges = 0;
+  let superseded = 0;
 
   const upsertComponent = db.prepare(
     `INSERT INTO components (repo_id, id, name, code_anchor)
@@ -192,14 +309,20 @@ export function applyProposal(
      ON CONFLICT(repo_id, id) DO UPDATE SET name = excluded.name`,
   );
   const upsertClaim = db.prepare(
-    `INSERT INTO claims (repo_id, id, kind, text, code_anchors, source_ref, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO claims (repo_id, id, kind, text, code_anchors, source_ref, created_at, updated_at, status, superseded_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL)
      ON CONFLICT(repo_id, id) DO UPDATE SET
        kind = excluded.kind,
        text = excluded.text,
        code_anchors = excluded.code_anchors,
        source_ref = COALESCE(excluded.source_ref, claims.source_ref),
-       updated_at = excluded.updated_at`,
+       updated_at = excluded.updated_at,
+       status = 'active',
+       superseded_by = NULL`,
+  );
+  const markSuperseded = db.prepare(
+    `UPDATE claims SET status = 'superseded', superseded_by = ?, updated_at = ?
+     WHERE repo_id = ? AND id = ? AND id != ?`,
   );
   const upsertEdge = db.prepare(
     `INSERT INTO edges (repo_id, id, from_id, from_type, to_id, to_type, kind)
@@ -212,6 +335,8 @@ export function applyProposal(
        kind = excluded.kind`,
   );
 
+  const supersedeMap = collectSupersedeTargets(proposal);
+
   db.exec("BEGIN");
   try {
     for (const c of proposal.components ?? []) {
@@ -223,7 +348,7 @@ export function applyProposal(
       flows += 1;
     }
     for (const claim of proposal.claims ?? []) {
-      const existing = db
+      const prior = db
         .prepare("SELECT created_at FROM claims WHERE repo_id = ? AND id = ?")
         .get(repoId, claim.id) as { created_at: string } | undefined;
       upsertClaim.run(
@@ -233,10 +358,14 @@ export function applyProposal(
         claim.text,
         JSON.stringify(claim.code_anchors ?? []),
         claim.source_ref ?? null,
-        existing?.created_at ?? ts,
+        prior?.created_at ?? ts,
         ts,
       );
       claims += 1;
+    }
+    for (const [oldId, newId] of supersedeMap) {
+      const result = markSuperseded.run(newId, ts, repoId, oldId, newId);
+      superseded += Number(result.changes ?? 0);
     }
     for (const edge of proposal.edges ?? []) {
       const id = edge.id ?? newId("edge");
@@ -257,7 +386,8 @@ export function applyProposal(
     throw err;
   }
 
-  return { components, flows, claims, edges };
+  reindexClaimsSearch(repoId);
+  return { components, flows, claims, edges, superseded };
 }
 
 export function exportRepoMemory(repoId: string): {
@@ -269,7 +399,7 @@ export function exportRepoMemory(repoId: string): {
   return {
     components: listComponents(repoId),
     flows: listFlows(repoId),
-    claims: listClaims(repoId),
+    claims: listClaims(repoId, { includeSuperseded: true }),
     edges: listEdges(repoId),
   };
 }

@@ -706,7 +706,10 @@ export function logContextUsage(input: {
   query: string;
 }): { markdown: string; event: UsageEventRow; packet: ReturnType<typeof buildContext> } {
   const started = Date.now();
-  const packet = buildContext(input.repoId, input.query);
+  const repo = getRepoById(input.repoId);
+  const packet = buildContext(input.repoId, input.query, {
+    rootPath: repo?.root_path,
+  });
   const markdown = renderContextMarkdown(packet);
   const metrics = metricsFromPacket(packet, markdown);
   const localMs = Math.max(0, Date.now() - started);

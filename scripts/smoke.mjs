@@ -591,10 +591,78 @@ try {
   }
 
   // Static UI present
-  const { existsSync } = await import("node:fs");
+  const { existsSync, utimesSync } = await import("node:fs");
   if (!existsSync(join(root, "ui-static", "index.html"))) {
     throw new Error("ui-static missing");
   }
+
+  // --- FTS stemming: "booting" should still hit "Boot flow" ---
+  const stemCtx = run(["context", "booting initializes", "--platform", "cursor"]);
+  if (!stemCtx.includes("claim.boot_order")) {
+    throw new Error("FTS/stem retrieval failed to find claim.boot_order for 'booting initializes'");
+  }
+  console.log("fts stem retrieval ok");
+
+  // --- Staleness: advance anchor mtime past claim.updated_at ---
+  const apiPath = join(repoDir, "src", "api.ts");
+  const future = new Date(Date.now() + 120_000);
+  utimesSync(apiPath, future, future);
+  const staleCtx = run(["context", "api entry", "--platform", "cursor"]);
+  if (!staleCtx.includes("Freshness: `stale`") && !staleCtx.includes("marked stale")) {
+    throw new Error(`expected stale freshness marker in context, got:\n${staleCtx}`);
+  }
+  console.log("staleness ok");
+
+  // --- Supersede: replace claim.api_entry, old id must leave retrieval ---
+  const supersedeProposal = {
+    claims: [
+      {
+        id: "claim.api_entry_v2",
+        kind: "structure",
+        text: "API entrypoint lives in src/api.ts (revised)",
+        code_anchors: ["src/api.ts"],
+        supersedes: ["claim.api_entry"],
+      },
+    ],
+  };
+  const supersedePath = join(amemHome, "supersede.json");
+  writeFileSync(supersedePath, JSON.stringify(supersedeProposal, null, 2));
+  const conflictValidate = run(["propose", "validate", supersedePath]);
+  // v2 is intentional supersede — should be valid (warnings optional)
+  if (!conflictValidate.includes("Proposal is valid")) {
+    throw new Error(`supersede validate failed: ${conflictValidate}`);
+  }
+  const supersedeApply = run(["propose", "apply", supersedePath]);
+  if (!supersedeApply.includes("superseded")) {
+    throw new Error(`expected superseded count in apply output: ${supersedeApply}`);
+  }
+  const afterSupersede = run(["context", "API entrypoint", "--platform", "cursor"]);
+  if (afterSupersede.includes("claim.api_entry\n") || afterSupersede.includes("### claim.api_entry\n")) {
+    throw new Error("superseded claim.api_entry should not appear in context");
+  }
+  if (!afterSupersede.includes("claim.api_entry_v2")) {
+    throw new Error("new claim.api_entry_v2 missing from context after supersede");
+  }
+  console.log("supersede ok");
+
+  // Conflict warning without supersedes
+  const conflictProposal = {
+    claims: [
+      {
+        id: "claim.api_entry_alt",
+        kind: "structure",
+        text: "API entrypoint lives in src/api.ts (revised)",
+        code_anchors: ["src/api.ts"],
+      },
+    ],
+  };
+  const conflictPath = join(amemHome, "conflict.json");
+  writeFileSync(conflictPath, JSON.stringify(conflictProposal, null, 2));
+  const conflictOut = run(["propose", "validate", conflictPath]);
+  if (!conflictOut.includes("may conflict") && !conflictOut.includes("Warnings:")) {
+    throw new Error(`expected conflict warning, got: ${conflictOut}`);
+  }
+  console.log("conflict warning ok");
 
   // Offboard wipe
   console.log(run(["wipe", "--all", "--yes"]));

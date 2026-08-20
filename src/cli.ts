@@ -336,12 +336,22 @@ async function main(): Promise<void> {
         }
         const policy = loadPolicy().policy;
         const proposal = loadProposalFile(resolve(file));
-        const validated = validateProposal(proposal, policy);
+        let existingClaims = undefined as ReturnType<typeof listClaims> | undefined;
+        try {
+          existingClaims = listClaims(resolveBinding(flags).id, { includeSuperseded: true });
+        } catch {
+          // validate can run without a binding; conflict checks need one
+        }
+        const validated = validateProposal(proposal, policy, { existingClaims });
         if (!validated.ok) {
           console.error("Invalid proposal:");
           for (const e of validated.errors) console.error(`- ${e}`);
           process.exitCode = 1;
           break;
+        }
+        if (validated.warnings.length > 0) {
+          console.log("Warnings:");
+          for (const w of validated.warnings) console.log(`- ${w}`);
         }
         if (sub === "validate") {
           console.log("Proposal is valid.");
@@ -350,8 +360,10 @@ async function main(): Promise<void> {
         const repo = resolveBinding(flags);
         assertRemoteAllowed(repo.remote_url, policy);
         const result = applyProposal(repo.id, proposal, policy);
+        const supersededBit =
+          result.superseded > 0 ? `, ${result.superseded} superseded` : "";
         console.log(
-          `Applied: ${result.claims} claims, ${result.flows} flows, ${result.components} components, ${result.edges} edges`,
+          `Applied: ${result.claims} claims, ${result.flows} flows, ${result.components} components, ${result.edges} edges${supersededBit}`,
         );
         break;
       }

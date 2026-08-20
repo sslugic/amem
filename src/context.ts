@@ -4,18 +4,24 @@ import {
   listConversationNotes,
   listEdges,
   listFlows,
+  openDb,
   type ClaimRow,
   type ComponentRow,
   type ConversationNoteRow,
   type FlowRow,
 } from "./db.js";
-
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9_./-]+/)
-    .filter((t) => t.length > 1);
-}
+import {
+  assessClaimFreshness,
+  freshnessScoreMultiplier,
+  type ClaimFreshness,
+  type FreshnessStatus,
+} from "./freshness.js";
+import {
+  ftsBoostFromBm25,
+  keywordScoreClaim,
+  searchClaimsFts,
+  tokenize,
+} from "./search.js";
 
 function scoreNote(note: ConversationNoteRow, queryTokens: string[]): number {
   if (queryTokens.length === 0) return 0;
@@ -27,43 +33,65 @@ function scoreNote(note: ConversationNoteRow, queryTokens: string[]): number {
   return score;
 }
 
-function scoreClaim(claim: ClaimRow, queryTokens: string[]): number {
-  if (queryTokens.length === 0) return 0;
-  const hay = `${claim.id} ${claim.kind} ${claim.text} ${claim.code_anchors}`.toLowerCase();
-  let score = 0;
-  for (const token of queryTokens) {
-    if (hay.includes(token)) {
-      score += token.length > 4 ? 3 : 2;
-      if (claim.text.toLowerCase().includes(token)) score += 1;
-      if (claim.id.toLowerCase().includes(token)) score += 2;
-    }
-  }
-  return score;
-}
+export type RankedClaim = ClaimRow & {
+  score: number;
+  freshness: ClaimFreshness;
+};
 
 export type ContextPacket = {
   query: string;
-  claims: Array<ClaimRow & { score: number }>;
+  claims: RankedClaim[];
   flows: FlowRow[];
   components: ComponentRow[];
   notes: Array<ConversationNoteRow & { score: number }>;
 };
 
-export function buildContext(repoId: string, query: string, limit = 12): ContextPacket {
+export type BuildContextOptions = {
+  limit?: number;
+  rootPath?: string;
+};
+
+export function buildContext(
+  repoId: string,
+  query: string,
+  limitOrOpts: number | BuildContextOptions = 12,
+): ContextPacket {
+  const opts: BuildContextOptions =
+    typeof limitOrOpts === "number" ? { limit: limitOrOpts } : limitOrOpts;
+  const limit = opts.limit ?? 12;
+  const rootPath = opts.rootPath;
+
   const queryTokens = tokenize(query);
-  const claims = listClaims(repoId)
-    .map((c) => ({ ...c, score: scoreClaim(c, queryTokens) }))
+  const allActive = listClaims(repoId);
+  const ftsHits = searchClaimsFts(openDb(), repoId, query, Math.max(limit * 2, 24));
+  const ftsBoost = new Map<string, number>();
+  for (const hit of ftsHits) {
+    ftsBoost.set(hit.id, ftsBoostFromBm25(hit.bm25));
+  }
+
+  const scored = allActive
+    .map((c) => {
+      const freshness = assessClaimFreshness(rootPath, c);
+      const keyword = keywordScoreClaim(c, queryTokens);
+      const boost = ftsBoost.get(c.id) ?? 0;
+      const raw = keyword + boost;
+      // If FTS alone hit, give a floor so stem matches still surface
+      const withFloor = raw > 0 || boost > 0 ? Math.max(raw, boost > 0 ? boost : raw) : 0;
+      const score = withFloor * freshnessScoreMultiplier(freshness.status);
+      return { ...c, score, freshness };
+    })
     .filter((c) => (queryTokens.length === 0 ? true : c.score > 0))
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at))
     .slice(0, limit);
 
-  // If no keyword hits, return newest claims as a weak fallback for empty memory probes
+  // If no keyword/FTS hits, return newest fresh-leaning claims as weak fallback
   const selected =
-    claims.length > 0
-      ? claims
-      : listClaims(repoId)
-          .slice(0, Math.min(5, limit))
-          .map((c) => ({ ...c, score: 0 }));
+    scored.length > 0
+      ? scored
+      : allActive.slice(0, Math.min(5, limit)).map((c) => {
+          const freshness = assessClaimFreshness(rootPath, c);
+          return { ...c, score: 0, freshness };
+        });
 
   const edges = listEdges(repoId);
   const flowIds = new Set<string>();
@@ -107,6 +135,17 @@ export function buildContext(repoId: string, query: string, limit = 12): Context
   return { query, claims: selected, flows, components, notes };
 }
 
+function freshnessLabel(status: FreshnessStatus): string | null {
+  switch (status) {
+    case "stale":
+      return "stale";
+    case "missing_anchor":
+      return "missing_anchor";
+    default:
+      return null;
+  }
+}
+
 export function renderContextMarkdown(packet: ContextPacket): string {
   const lines: string[] = ["# Agent Memory Context", "", `Query: ${packet.query}`, ""];
 
@@ -120,11 +159,29 @@ export function renderContextMarkdown(packet: ContextPacket): string {
     lines.push("No durable claims yet — using recent conversation memory.", "");
   }
 
+  const staleCount = packet.claims.filter((c) => c.freshness.status === "stale").length;
+  if (staleCount > 0) {
+    lines.push(
+      `_${staleCount} claim(s) marked stale — anchored files changed after the claim was written. Verify before trusting._`,
+      "",
+    );
+  }
+
   if (packet.claims.length > 0) {
     lines.push("## Best Claims", "");
     for (const claim of packet.claims) {
       lines.push(`### ${claim.id}`);
       lines.push(`Kind: \`${claim.kind}\``);
+      const fl = freshnessLabel(claim.freshness.status);
+      if (fl) {
+        const detail =
+          claim.freshness.staleAnchors.length > 0
+            ? ` — ${claim.freshness.staleAnchors.map((a) => `\`${a}\``).join(", ")} changed after claim`
+            : claim.freshness.missingAnchors.length > 0
+              ? ` — missing ${claim.freshness.missingAnchors.map((a) => `\`${a}\``).join(", ")}`
+              : "";
+        lines.push(`Freshness: \`${fl}\`${detail}`);
+      }
       lines.push("");
       lines.push(claim.text);
       lines.push("");
