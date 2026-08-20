@@ -68,15 +68,17 @@ Guarantees:
 ## Install the tool
 
 ```bash
+npx amem setup            # after the first npm publish (Node 20+)
+# or from a clone while developing:
 git clone <this-repo-url> amem
 cd amem
 npm install
-npm link          # puts `amem` on your PATH
-amem setup        # personal prefs workspace + next steps
-amem status       # sanity check from any directory
+npm link
+amem setup
+amem status
 ```
 
-Once published to npm: `npx amem setup` or `npm i -g amem`.
+`npx amem setup` and `npm i -g amem` are the supported install once a version is on npm. CI runs `npm test` and `npm run pack:check`; tagging `v*` publishes if `NPM_TOKEN` is set. See [docs/npm-release.md](docs/npm-release.md). `better-sqlite3` uses its own prebuilds — no extra native step on common macOS/Linux + Node 20/22.
 
 ### Quick paths
 
@@ -114,6 +116,8 @@ amem ui
 
 That opens `http://127.0.0.1:7843` on the **Setup** tab. It scans your home folder for git repos (skips `Library`, `node_modules`, `Downloads`, and similar noise). Check the ones you want, pick clients (Cursor, Claude Code, Windsurf, Continue, Aider, Zed, …), then **Start tracking selected**. Each pick is bound in `~/.amem` and gets the matching installer when available.
 
+The header has a **Personal** switcher (cross-repo prefs) and **Lock / backup** chrome — lock status, last backup, and a daily local schedule. Brain shows the same lock/backup chips. The Setup tab includes a copyable **remember contract** for any MCP host (`amem recipe`).
+
 Optional: check **Start amem ui when this computer logs in** so the localhost server comes back after a reboot:
 
 ```bash
@@ -125,8 +129,8 @@ amem service uninstall
 Tabs after setup:
 
 1. **Setup** — scan/select repos, platforms, login auto-start, bootstrap proposal  
-2. **Brain** — facts by file, pending session / miss→learn drafts (approve/dismiss), edit/pin/delete, search, recent hits/misses  
-3. **Stats** — estimated tokens saved per LLM (clearly labeled as estimates)
+2. **Brain** — facts by file, scored drafts (approve / replace older / dismiss / reject noisy), edit/pin/delete, search, recent hits/misses  
+3. **Stats** — estimated tokens saved per LLM, plus JSON / markdown / PDF export (proxies, not a bill)
 
 Server-only (no browser open):
 
@@ -321,6 +325,7 @@ MCP tools (stdio or HTTP):
 | --- | --- |
 | `amem_context` | Ranked memory packet for the current question |
 | `amem_remember` | Store a durable fact after an outcome |
+| `amem_recipe` | Generic read-then-write contract (any MCP host) |
 | `amem_repos` | What is monitored (git repos + named workspaces) |
 | `amem_stats` | Lookup time, estimated tokens/ms saved, hit rate |
 | `amem_graph` | Claims / components / flows stored for a workspace or repo |
@@ -340,6 +345,7 @@ amem status [--workspace <name>]
 amem doctor [--attest] [--json]
 amem context "<query>" [--workspace <name>] [--platform …]
 amem remember "<text>" [--workspace <name>] [--kind …] [--anchor <path>]
+amem recipe [--json]
 amem mcp [--print-config] [--workspace <name>]
 amem propose validate|diff|apply <file.json>
 amem export [--out <file.json>]
@@ -352,6 +358,7 @@ amem backup unschedule
 amem session touch --platform cursor|claude [--session-id <id>]
 amem hook
 amem usage report --saved <n> [--platform …] [--event-id …]
+amem usage export [--format json|md|pdf] [--days 30] [--scope current|all] [--out <file>]
 amem ui [--port 7843] [--no-open]
 amem service install|uninstall|status
 ```

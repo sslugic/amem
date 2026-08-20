@@ -81,6 +81,8 @@ const state = {
   brainSearch: "",
   anim: 0,
   graphTick: 0,
+  vault: null,
+  recipe: null,
 };
 
 function scopedPath(path) {
@@ -200,6 +202,94 @@ async function refreshStatus() {
   }
   syncFocusFromStatus();
   hydratePlatforms(state.status);
+  await refreshVault();
+}
+
+async function refreshVault() {
+  try {
+    state.vault = await apiUnscoped("/api/vault");
+  } catch {
+    state.vault = state.status?.vault || null;
+  }
+  if (!state.recipe) {
+    try {
+      state.recipe = await apiUnscoped("/api/recipe");
+    } catch {
+      state.recipe = null;
+    }
+  }
+  paintVault();
+}
+
+function vaultChipHtml() {
+  const v = state.vault;
+  if (!v) return `<span class="vault-chip">Vault…</span>`;
+  const lock = v.encryptedAtRest
+    ? `<span class="vault-chip warn">Locked</span>`
+    : v.encCopyPresent
+      ? `<span class="vault-chip ok">Unlocked</span>`
+      : `<span class="vault-chip">Plaintext</span>`;
+  const backup = v.backup?.scheduled
+    ? `<span class="vault-chip ok">Backup scheduled</span>`
+    : `<span class="vault-chip">Backup off</span>`;
+  const last = v.backup?.last
+    ? `<span class="vault-chip">Last ${esc(v.backup.last.mtime.slice(0, 10))}</span>`
+    : `<span class="vault-chip">No backup yet</span>`;
+  return `${lock}${backup}${last}`;
+}
+
+function paintVault() {
+  const chips = $("#vaultChips");
+  if (chips) chips.innerHTML = vaultChipHtml();
+  const detail = $("#vaultDetail");
+  if (detail && state.vault) {
+    const last = state.vault.backup?.last;
+    detail.textContent = last
+      ? `Last backup: ${last.name} · ${last.encrypted ? "encrypted" : "plaintext"} · stays in ${state.vault.backup.dir}`
+      : `Backups go to ${state.vault.backup?.dir || "~/.amem/backups"} on this machine.`;
+  }
+}
+
+async function focusPersonal() {
+  const existing = listedRepos().find(isPersonal);
+  if (existing) {
+    await focusRepo({ repoId: existing.id, tab: state.tab === "setup" ? "setup" : state.tab });
+    return;
+  }
+  try {
+    const created = await apiUnscoped("/api/workspaces/personal", { method: "POST", body: "{}" });
+    state.repos = (await apiUnscoped("/api/repos")).repos || [];
+    await focusRepo({ repoId: created.repo?.id, tab: "brain" });
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+function vaultPassphrase() {
+  return $("#vaultPass")?.value || "";
+}
+
+function clearVaultPass() {
+  const input = $("#vaultPass");
+  if (input) input.value = "";
+}
+
+async function vaultAction(path, extra = {}) {
+  const passphrase = vaultPassphrase();
+  try {
+    const body = { ...extra };
+    if (passphrase) body.passphrase = passphrase;
+    const result = await apiUnscoped(path, { method: "POST", body: JSON.stringify(body) });
+    state.vault = result.vault || result;
+    paintVault();
+    clearVaultPass();
+    if (path.includes("/lock") || path.includes("/unlock")) {
+      await refreshStatus().catch(() => {});
+      await render();
+    }
+  } catch (e) {
+    alert(e.message);
+  }
 }
 
 async function refreshGraph() {
@@ -252,6 +342,11 @@ function isWorkspace(r) {
   return r.kind === "workspace" || Boolean(r.slug) || String(r.remote_url || "").startsWith("amem://workspace/");
 }
 
+function isPersonal(r) {
+  if (!r) return false;
+  return Boolean(r.personal) || r.slug === "personal" || String(r.remote_url || "").includes("amem://workspace/personal");
+}
+
 function shortPath(p) {
   if (!p) return "";
   const home = String(p).replace(/^\/Users\/[^/]+/, "~");
@@ -300,12 +395,16 @@ function fillRepoSelect() {
   };
 
   addGroup(
+    "Personal",
+    repos.filter(isPersonal),
+  );
+  addGroup(
     "Git repos",
     repos.filter((r) => !isWorkspace(r)),
   );
   addGroup(
     "Workspaces",
-    repos.filter(isWorkspace),
+    repos.filter((r) => isWorkspace(r) && !isPersonal(r)),
   );
 
   if (!inList && currentPath) {
@@ -551,6 +650,16 @@ function renderSetup() {
           </div>
           <p class="note">Any MCP host: keep this UI running, then connect to <code>http://127.0.0.1:7843/mcp?workspace=SLUG</code> (not a bare <code>amem</code> command — GUI apps often cannot see Homebrew on PATH).</p>
         </div>
+        <div class="recipe-card">
+          <div class="scan-head">
+            <div>
+              <strong>Remember contract (any MCP host)</strong>
+              <div class="note" style="margin:0.25rem 0 0">Read first, then write. Same tools for every client — not a per-app fork.</div>
+            </div>
+            <button class="btn secondary small" id="copyRecipe" type="button">Copy recipe</button>
+          </div>
+          <pre id="recipePaste">${esc(state.recipe?.paste || "amem recipe")}</pre>
+        </div>
         ${
           configured
             ? `<div class="status-grid" style="margin-top:1.5rem">
@@ -700,6 +809,16 @@ function renderSetup() {
     }
   });
   $("#openBrain")?.addEventListener("click", () => setTab("brain"));
+  $("#copyRecipe")?.addEventListener("click", async () => {
+    const text = state.recipe?.paste || $("#recipePaste")?.textContent || "";
+    try {
+      await navigator.clipboard.writeText(text);
+      const btn = $("#copyRecipe");
+      if (btn) btn.textContent = "Copied";
+    } catch {
+      alert(text);
+    }
+  });
   main.querySelectorAll("[data-rename-ws]").forEach((el) => {
     el.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -858,6 +977,7 @@ function renderBrain() {
         <div>
           <h1>What amem knows</h1>
           <p>The map is coverage: each tile is a file, sized by how many facts. Teal was used in a recent query. Click a tile or a recent use to see what was injected. Edit, pin, or delete facts in the drawer.</p>
+          <div class="brain-vault">${vaultChipHtml()}</div>
         </div>
         <div class="brain-kpis">
           <span><b>${g.claims?.length ?? 0}</b> facts</span>
@@ -920,9 +1040,9 @@ function renderBrainFeed() {
           .map((d) => {
             const active = state.selectedNode?.type === "draft" && state.selectedNode.id === d.id;
             return `<button type="button" class="feed-item draft ${active ? "active" : ""}" data-draft="${esc(d.id)}">
-              <div class="feed-top"><span>${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))}</span><span class="pill warn">approve?</span></div>
+              <div class="feed-top"><span>${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))}</span><span class="pill ${d.quality?.label === "high" ? "" : "warn"}">${esc(d.quality?.label || "approve?")}${d.conflicts?.length ? " · conflict" : ""}</span></div>
               <div class="feed-q">${esc(d.title || d.id)}</div>
-              <div class="feed-meta">Session capture — apply to store, or dismiss</div>
+              <div class="feed-meta">${d.quality ? `Confidence ${d.quality.score}` : "Session capture"} — apply to store, or dismiss</div>
             </button>`;
           })
           .join("")}`;
@@ -1147,11 +1267,11 @@ function renderBrainMap() {
     el.innerHTML =
       drafts.length === 0
         ? `<div class="brain-empty">No pending drafts. When a Cursor session ends, amem will queue a capture here for you to approve.</div>`
-        : `<div class="draft-grid">${drafts
+        : `<div class="draft-toolbar"><button class="btn secondary small" type="button" id="rejectNoisy">Reject noisy drafts</button></div><div class="draft-grid">${drafts
             .map((d) => {
               return `<button type="button" class="draft-card ${selectedId === d.id ? "selected" : ""}" data-draft-map="${esc(d.id)}">
                 <strong>${esc(d.title || d.id)}</strong>
-                <span class="meta">${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))}</span>
+                <span class="meta">${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))} · ${esc(d.quality?.label || "unscored")}${d.quality ? ` ${d.quality.score}` : ""}${d.conflicts?.length ? " · conflict" : ""}</span>
               </button>`;
             })
             .join("")}</div>`;
@@ -1162,6 +1282,16 @@ function renderBrainMap() {
         state.selectedNode = { type: "draft", id: draft.id, detail: draft };
         paintBrain();
       });
+    });
+    $("#rejectNoisy")?.addEventListener("click", async () => {
+      try {
+        const result = await api("/api/drafts/reject-noisy", { method: "POST", body: "{}" });
+        await refreshGraph();
+        renderBrain();
+        if (result.count) alert(`Dismissed ${result.count} low-quality draft${result.count === 1 ? "" : "s"}.`);
+      } catch (err) {
+        alert(err.message);
+      }
     });
     return;
   }
@@ -1313,10 +1443,13 @@ function showBrainDetail(node) {
       proposal = {};
     }
     const claims = Array.isArray(proposal.claims) ? proposal.claims : [];
+    const conflicts = Array.isArray(d.conflicts) ? d.conflicts : [];
+    const quality = d.quality;
     drawer.innerHTML = `
       <h2>Pending draft</h2>
-      <div class="meta">${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))} · ${esc(d.source || "session-end")}</div>
+      <div class="meta">${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))} · ${esc(d.source || "session-end")}${quality ? ` · ${esc(quality.label)} ${quality.score}` : ""}</div>
       <p>${esc(d.title || d.id)}</p>
+      ${quality?.reasons?.length ? `<p class="note">${quality.reasons.map((r) => esc(r)).join(" · ")}</p>` : ""}
       ${
         claims.length
           ? `<ul class="detail-list">${claims
@@ -1327,20 +1460,36 @@ function showBrainDetail(node) {
               .join("")}</ul>`
           : `<p class="note">Empty proposal</p>`
       }
+      ${
+        conflicts.length
+          ? `<div class="conflict-box"><strong>May replace older facts</strong>${conflicts
+              .map(
+                (c) =>
+                  `<p class="note"><code>${esc(c.otherId)}</code> (${Math.round((c.similarity || 0) * 100)}% similar)${c.otherText ? ` — ${esc(c.otherText.slice(0, 120))}` : ""}</p>`,
+              )
+              .join("")}</div>`
+          : ""
+      }
       <div class="drawer-actions">
-        <button class="btn" type="button" id="draftApply">Apply to memory</button>
+        ${conflicts.length ? `<button class="btn" type="button" id="draftSupersede">Apply and replace older</button>` : ""}
+        <button class="btn ${conflicts.length ? "secondary" : ""}" type="button" id="draftApply">Apply ${conflicts.length ? "anyway" : "to memory"}</button>
         <button class="btn secondary" type="button" id="draftDismiss">Dismiss</button>
       </div>`;
-    $("#draftApply")?.addEventListener("click", async () => {
+    const applyDraft = async (resolve) => {
       try {
-        await api("/api/drafts/apply", { method: "POST", body: JSON.stringify({ id: d.id }) });
+        await api("/api/drafts/apply", {
+          method: "POST",
+          body: JSON.stringify({ id: d.id, resolve }),
+        });
         state.selectedNode = null;
         await refreshGraph();
         renderBrain();
       } catch (err) {
         alert(err.message);
       }
-    });
+    };
+    $("#draftApply")?.addEventListener("click", () => applyDraft(conflicts.length ? "keep" : undefined));
+    $("#draftSupersede")?.addEventListener("click", () => applyDraft("supersede"));
     $("#draftDismiss")?.addEventListener("click", async () => {
       try {
         await api("/api/drafts/dismiss", { method: "POST", body: JSON.stringify({ id: d.id }) });
@@ -1477,6 +1626,9 @@ function renderStats() {
           <option value="30" ${currentDays === "30" ? "selected" : ""}>30 days</option>
           <option value="90" ${currentDays === "90" ? "selected" : ""}>90 days</option>
         </select>
+        <button class="btn secondary small" type="button" data-export="json">Export JSON</button>
+        <button class="btn secondary small" type="button" data-export="md">Export markdown</button>
+        <button class="btn secondary small" type="button" data-export="pdf">Export PDF</button>
       </div>
       <div class="platform-cards" id="speedCards"></div>
       <h2 class="stats-heading">Monthly projection</h2>
@@ -1533,6 +1685,37 @@ function renderStats() {
     await refreshUsage($("#scope").value, Number(e.target.value));
     renderStats();
   });
+  main.querySelectorAll("[data-export]").forEach((btn) => {
+    btn.addEventListener("click", () => downloadSavings(btn.dataset.export));
+  });
+}
+
+async function downloadSavings(format) {
+  const scope = $("#scope")?.value || "current";
+  const days = $("#days")?.value || "30";
+  try {
+    const data = await api(`/api/usage/export?format=${encodeURIComponent(format)}&scope=${encodeURIComponent(scope)}&days=${encodeURIComponent(days)}`);
+    let blob;
+    if (data.contentBase64) {
+      const raw = atob(data.contentBase64);
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+      blob = new Blob([bytes], { type: data.mime || "application/pdf" });
+    } else if (data.markdown) {
+      blob = new Blob([data.markdown], { type: "text/markdown;charset=utf-8" });
+    } else {
+      blob = new Blob([JSON.stringify(data.report ?? data, null, 2)], {
+        type: "application/json;charset=utf-8",
+      });
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = data.filename || `amem-savings.${format}`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) {
+    alert(e.message);
+  }
 }
 
 function drawChart(days) {
@@ -1628,9 +1811,19 @@ function drawChart(days) {
 
 async function render() {
   fillRepoSelect();
-  if (state.tab === "setup") {
+  paintVault();
+  try {
     await refreshStatus();
-    fillRepoSelect();
+  } catch (e) {
+    await refreshVault();
+    if (/encrypted|unlock|Passphrase/i.test(String(e.message))) {
+      $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>Locked</h1><p>Unlock from the header to open Brain and Stats. Memory never left this machine.</p></div></section>`;
+      return;
+    }
+    throw e;
+  }
+  fillRepoSelect();
+  if (state.tab === "setup") {
     try {
       await loadScan();
     } catch (e) {
@@ -1639,13 +1832,9 @@ async function render() {
     fillRepoSelect();
     renderSetup();
   } else if (state.tab === "brain") {
-    await refreshStatus();
-    fillRepoSelect();
     await refreshGraph();
     renderBrain();
   } else {
-    await refreshStatus();
-    fillRepoSelect();
     await refreshUsage("current", 30);
     renderStats();
   }
@@ -1672,6 +1861,18 @@ $("#repoSelect")?.addEventListener("change", async (e) => {
 });
 
 $("#addRepoBtn")?.addEventListener("click", () => setAddPanel(true));
+$("#personalBtn")?.addEventListener("click", () => focusPersonal());
+$("#vaultToggle")?.addEventListener("click", () => {
+  $("#vaultPanel")?.classList.toggle("hidden");
+});
+$("#vaultLockBtn")?.addEventListener("click", () => vaultAction("/api/vault/lock"));
+$("#vaultUnlockBtn")?.addEventListener("click", () => vaultAction("/api/vault/unlock"));
+$("#vaultBackupBtn")?.addEventListener("click", () => vaultAction("/api/vault/backup"));
+$("#vaultScheduleBtn")?.addEventListener("click", () => {
+  const hour = Number($("#vaultHour")?.value);
+  vaultAction("/api/vault/backup/schedule", { hour: Number.isFinite(hour) ? hour : 3 });
+});
+$("#vaultUnscheduleBtn")?.addEventListener("click", () => vaultAction("/api/vault/backup/unschedule"));
 $("#renameWsBtn")?.addEventListener("click", () => {
   renameWorkspaceUi(matchBoundRepo() || state.status?.repo);
 });

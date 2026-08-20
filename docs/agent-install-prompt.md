@@ -34,6 +34,7 @@ Steps:
 4. Confirm in one short paragraph: platform installed, DB path, claim count, and that memory is local-only.
 5. Suggest `amem ui` — Setup scans local git repos; Brain shows pending session / miss→learn drafts (approve/dismiss), edit/pin/delete; optional login service keeps the UI on localhost after reboot.
 6. Optional: `amem init --personal` for cross-repo prefs; `amem lock` / `amem backup schedule` for encrypt-at-rest and local encrypted backups (still no cloud).
+7. Every MCP host must follow the remember contract (`amem recipe` or docs/remember-contract.md): call `amem_context` first, then `amem_remember` after durable outcomes. Do not treat a successful read as a substitute for writing.
 
 Do not echo proprietary prompting strategy into claims. Store only durable repo facts with file anchors.
 When correcting an old fact under a new claim id, use `"supersedes": ["claim.old_id"]`.

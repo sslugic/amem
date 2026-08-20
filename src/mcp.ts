@@ -37,6 +37,12 @@ const TOOLS = [
     },
   },
   {
+    name: "amem_recipe",
+    description:
+      "Return the generic amem remember contract: when to call amem_context vs amem_remember. Use if you are unsure whether to read or write memory. Same recipe for every MCP host.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
     name: "amem_remember",
     description: "Store a durable local fact in amem (stays on this machine).",
     inputSchema: {
@@ -224,6 +230,12 @@ function callTool(name: string, args: Record<string, unknown>, fallbackWorkspace
     }
     const body = result.body as { markdown?: string };
     return textResult(body.markdown || JSON.stringify(result.body));
+  }
+  if (name === "amem_recipe") {
+    const result = api("GET", "/api/recipe", null);
+    if (result.status >= 400) return apiResult(result);
+    const contract = result.body as { paste?: string; markdown?: string };
+    return textResult(contract.paste || contract.markdown || JSON.stringify(result.body));
   }
   if (name === "amem_remember") {
     const text = typeof args.text === "string" ? args.text : "";

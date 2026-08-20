@@ -63,6 +63,8 @@ import {
   writeBackupHelperScript,
   backupSchedulePath,
 } from "./backup-schedule.js";
+import { rememberContract } from "./remember-contract.js";
+import { vaultStatus } from "./vault.js";
 
 function usage(): never {
   console.log(`amem — local personal agent memory
@@ -77,6 +79,7 @@ Usage:
   amem doctor [--attest] [--json]
   amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna]
   amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>]
+  amem recipe [--json]
   amem propose validate <file.json>
   amem propose diff <file.json>
   amem propose apply <file.json>
@@ -91,6 +94,7 @@ Usage:
   amem session touch --platform cursor|claude [--session-id <id>]
   amem hook
   amem usage report --saved <n> [--platform cursor|claude] [--event-id <id>]
+  amem usage export [--format json|md|pdf] [--days 30] [--scope current|all] [--out <file>]
   amem ui [--port 7843] [--no-open]
   amem service install|uninstall|status
   amem mcp [--print-config] [--workspace <name>]
@@ -199,6 +203,7 @@ async function main(): Promise<void> {
         }
         console.log(`Memory DB: ${dbPath()}`);
         console.log("Next: amem ui   or   amem context \"What should I know?\"");
+        console.log("Host recipe (any MCP client): amem recipe");
         console.log("npx: once published, `npx amem setup` works the same (Node 20+, native better-sqlite3).");
         break;
       }
@@ -305,7 +310,11 @@ async function main(): Promise<void> {
         console.log(`export:   ${policy.allow_export ? "allowed" : "blocked by policy"}`);
         console.log(`ui:       ${policy.ui_enabled ? `enabled (${policy.ui_bind})` : "disabled by policy"}`);
         console.log(`auto-apply kinds: ${(policy.auto_apply_kinds ?? []).join(", ") || "(none)"}`);
+        const vault = vaultStatus();
         console.log(`backup schedule: ${isBackupScheduleInstalled() ? backupSchedulePath() : "not installed"}`);
+        console.log(
+          `last backup: ${vault.backup.last ? `${vault.backup.last.name} (${vault.backup.last.mtime})` : "none"}`,
+        );
         if (!repo) {
           console.log("binding:  not initialized");
         } else {
@@ -428,6 +437,15 @@ async function main(): Promise<void> {
         }
         const remembered = result.body as { claimId?: string; workspace?: string };
         console.log(`Remembered ${remembered.claimId} in ${remembered.workspace || repo.repo_name}`);
+        break;
+      }
+      case "recipe": {
+        const contract = rememberContract();
+        if (flags.get("json")) {
+          console.log(JSON.stringify(contract, null, 2));
+        } else {
+          console.log(contract.paste);
+        }
         break;
       }
       case "propose": {
@@ -607,9 +625,49 @@ async function main(): Promise<void> {
       }
       case "usage": {
         const sub = positional[1];
+        if (sub === "export") {
+          const format = flagString(flags, "format") ?? "json";
+          const days = flagString(flags, "days") ?? "30";
+          const scope = flagString(flags, "scope") ?? "current";
+          const repo = scope === "all" ? null : resolveBinding(flags);
+          const result = handleApi({
+            method: "GET",
+            pathname: "/api/usage/export",
+            searchParams: new URLSearchParams({
+              format,
+              days,
+              scope,
+              ...(repo ? { repo: repo.id } : {}),
+            }),
+            body: null,
+            cwd: process.cwd(),
+          });
+          if (result.status >= 400) {
+            throw new Error((result.body as { error?: string }).error || "export failed");
+          }
+          const payload = result.body as {
+            filename?: string;
+            markdown?: string;
+            contentBase64?: string;
+            report?: unknown;
+          };
+          const out =
+            flagString(flags, "out") ||
+            join(process.cwd(), payload.filename || `amem-savings.${format}`);
+          if (payload.contentBase64) {
+            writeFileSync(out, Buffer.from(payload.contentBase64, "base64"));
+          } else if (payload.markdown) {
+            writeFileSync(out, payload.markdown, "utf8");
+          } else {
+            writeFileSync(out, JSON.stringify(payload.report ?? payload, null, 2), "utf8");
+          }
+          console.log(`Wrote savings export to ${out}`);
+          console.log("Proxy only — not a Cursor or model bill.");
+          break;
+        }
         if (sub !== "report") {
           throw new Error(
-            "Usage: amem usage report --saved <n> [--platform cursor|claude] [--event-id <id>]",
+            "Usage: amem usage report --saved <n> | amem usage export [--format json|md|pdf]",
           );
         }
         const savedRaw = flagString(flags, "saved");

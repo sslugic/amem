@@ -410,13 +410,25 @@ try {
     throw new Error("stop hook should create a pending draft for approval");
   }
   const draftId = pendingDrafts[0].id;
-  const applyDraft = handleApi({
+  if (!pendingDrafts[0].quality) {
+    throw new Error("pending draft should include a quality score");
+  }
+  let applyDraft = handleApi({
     method: "POST",
     pathname: "/api/drafts/apply",
     searchParams: new URLSearchParams(),
     body: { id: draftId },
     cwd: repoDir,
   });
+  if (applyDraft.status === 409) {
+    applyDraft = handleApi({
+      method: "POST",
+      pathname: "/api/drafts/apply",
+      searchParams: new URLSearchParams(),
+      body: { id: draftId, resolve: "keep" },
+      cwd: repoDir,
+    });
+  }
   if (applyDraft.status !== 200) {
     throw new Error(`draft apply failed: ${JSON.stringify(applyDraft.body)}`);
   }

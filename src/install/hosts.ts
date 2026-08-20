@@ -33,10 +33,15 @@ export function installWindsurf(workspace = "personal"): HostInstallResult {
   };
 }
 
-/** Continue.dev: ~/.continue/config.json mcpServers (Continue 1.x). */
+function continueMcpYamlPath(): string {
+  return join(homedir(), ".continue", "mcpServers", "amem.yaml");
+}
+
+/** Continue.dev: ~/.continue/config.json plus mcpServers/amem.yaml (1.x HTTP). */
 export function installContinue(workspace = "personal"): HostInstallResult {
   const dir = join(homedir(), ".continue");
   ensureDir(dir);
+  ensureDir(join(dir, "mcpServers"));
   const path = join(dir, "config.json");
   const existing = existsSync(path) ? readJsonObject(path) : { models: [] };
   const experimental = (existing.experimental as Record<string, unknown>) ?? {};
@@ -53,10 +58,22 @@ export function installContinue(workspace = "personal"): HostInstallResult {
   });
   experimental.modelContextProtocolServers = filtered;
   writeJson(path, { ...existing, experimental });
+  const yaml = continueMcpYamlPath();
+  writeFileSync(
+    yaml,
+    `name: amem
+type: sse
+url: ${cfg.http.url}
+`,
+    "utf8",
+  );
   return {
     host: "continue",
-    paths: [path],
-    notes: [`Continue MCP amem → ${cfg.http.url}. Keep amem ui running.`],
+    paths: [path, yaml],
+    notes: [
+      `Continue MCP amem → ${cfg.http.url}. Keep amem ui running.`,
+      `Drop-in: ${yaml}`,
+    ],
   };
 }
 
@@ -99,13 +116,14 @@ export function installZed(workspace = "personal"): HostInstallResult {
   const existing = existsSync(path) ? readJsonObject(path) : {};
   const servers = (existing.context_servers as Record<string, unknown>) ?? {};
   const amem = resolveAmemBin();
+  const cfg = mcpClientConfig(workspace);
   servers.amem = {
+    source: "custom",
     command: amem.split(/\s+/)[0],
     args: amem.split(/\s+/).slice(1).concat(["mcp", "--workspace", workspace]),
     env: {},
+    url: cfg.http.url,
   };
-  // Also store HTTP hint
-  const cfg = mcpClientConfig(workspace);
   writeJson(path, {
     ...existing,
     context_servers: servers,
@@ -115,9 +133,60 @@ export function installZed(workspace = "personal"): HostInstallResult {
     host: "zed",
     paths: [path],
     notes: [
-      `Zed context_servers.amem configured. Prefer HTTP ${cfg.http.url} while amem ui is running.`,
+      `Zed context_servers.amem → ${cfg.http.url} (HTTP while amem ui runs; command is the fallback).`,
     ],
   };
+}
+
+function fileMentionsAmem(path: string): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    return readFileSync(path, "utf8").includes("amem");
+  } catch {
+    return false;
+  }
+}
+
+export function continueInstallHealth(): string[] {
+  const json = join(homedir(), ".continue", "config.json");
+  const yaml = continueMcpYamlPath();
+  if (!fileMentionsAmem(json) && !fileMentionsAmem(yaml)) {
+    return ["Continue has no amem MCP entry — run amem init --platform continue"];
+  }
+  return [];
+}
+
+export function zedInstallHealth(): string[] {
+  const dir =
+    process.platform === "darwin"
+      ? join(homedir(), "Library", "Application Support", "Zed")
+      : join(homedir(), ".config", "zed");
+  const path = join(dir, "settings.json");
+  if (!fileMentionsAmem(path)) {
+    return ["Zed settings have no amem context server — run amem init --platform zed"];
+  }
+  return [];
+}
+
+export function windsurfInstallHealth(): string[] {
+  const path = join(homedir(), ".codeium", "windsurf", "mcp_config.json");
+  if (!fileMentionsAmem(path)) {
+    return ["Windsurf has no amem MCP entry — run amem init --platform windsurf"];
+  }
+  return [];
+}
+
+export function hostInstallHealth(host: string): string[] {
+  switch (host) {
+    case "continue":
+      return continueInstallHealth();
+    case "zed":
+      return zedInstallHealth();
+    case "windsurf":
+      return windsurfInstallHealth();
+    default:
+      return [];
+  }
 }
 
 export function installHost(

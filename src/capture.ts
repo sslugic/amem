@@ -13,6 +13,7 @@ import {
 import { compactClaimText, compactFromNotes, inferClaimKind, isDurableCapture } from "./kinds.js";
 import { loadPolicy } from "./policy.js";
 import { applyProposal, type Proposal } from "./proposal.js";
+import { scoreProposal } from "./draft-quality.js";
 
 const TRIVIAL = /^(ok|okay|yes|yep|no|nah|thanks|thank you|continue|go ahead|sure|please)\.?$/i;
 const SECRET = /password|api[_-]?key|secret|token\s*[:=]|begin (rsa |openssh )?private/i;
@@ -142,6 +143,7 @@ export function captureSessionDraft(input: {
     sourceRef: "session-end-draft",
   });
   if (!built) return null;
+  if (scoreProposal(built.proposal).reject) return null;
 
   return storeDraft({
     repo: input.repo,
@@ -195,6 +197,7 @@ export function captureMissLearnDraft(input: {
   const realAnchors = built.anchors.filter((a) => a !== "README.md");
   if (realAnchors.length === 0) return null;
   built.proposal.claims![0]!.code_anchors = realAnchors;
+  if (scoreProposal(built.proposal).reject) return null;
 
   return storeDraft({
     repo: input.repo,

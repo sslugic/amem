@@ -1,4 +1,3 @@
-import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { applyProposal } from "./proposal.js";
 import {
@@ -8,14 +7,14 @@ import {
   type ClaimRow,
   type RepoRow,
 } from "./db.js";
-import { amemHome } from "./paths.js";
+import { amemHome, tryEnsureDir } from "./paths.js";
 import { workspaceIdentity } from "./repo-identity.js";
 
 export const PERSONAL_SLUG = "personal";
 
 export function personalRoot(): string {
   const dir = join(amemHome(), "workspaces", PERSONAL_SLUG);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  tryEnsureDir(dir);
   return dir;
 }
 

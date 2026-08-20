@@ -20,6 +20,7 @@
           <div class="repo-switcher">
             <select id="repoSelect" aria-label="Git repo or workspace"></select>
             <button class="btn secondary small hidden" id="renameWsBtn" type="button">Rename</button>
+            <button class="btn secondary small" id="personalBtn" type="button">Personal</button>
             <button class="btn secondary small" id="addRepoBtn" type="button">Add repo</button>
           </div>
         </div>
@@ -28,8 +29,33 @@
           <button data-tab="brain">Brain</button>
           <button data-tab="stats">Stats</button>
         </nav>
-        <div class="privacy">Local only · 127.0.0.1</div>
+        <div class="privacy" id="vaultBar">
+          <div class="vault-chips" id="vaultChips"></div>
+          <button class="btn secondary small" id="vaultToggle" type="button">Lock / backup</button>
+          <div class="privacy-label">Local only · 127.0.0.1</div>
+        </div>
       </header>
+      <div id="vaultPanel" class="vault-panel hidden">
+        <div class="vault-panel-inner">
+          <div>
+            <strong>Lock &amp; local backup</strong>
+            <p class="note" style="margin:0.35rem 0 0">AES-256-GCM on this machine. Passphrase never leaves localhost. No cloud.</p>
+          </div>
+          <div class="add-repo-row">
+            <input id="vaultPass" type="password" autocomplete="new-password" placeholder="Passphrase" />
+            <button class="btn" id="vaultLockBtn" type="button">Lock</button>
+            <button class="btn secondary" id="vaultUnlockBtn" type="button">Unlock</button>
+          </div>
+          <div class="add-repo-row">
+            <button class="btn secondary" id="vaultBackupBtn" type="button">Backup now</button>
+            <label class="note" for="vaultHour">Hour</label>
+            <input id="vaultHour" type="number" min="0" max="23" value="3" />
+            <button class="btn secondary" id="vaultScheduleBtn" type="button">Schedule daily</button>
+            <button class="btn secondary" id="vaultUnscheduleBtn" type="button">Unschedule</button>
+          </div>
+          <p class="note" id="vaultDetail"></p>
+        </div>
+      </div>
       <div id="addRepoPanel" class="add-repo-panel hidden">
         <label for="addRepoPath">Path to another git repo on this machine</label>
         <div class="add-repo-row">

@@ -28,8 +28,10 @@
     "prepare": "npm run build",
     "amem": "node dist/cli.js",
     "smoke": "node scripts/smoke.mjs",
+    "pack:check": "npm run build && node scripts/check-pack.mjs",
+    "prepublishOnly": "npm test && node scripts/check-pack.mjs",
     "test": "npm run build && node --test --test-concurrency=1 test/**/*.test.mjs",
-    "test:all": "npm run test && npm run smoke"
+    "test:all": "npm run test && npm run smoke && node scripts/check-pack.mjs"
   },
   "engines": {
     "node": ">=20"

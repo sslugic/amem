@@ -101,15 +101,24 @@ function shareAnchor(a: string[], b: string[]): boolean {
   return b.some((x) => set.has(x));
 }
 
+export type ClaimConflict = {
+  claimId: string;
+  otherId: string;
+  otherText: string;
+  similarity: number;
+  sharedAnchors: string[];
+  withinProposal: boolean;
+};
+
 /**
  * Likely conflict: share ≥1 code_anchor and high text overlap, different ids,
  * and the older claim is not explicitly superseded by this proposal.
  */
-export function findConflictWarnings(
+export function findClaimConflicts(
   proposal: Proposal,
   existingActive: ClaimRow[],
-): string[] {
-  const warnings: string[] = [];
+): ClaimConflict[] {
+  const conflicts: ClaimConflict[] = [];
   const supersedeTargets = collectSupersedeTargets(proposal);
   const incomingIds = new Set((proposal.claims ?? []).map((c) => c.id));
 
@@ -120,7 +129,6 @@ export function findConflictWarnings(
     for (const other of existingActive) {
       if (other.id === claim.id) continue;
       if (incomingIds.has(other.id) && (proposal.claims ?? []).some((c) => c.id === other.id)) {
-        // Another claim in the same proposal — check pairwise once (id order)
         continue;
       }
       if (supersedeTargets.get(other.id) === claim.id) continue;
@@ -130,13 +138,17 @@ export function findConflictWarnings(
       if (!shareAnchor(anchors, otherAnchors)) continue;
       const sim = tokenJaccard(claim.text, other.text);
       if (sim >= CONFLICT_JACCARD) {
-        warnings.push(
-          `claim ${claim.id} may conflict with active ${other.id} (shared anchors, text similarity ${(sim * 100).toFixed(0)}%). Add "supersedes": ["${other.id}"] if this replaces it.`,
-        );
+        conflicts.push({
+          claimId: claim.id,
+          otherId: other.id,
+          otherText: other.text,
+          similarity: sim,
+          sharedAnchors: anchors.filter((a) => otherAnchors.includes(a)),
+          withinProposal: false,
+        });
       }
     }
 
-    // Conflicts within the same proposal
     for (const peer of proposal.claims ?? []) {
       if (peer.id <= claim.id) continue;
       const peerAnchors = peer.code_anchors ?? [];
@@ -146,14 +158,44 @@ export function findConflictWarnings(
       }
       const sim = tokenJaccard(claim.text, peer.text ?? "");
       if (sim >= CONFLICT_JACCARD) {
-        warnings.push(
-          `claims ${claim.id} and ${peer.id} look conflicting in the same proposal — set supersedes on the winner.`,
-        );
+        conflicts.push({
+          claimId: claim.id,
+          otherId: peer.id,
+          otherText: peer.text ?? "",
+          similarity: sim,
+          sharedAnchors: anchors.filter((a) => peerAnchors.includes(a)),
+          withinProposal: true,
+        });
       }
     }
   }
 
-  return warnings;
+  return conflicts;
+}
+
+export function findConflictWarnings(
+  proposal: Proposal,
+  existingActive: ClaimRow[],
+): string[] {
+  return findClaimConflicts(proposal, existingActive).map((c) =>
+    c.withinProposal
+      ? `claims ${c.claimId} and ${c.otherId} look conflicting in the same proposal — set supersedes on the winner.`
+      : `claim ${c.claimId} may conflict with active ${c.otherId} (shared anchors, text similarity ${(c.similarity * 100).toFixed(0)}%). Add "supersedes": ["${c.otherId}"] if this replaces it.`,
+  );
+}
+
+/** Attach supersede targets to the first claim (Brain “replace older facts”). */
+export function applySupersedes(proposal: Proposal, otherIds: string[]): Proposal {
+  const extra = [...new Set(otherIds.filter((id) => id.trim()))];
+  if (extra.length === 0) return proposal;
+  const claims = (proposal.claims ?? []).map((claim, index) => {
+    if (index !== 0) return claim;
+    return {
+      ...claim,
+      supersedes: [...new Set([...normalizeSupersedes(claim), ...extra.filter((id) => id !== claim.id)])],
+    };
+  });
+  return { ...proposal, claims };
 }
 
 export function validateProposal(

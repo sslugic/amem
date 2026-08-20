@@ -29,19 +29,26 @@ import {
   upsertSetupState,
   wipeRepo,
   openDb,
+  closeDb,
   type RepoRow,
   type UsageEventRow,
 } from "../db.js";
 import { buildContext, decorateUsageEvents, renderContextMarkdown } from "../context.js";
 import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
-import { installHost } from "../install/hosts.js";
+import { hostInstallHealth, installHost } from "../install/hosts.js";
+import { decorateDraft, decorateDrafts } from "../draft-quality.js";
+import {
+  buildSavingsExport,
+  formatSavingsMarkdown,
+  savingsPdf,
+} from "../savings-export.js";
 import {
   assertPlatformAllowed,
   assertRemoteAllowed,
   loadPolicy,
 } from "../policy.js";
-import { applyProposal, parseProposalJson, validateProposal } from "../proposal.js";
+import { applyProposal, applySupersedes, parseProposalJson, validateProposal } from "../proposal.js";
 import {
   detectRepoIdentity,
   normalizeRemoteUrl,
@@ -63,6 +70,18 @@ import {
   uninstallLoginService,
 } from "../service.js";
 import { searchClaimsFts, tokenize } from "../search.js";
+import { rememberContract } from "../remember-contract.js";
+import { vaultStatus } from "../vault.js";
+import {
+  createBackup,
+  lockDatabase,
+  unlockDatabase,
+} from "../crypto.js";
+import {
+  installBackupSchedule,
+  uninstallBackupSchedule,
+} from "../backup-schedule.js";
+import { ensurePersonalWorkspace, PERSONAL_SLUG } from "../personal.js";
 
 export type ApiRequest = {
   method: string;
@@ -142,6 +161,7 @@ function summarizeRepo(r: RepoRow) {
     platform: r.platform,
     kind: slug ? "workspace" : "git",
     slug,
+    personal: slug === PERSONAL_SLUG,
     setup_completed: Boolean(setup?.setup_completed_at),
     counts: {
       claims: listClaims(r.id).length,
@@ -177,6 +197,11 @@ function statusPayload(identity: RepoIdentity, repo: RepoRow | null) {
         }
       : null,
     repos: listRepos().map(summarizeRepo),
+    vault: vaultStatus(),
+    recipe: {
+      version: rememberContract().version,
+      mcpUrlTemplate: rememberContract().mcpUrlTemplate,
+    },
   };
 }
 
@@ -199,6 +224,11 @@ function doctorIssues(repo: RepoRow | null, rootPath: string): string[] {
   }
   if (platforms.includes("claude") || repo.platform === "claude") {
     issues.push(...claudeInstallHealth());
+  }
+  for (const host of ["continue", "zed", "windsurf"]) {
+    if (platforms.includes(host) || repo.platform === host) {
+      issues.push(...hostInstallHealth(host));
+    }
   }
   if (platforms.length === 0) {
     issues.push(...cursorInstallHealth(rootPath));
@@ -492,8 +522,112 @@ function runRemember(repo: RepoRow, body: unknown): ApiResponse {
   });
 }
 
+function bodyNumber(body: unknown, key: string): number | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const value = (body as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function runVaultLock(body: unknown): ApiResponse {
+  const passphrase = bodyField(body, "passphrase");
+  if (!passphrase) return err(400, "passphrase required");
+  try {
+    closeDb();
+    const result = lockDatabase(passphrase);
+    return ok({ ...vaultStatus(), ...result });
+  } catch (error) {
+    return err(400, error instanceof Error ? error.message : String(error));
+  }
+}
+
+function runVaultUnlock(body: unknown): ApiResponse {
+  const passphrase = bodyField(body, "passphrase");
+  if (!passphrase) return err(400, "passphrase required");
+  try {
+    closeDb();
+    const result = unlockDatabase(passphrase);
+    openDb();
+    return ok({ ...vaultStatus(), ...result });
+  } catch (error) {
+    return err(400, error instanceof Error ? error.message : String(error));
+  }
+}
+
+function runVaultBackup(body: unknown): ApiResponse {
+  try {
+    const result = createBackup({
+      passphrase: bodyField(body, "passphrase"),
+      label: bodyField(body, "label"),
+      outDir: bodyField(body, "outDir"),
+    });
+    return ok({ ...result, vault: vaultStatus() });
+  } catch (error) {
+    return err(400, error instanceof Error ? error.message : String(error));
+  }
+}
+
+function runVaultSchedule(body: unknown): ApiResponse {
+  try {
+    const hour = bodyNumber(body, "hour");
+    const result = installBackupSchedule({
+      outDir: bodyField(body, "outDir"),
+      hour,
+    });
+    return ok({ ...result, vault: vaultStatus() });
+  } catch (error) {
+    return err(400, error instanceof Error ? error.message : String(error));
+  }
+}
+
 export function handleApi(req: ApiRequest): ApiResponse {
   const { method, pathname, searchParams, body, cwd } = req;
+
+  if (method === "GET" && pathname === "/api/recipe") {
+    return ok(rememberContract());
+  }
+
+  if (method === "GET" && pathname === "/api/vault") {
+    return ok(vaultStatus());
+  }
+
+  if (method === "POST" && pathname === "/api/vault/lock") {
+    return runVaultLock(body);
+  }
+
+  if (method === "POST" && pathname === "/api/vault/unlock") {
+    return runVaultUnlock(body);
+  }
+
+  if (method === "POST" && pathname === "/api/vault/backup") {
+    return runVaultBackup(body);
+  }
+
+  if (method === "POST" && pathname === "/api/vault/backup/schedule") {
+    return runVaultSchedule(body);
+  }
+
+  if (method === "POST" && pathname === "/api/vault/backup/unschedule") {
+    try {
+      const result = uninstallBackupSchedule();
+      return ok({ ...result, vault: vaultStatus() });
+    } catch (error) {
+      return err(400, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/workspaces/personal") {
+    const platform = bodyField(body, "platform") ?? "app";
+    const repo = ensurePersonalWorkspace(platform);
+    upsertSetupState(repo.id, [platform], true);
+    return ok({
+      workspace: PERSONAL_SLUG,
+      name: repo.repo_name,
+      repo: summarizeRepo(repo),
+      mcp: {
+        url: `http://127.0.0.1:7843/mcp?workspace=${encodeURIComponent(PERSONAL_SLUG)}`,
+      },
+    });
+  }
 
   if (method === "GET" && pathname === "/api/repos") {
     return ok({ repos: listRepos().map(summarizeRepo) });
@@ -692,7 +826,7 @@ export function handleApi(req: ApiRequest): ApiResponse {
       flows: listFlows(repo.id),
       claims: listClaims(repo.id),
       edges: listEdges(repo.id),
-      drafts: listProposalDrafts(repo.id, { status: "pending", limit: 30 }),
+      drafts: decorateDrafts(listProposalDrafts(repo.id, { status: "pending", limit: 30 })),
       recentClaimIds: [...recentClaimIds],
       recentEvents: events.slice(0, 30),
       activity: buildActivityGraph({
@@ -705,7 +839,15 @@ export function handleApi(req: ApiRequest): ApiResponse {
   if (method === "GET" && pathname === "/api/drafts") {
     if (!repo) return err(400, "Repo not initialized");
     const status = searchParams.get("status") ?? "pending";
-    return ok({ drafts: listProposalDrafts(repo.id, { status, limit: 50 }) });
+    return ok({ drafts: decorateDrafts(listProposalDrafts(repo.id, { status, limit: 50 })) });
+  }
+
+  if (method === "POST" && pathname === "/api/drafts/reject-noisy") {
+    if (!repo) return err(400, "Repo not initialized");
+    const pending = decorateDrafts(listProposalDrafts(repo.id, { status: "pending", limit: 80 }));
+    const noisy = pending.filter((d) => d.quality.reject);
+    for (const d of noisy) setProposalDraftStatus(d.id, "dismissed");
+    return ok({ dismissed: noisy.map((d) => d.id), count: noisy.length });
   }
 
   if (method === "POST" && pathname === "/api/drafts/apply") {
@@ -721,10 +863,30 @@ export function handleApi(req: ApiRequest): ApiResponse {
     } catch (error) {
       return err(400, error instanceof Error ? error.message : String(error));
     }
+    const decorated = decorateDraft(draft);
+    const liveConflicts = decorated.conflicts.filter((c) => !c.withinProposal);
+    const resolve = bodyField(body, "resolve");
+    if (liveConflicts.length > 0 && resolve !== "supersede" && resolve !== "keep") {
+      return {
+        status: 409,
+        body: {
+          error: "Draft conflicts with existing facts. Pass resolve=supersede or resolve=keep.",
+          conflicts: liveConflicts,
+          quality: decorated.quality,
+          draft: decorated,
+        },
+      };
+    }
+    if (resolve === "supersede") {
+      proposal = applySupersedes(
+        proposal,
+        liveConflicts.map((c) => c.otherId),
+      );
+    }
     const policy = loadPolicy().policy;
     const applied = applyProposal(repo.id, proposal, policy);
     setProposalDraftStatus(draftId, "applied");
-    return ok({ applied, draft: getProposalDraft(draftId) });
+    return ok({ applied, draft: getProposalDraft(draftId), resolve: resolve ?? "keep" });
   }
 
   if (method === "POST" && pathname === "/api/drafts/dismiss") {
@@ -809,6 +971,41 @@ export function handleApi(req: ApiRequest): ApiResponse {
     const removed = deleteClaim(repo.id, id);
     if (!removed) return err(404, "Claim not found");
     return ok({ deleted: id });
+  }
+
+  if (method === "GET" && pathname === "/api/usage/export") {
+    const scope = searchParams.get("scope") ?? "current";
+    const days = Number(searchParams.get("days") ?? "30");
+    const format = (searchParams.get("format") || "json").toLowerCase();
+    let events: UsageEventRow[];
+    if (scope === "all") {
+      events = decorateUsageEvents(listUsageEvents({ days }));
+    } else {
+      if (!repo) return err(400, "Repo not initialized");
+      events = decorateUsageEvents(listUsageEvents({ repoId: repo.id, days }));
+    }
+    const report = buildSavingsExport({
+      scope,
+      days,
+      repoName: repo?.repo_name,
+      aggregate: aggregateUsage(events, days),
+    });
+    if (format === "md" || format === "markdown") {
+      return ok({
+        filename: `${report.filenameBase}.md`,
+        markdown: formatSavingsMarkdown(report),
+        report,
+      });
+    }
+    if (format === "pdf") {
+      return ok({
+        filename: `${report.filenameBase}.pdf`,
+        mime: "application/pdf",
+        contentBase64: savingsPdf(report).toString("base64"),
+        report,
+      });
+    }
+    return ok({ filename: `${report.filenameBase}.json`, report });
   }
 
   if (method === "GET" && pathname === "/api/usage") {
