@@ -28,6 +28,16 @@ export function estimateMsSaved(input: { anchorsCount: number; claimsCount: numb
   return Math.max(0, input.anchorsCount * MS_PER_FILE_ROUNDTRIP + input.claimsCount * MS_PER_CLAIM);
 }
 
+/** Mid-range frontier *input* $/1M tokens (Sonnet-class). Avoided exploration is input-side. Not a bill. */
+export const USD_PER_MILLION_INPUT_TOKENS = 3;
+
+export function estimateUsdSaved(
+  tokens: number,
+  usdPerMillion = USD_PER_MILLION_INPUT_TOKENS,
+): number {
+  return Math.max(0, (Number(tokens) / 1_000_000) * usdPerMillion);
+}
+
 export function eventKind(claimsCount: number, notesCount = 0): "local_hit" | "server_trip" {
   return claimsCount > 0 || notesCount > 0 ? "local_hit" : "server_trip";
 }
@@ -41,9 +51,14 @@ export function metricsFromPacket(packet: ContextPacket, markdown: string): {
   estimatedMsSaved: number;
   kind: "local_hit" | "server_trip";
 } {
+  const matchedClaims = packet.claims.filter((c) => c.score > 0);
+  const matchedNotes = packet.notes.filter((n) => n.score > 0);
+  const kind: "local_hit" | "server_trip" =
+    matchedClaims.length > 0 || matchedNotes.length > 0 ? "local_hit" : "server_trip";
+  const scored = kind === "local_hit" ? matchedClaims : [];
   const claimIds = packet.claims.map((c) => c.id);
   const anchorSet = new Set<string>();
-  for (const claim of packet.claims) {
+  for (const claim of scored) {
     try {
       const anchors = JSON.parse(claim.code_anchors) as string[];
       for (const a of anchors) anchorSet.add(a);
@@ -51,20 +66,23 @@ export function metricsFromPacket(packet: ContextPacket, markdown: string): {
       // ignore
     }
   }
-  for (const component of packet.components) {
-    if (component.code_anchor) anchorSet.add(component.code_anchor);
+  if (kind === "local_hit") {
+    for (const component of packet.components) {
+      if (component.code_anchor) anchorSet.add(component.code_anchor);
+    }
   }
   const anchorsCount = anchorSet.size;
-  const claimsCount = packet.claims.length;
+  const claimsCount = scored.length;
   const packetTokens = estimateTokensFromText(markdown);
-  const estimatedTokensSaved = estimateTokensSaved({
-    anchorsCount,
-    claimsCount,
-    packetTokens,
-  });
-  const notesCount = packet.notes.length;
-  const estimatedMsSaved = estimateMsSaved({ anchorsCount, claimsCount });
-  const kind = eventKind(claimsCount, notesCount);
+  const estimatedTokensSaved =
+    kind === "local_hit"
+      ? estimateTokensSaved({
+          anchorsCount,
+          claimsCount,
+          packetTokens,
+        })
+      : 0;
+  const estimatedMsSaved = kind === "local_hit" ? estimateMsSaved({ anchorsCount, claimsCount }) : 0;
   return {
     claimIds,
     anchorsCount,

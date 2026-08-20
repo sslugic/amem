@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { createHash } from "node:crypto";
-import { metricsFromPacket } from "../estimate.js";
+import { estimateUsdSaved, metricsFromPacket, USD_PER_MILLION_INPUT_TOKENS } from "../estimate.js";
 import { buildActivityGraph, speedForEvent } from "../activity.js";
 import {
   getRepoByCwd,
@@ -32,7 +32,7 @@ import {
   type RepoRow,
   type UsageEventRow,
 } from "../db.js";
-import { buildContext, renderContextMarkdown } from "../context.js";
+import { buildContext, decorateUsageEvents, renderContextMarkdown } from "../context.js";
 import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
 import { installHost } from "../install/hosts.js";
@@ -51,7 +51,7 @@ import {
   type RepoIdentity,
 } from "../repo-identity.js";
 import { HOST_INSTALL_IDS, KNOWN_PLATFORMS, normalizePlatforms } from "../platforms.js";
-import { amemHome, dbPath } from "../paths.js";
+import { amemHome, amemHomeWriteIssue, dbPath, tryEnsureDir } from "../paths.js";
 import { buildAttestReport } from "../attest.js";
 import { scanGitRepos } from "../scan.js";
 import { provisionWorkspace } from "../workspace-setup.js";
@@ -165,7 +165,9 @@ function statusPayload(identity: RepoIdentity, repo: RepoRow | null) {
     setup,
     policy: loaded.policy,
     clients: KNOWN_PLATFORMS,
-    doctor: doctorIssues(repo, identity.rootPath),
+    doctor: [amemHomeWriteIssue(), ...doctorIssues(repo, identity.rootPath)].filter(
+      (issue): issue is string => Boolean(issue),
+    ),
     counts: repo
       ? {
           claims: listClaims(repo.id).length,
@@ -221,6 +223,7 @@ function projectMonthly(events: UsageEventRow[], windowDays: number) {
     trendDays: 0,
     sampleQueries: 0,
     estimatedTokensSaved: 0,
+    estimatedUsdSaved: 0,
     estimatedMsSaved: 0,
     queries: 0,
     anchorsAvoided: 0,
@@ -250,6 +253,7 @@ function projectMonthly(events: UsageEventRow[], windowDays: number) {
     trendDays,
     sampleQueries: sample.length,
     estimatedTokensSaved: Math.round(tokens * scale),
+    estimatedUsdSaved: estimateUsdSaved(Math.round(tokens * scale)),
     estimatedMsSaved: Math.round(ms * scale),
     queries: Math.round(sample.length * scale),
     anchorsAvoided: Math.round(anchors * scale),
@@ -353,15 +357,27 @@ function aggregateUsage(events: UsageEventRow[], windowDays = 30) {
   }
 
   const queries = events.length;
+  const estimatedTokensSaved = events.reduce((s, e) => s + e.estimated_tokens_saved, 0);
   return {
+    pricing: {
+      usdPerMillionInputTokens: USD_PER_MILLION_INPUT_TOKENS,
+      basis: "input",
+    },
     byPlatform: Object.values(byPlatform).map((p) => ({
       ...p,
+      estimatedUsdSaved: estimateUsdSaved(p.estimatedTokensSaved),
       avgLocalMs: p.localMsSamples ? Math.round(p.localMsTotal / p.localMsSamples) : null,
     })),
-    byDay: Object.values(byDay).sort((a, b) => a.day.localeCompare(b.day)),
+    byDay: Object.values(byDay)
+      .sort((a, b) => a.day.localeCompare(b.day))
+      .map((d) => ({
+        ...d,
+        estimatedUsdSaved: estimateUsdSaved(d.estimatedTokensSaved),
+      })),
     totals: {
       queries,
-      estimatedTokensSaved: events.reduce((s, e) => s + e.estimated_tokens_saved, 0),
+      estimatedTokensSaved,
+      estimatedUsdSaved: estimateUsdSaved(estimatedTokensSaved),
       reportedTokensSaved: events.reduce((s, e) => s + (e.reported_tokens_saved ?? 0), 0),
       estimatedMsSaved,
       localHits,
@@ -386,7 +402,7 @@ function createWorkspace(body: unknown): ApiResponse {
   const platform = bodyField(body, "platform") ?? "app";
   const rawPath = bodyField(body, "path");
   const root = rawPath ? resolve(rawPath) : join(amemHome(), "workspaces", slug);
-  mkdirSync(root, { recursive: true });
+  tryEnsureDir(root);
   const identity = workspaceIdentity(slug, root);
   const created = upsertRepo(identity, platform);
   const repo = name.trim() === slug ? created : renameWorkspace(created.id, name.trim());
@@ -662,7 +678,7 @@ export function handleApi(req: ApiRequest): ApiResponse {
   if (method === "GET" && pathname === "/api/graph") {
     if (!repo) return err(400, "Repo not initialized");
     const days = Number(searchParams.get("days") ?? "30");
-    const events = listUsageEvents({ repoId: repo.id, days });
+    const events = decorateUsageEvents(listUsageEvents({ repoId: repo.id, days }));
     const recentClaimIds = new Set<string>();
     for (const e of events.slice(0, 20)) {
       try {
@@ -800,10 +816,10 @@ export function handleApi(req: ApiRequest): ApiResponse {
     const days = Number(searchParams.get("days") ?? "30");
     let events: UsageEventRow[];
     if (scope === "all") {
-      events = listUsageEvents({ days });
+      events = decorateUsageEvents(listUsageEvents({ days }));
     } else {
       if (!repo) return err(400, "Repo not initialized");
-      events = listUsageEvents({ repoId: repo.id, days });
+      events = decorateUsageEvents(listUsageEvents({ repoId: repo.id, days }));
     }
     return ok({
       scope,

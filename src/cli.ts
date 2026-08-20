@@ -24,7 +24,7 @@ import { handleHookPayload } from "./hook.js";
 import { installClaude, claudeInstallHealth } from "./install/claude.js";
 import { installCursor, cursorInstallHealth } from "./install/cursor.js";
 import { installHost } from "./install/hosts.js";
-import { amemHome, dbPath } from "./paths.js";
+import { amemHome, dbPath, tryEnsureDir } from "./paths.js";
 import {
   assertExportAllowed,
   assertPlatformAllowed,
@@ -217,7 +217,7 @@ async function main(): Promise<void> {
           const platform = flagString(flags, "platform") ?? "app";
           const slugPath = join(amemHome(), "workspaces", workspace.toLowerCase());
           const root = resolve(flagString(flags, "path") ?? slugPath);
-          mkdirSync(root, { recursive: true });
+          tryEnsureDir(root);
           const identity = workspaceIdentity(workspace, root);
           const repo = upsertRepo(identity, platform);
           upsertSetupState(repo.id, [platform], true);

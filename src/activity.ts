@@ -218,12 +218,12 @@ export function buildActivityGraph(input: {
       push({
         id,
         type: "server_trip",
-        label: "server trip",
+        label: "miss",
         detail: {
           query: e.query,
           created_at: e.created_at,
           platform: e.platform,
-          note: "amem had no useful packet, so the agent had to explore via tools / the model.",
+          note: "No keyword match. Fallback facts may still have been injected; the model call still happened.",
         },
       });
       link(sid, id, "trip");

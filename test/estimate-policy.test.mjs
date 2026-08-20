@@ -38,10 +38,12 @@ describe("estimate", () => {
       claims: [
         {
           id: "claim.a",
+          score: 4,
           code_anchors: JSON.stringify(["src/a.ts", "src/b.ts"]),
         },
         {
           id: "claim.b",
+          score: 2,
           code_anchors: JSON.stringify(["src/a.ts"]),
         },
       ],

@@ -232,9 +232,9 @@ Automatic estimate:
 estimated_avoided = max(0, anchors×4000 + claims×200 − packet_tokens)
 ```
 
-This is a **proxy** for exploration avoided — not your Cursor/Anthropic bill.
+This is a **proxy** for exploration avoided — not your Cursor/Anthropic bill. Money uses the same token proxy at **$3 per 1M input tokens** (Sonnet-class input). Cursor included usage and output tokens are not billed this way, so treat `$` as an order-of-magnitude estimate.
 
-Time saved is a separate proxy: each returned file anchor is treated as ~1.2s of tool round-trip the agent did not have to make. Local lookup duration is measured (SQLite on localhost). A **server trip** in the brain map is a miss: amem had nothing useful, so the agent had to explore.
+Time saved is a separate proxy: each returned file anchor is treated as ~1.2s of tool round-trip the agent did not have to make. Local lookup duration is measured (SQLite on localhost). **Hit rate** is keyword matches on `amem context` — not Cursor/model API calls (those still happen). A **miss** means no stored fact matched the query; newest facts may still be injected as a weak fallback, and the agent still talks to the model.
 
 Stats also shows a **monthly projection**: last 7 days of calls (or fewer if you just started), scaled to 30 days. Still a proxy, not a bill.
 

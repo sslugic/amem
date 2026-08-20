@@ -186,6 +186,12 @@ try {
   if (!(usage.body.aggregate.totals.estimatedMsSaved > 0)) {
     throw new Error("expected estimated time savings");
   }
+  if (!(usage.body.aggregate.totals.estimatedUsdSaved > 0)) {
+    throw new Error("expected estimated money savings");
+  }
+  if (usage.body.aggregate.pricing?.usdPerMillionInputTokens !== 3) {
+    throw new Error("expected $3/1M input pricing on stats");
+  }
   if (usage.body.aggregate.totals.avgLocalMs == null) {
     throw new Error("expected measured local lookup ms");
   }
@@ -194,6 +200,28 @@ try {
   }
   if (!(usage.body.aggregate.monthly?.queries > 0)) {
     throw new Error("expected monthly call projection");
+  }
+  if (!usage.body.events.some((e) => e.kind === "local_hit")) {
+    throw new Error("expected a keyword hit for 'api boot'");
+  }
+
+  console.log(run(["context", "zzzzqwxnonmatchtoken999", "--platform", "cursor"]));
+  const usageMiss = handleApi({
+    method: "GET",
+    pathname: "/api/usage",
+    searchParams: new URLSearchParams("repo=current&days=30"),
+    body: null,
+    cwd: repoDir,
+  });
+  const miss = (usageMiss.body.events || []).find((e) => /zzzzqwxnonmatchtoken999/.test(e.query || ""));
+  if (!miss || miss.kind !== "server_trip") {
+    throw new Error(`unmatched query should be a miss: ${JSON.stringify(miss)}`);
+  }
+  if (!(usageMiss.body.aggregate.totals.serverTrips >= 1)) {
+    throw new Error("unmatched query not counted as a miss");
+  }
+  if (usageMiss.body.aggregate.totals.hitRate >= 1) {
+    throw new Error("hit rate still 100% after a miss");
   }
 
   const status = handleApi({

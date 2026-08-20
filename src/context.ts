@@ -10,6 +10,7 @@ import {
   type ComponentRow,
   type ConversationNoteRow,
   type FlowRow,
+  type UsageEventRow,
 } from "./db.js";
 import {
   assessClaimFreshness,
@@ -234,6 +235,43 @@ function freshnessLabel(status: FreshnessStatus): string | null {
     default:
       return null;
   }
+}
+
+/** Keyword match only. Fallback packets (score 0) are misses — the model call still happens. */
+export function classifyLookup(query: string, claims: ClaimRow[]): "local_hit" | "server_trip" {
+  const tokens = tokenize(query);
+  if (tokens.length === 0) return "server_trip";
+  return claims.some((c) => keywordScoreClaim(c, tokens) > 0) ? "local_hit" : "server_trip";
+}
+
+export function decorateUsageEvent(e: UsageEventRow, claims: ClaimRow[]): UsageEventRow {
+  let ids: string[] = [];
+  try {
+    ids = JSON.parse(e.claim_ids || "[]") as string[];
+  } catch {
+    ids = [];
+  }
+  const subset = ids.length ? claims.filter((c) => ids.includes(c.id)) : [];
+  const kind = classifyLookup(e.query || "", subset);
+  if (kind === "local_hit") return { ...e, kind };
+  return {
+    ...e,
+    kind,
+    estimated_tokens_saved: 0,
+    estimated_ms_saved: 0,
+  };
+}
+
+export function decorateUsageEvents(events: UsageEventRow[]): UsageEventRow[] {
+  const cache = new Map<string, ClaimRow[]>();
+  return events.map((e) => {
+    let claims = cache.get(e.repo_id);
+    if (!claims) {
+      claims = listClaims(e.repo_id);
+      cache.set(e.repo_id, claims);
+    }
+    return decorateUsageEvent(e, claims);
+  });
 }
 
 export function renderContextMarkdown(packet: ContextPacket): string {

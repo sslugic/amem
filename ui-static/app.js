@@ -1441,6 +1441,13 @@ function formatPct(n) {
   return `${Math.round(Number(n) * 100)}%`;
 }
 
+function formatUsd(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return "$0";
+  if (v < 0.01) return `~$${v.toFixed(3)}`;
+  return `~$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 function formatChartDay(iso) {
   const d = new Date(`${iso}T00:00:00`);
   if (Number.isNaN(d.getTime())) return iso;
@@ -1458,8 +1465,8 @@ function renderStats() {
   const currentDays = String(state.usage?.days ?? 30);
   main.innerHTML = `
     <section class="stats-page">
-      <h1>Token &amp; time savings</h1>
-      <p class="sub">Local lookup time is measured. “Time saved” is a proxy for avoided file/tool round-trips (~1.2s each) — not Cursor/Anthropic latency. Showing ${currentScope === "all" ? "all bound repos" : state.status.repo.repo_name}.</p>
+      <h1>Token, time &amp; money savings</h1>
+      <p class="sub">Local lookup time is measured. Time and money are proxies (avoided file reads / input tokens) — not your Cursor or model bill. Showing ${currentScope === "all" ? "all bound repos" : state.status.repo.repo_name}.</p>
       <div class="filters">
         <select id="scope">
           <option value="current" ${currentScope === "current" ? "selected" : ""}>This repo</option>
@@ -1482,15 +1489,16 @@ function renderStats() {
           <div class="chart-tooltip hidden" id="chartTooltip"></div>
         </div>
       </div>
-      <p class="note">Tokens: max(0, anchors×4000 + claims×200 − packet tokens). Time: anchors×1.2s + claims×80ms. Monthly figures scale the last ${agg?.monthly?.trendDays || "N"} day(s) of calls to 30 days. Hover a bar for that day’s numbers.</p>
+      <p class="note">Tokens: max(0, anchors×4000 + claims×200 − packet tokens). Time: anchors×1.2s + claims×80ms. Money: tokens × $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input tokens (Sonnet-class). Monthly figures scale the last ${agg?.monthly?.trendDays || "N"} day(s) of calls to 30 days. Hover a bar for that day’s numbers.</p>
     </section>`;
 
   const totals = agg?.totals || {};
   const speedCards = $("#speedCards");
   speedCards.innerHTML = `
     <div class="platform-card"><div class="label">Estimated time saved</div><div class="value">~${formatDuration(totals.estimatedMsSaved)}</div><div class="meta">proxy vs tool round-trips · not model latency</div></div>
+    <div class="platform-card"><div class="label">Estimated money saved</div><div class="value">${formatUsd(totals.estimatedUsdSaved)}</div><div class="meta">at $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input tokens · proxy, not a bill</div></div>
     <div class="platform-card"><div class="label">Local lookup</div><div class="value">${totals.avgLocalMs != null ? formatDuration(totals.avgLocalMs) : "—"}</div><div class="meta">measured SQLite / localhost avg</div></div>
-    <div class="platform-card"><div class="label">Hit rate</div><div class="value">${formatPct(totals.hitRate)}</div><div class="meta">${totals.localHits ?? 0} local hits · ${totals.serverTrips ?? 0} server trips</div></div>
+    <div class="platform-card"><div class="label">Hit rate</div><div class="value">${formatPct(totals.hitRate)}</div><div class="meta">${totals.localHits ?? 0} keyword hits · ${totals.serverTrips ?? 0} misses · not model API calls</div></div>
     <div class="platform-card"><div class="label">Avoided file reads</div><div class="value">${formatTokens(totals.anchorsAvoided ?? 0)}</div><div class="meta">unique anchors returned in packets</div></div>`;
 
   const monthly = agg?.monthly || {};
@@ -1498,6 +1506,7 @@ function renderStats() {
   const trend = monthly.trendDays || 0;
   monthlyCards.innerHTML = `
     <div class="platform-card accented"><div class="label">Est. tokens / month</div><div class="value">~${formatTokens(monthly.estimatedTokensSaved ?? 0)}</div><div class="meta">${trend ? `from ${monthly.sampleQueries} calls over ${trend} day${trend === 1 ? "" : "s"} × 30` : "no usage yet"} · proxy, not a bill</div></div>
+    <div class="platform-card accented"><div class="label">Est. $ / month</div><div class="value">${formatUsd(monthly.estimatedUsdSaved)}</div><div class="meta">same token proxy at $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input</div></div>
     <div class="platform-card accented"><div class="label">Est. time / month</div><div class="value">~${formatDuration(monthly.estimatedMsSaved)}</div><div class="meta">avoided tool round-trips at current pace</div></div>
     <div class="platform-card accented"><div class="label">Est. calls / month</div><div class="value">${formatTokens(monthly.queries ?? 0)}</div><div class="meta">amem context hits if this rate holds</div></div>
     <div class="platform-card accented"><div class="label">Est. file reads / month</div><div class="value">${formatTokens(monthly.anchorsAvoided ?? 0)}</div><div class="meta">anchors that would be skipped</div></div>`;
@@ -1507,7 +1516,7 @@ function renderStats() {
     ? agg.byPlatform
     : [{ platform: "—", queries: 0, estimatedTokensSaved: 0, reportedTokensSaved: 0 }];
   cards.innerHTML = `
-    <div class="platform-card"><div class="label">Total estimated</div><div class="value">~${formatTokens(agg?.totals?.estimatedTokensSaved ?? 0)}</div><div class="meta">${agg?.totals?.queries ?? 0} context queries · proxy, not billed savings</div></div>
+    <div class="platform-card"><div class="label">Total estimated</div><div class="value">~${formatTokens(agg?.totals?.estimatedTokensSaved ?? 0)}</div><div class="meta">${formatUsd(agg?.totals?.estimatedUsdSaved)} · ${agg?.totals?.queries ?? 0} context queries · proxy, not billed savings</div></div>
     ${platforms
       .map(
         (p) => `<div class="platform-card"><div class="label">${p.platform}</div><div class="value">~${formatTokens(p.estimatedTokensSaved)}</div><div class="meta">${p.queries} ${p.queries === 1 ? "query" : "queries"} · ~${formatDuration(p.estimatedMsSaved)}${p.avgLocalMs != null ? ` · ${formatDuration(p.avgLocalMs)} local` : ""}${p.reportedTokensSaved ? ` · reported ${formatTokens(p.reportedTokensSaved)}` : ""}</div></div>`,
@@ -1603,7 +1612,7 @@ function drawChart(days) {
     canvas.style.cursor = "pointer";
     if (!tooltip) return;
     tooltip.classList.remove("hidden");
-    tooltip.innerHTML = `<strong>${formatChartDay(b.day)}</strong><span>~${formatTokens(b.estimatedTokensSaved)} tokens</span><span>~${formatDuration(b.estimatedMsSaved)} estimated time</span><span>${b.queries} ${b.queries === 1 ? "query" : "queries"} · ${b.localHits ?? 0} hits · ${b.serverTrips ?? 0} trips</span>`;
+    tooltip.innerHTML = `<strong>${formatChartDay(b.day)}</strong><span>~${formatTokens(b.estimatedTokensSaved)} tokens</span><span>${formatUsd(b.estimatedUsdSaved)}</span><span>~${formatDuration(b.estimatedMsSaved)} estimated time</span><span>${b.queries} ${b.queries === 1 ? "query" : "queries"} · ${b.localHits ?? 0} hits · ${b.serverTrips ?? 0} misses</span>`;
     const tipW = tooltip.offsetWidth || 160;
     const left = Math.min(Math.max(8, x + 12), rect.width - tipW - 8);
     const top = Math.max(8, e.clientY - rect.top - (tooltip.offsetHeight || 56) - 10);
