@@ -3,6 +3,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { dbPath, ensureAmemHome } from "./paths.js";
 import { detectRepoIdentity, newId, parseWorkspaceSlug, slugifyWorkspace, type RepoIdentity } from "./repo-identity.js";
+import { ensureClaimsFts, reindexAllClaimsFts, reindexRepoClaimsFts, removeClaimFts } from "./search.js";
 
 export type RepoRow = {
   id: string;
@@ -25,6 +26,9 @@ export type ClaimRow = {
   source_ref: string | null;
   created_at: string;
   updated_at: string;
+  /** active | superseded — superseded claims are excluded from retrieval */
+  status: string;
+  superseded_by: string | null;
 };
 
 export type ComponentRow = {
@@ -129,6 +133,8 @@ CREATE TABLE IF NOT EXISTS claims (
   source_ref TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  superseded_by TEXT,
   PRIMARY KEY(repo_id, id)
 );
 
@@ -208,6 +214,9 @@ export function openDb(): Database.Database {
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
   migrateUsageEvents(db);
+  migrateClaimsColumns(db);
+  ensureClaimsFts(db);
+  migrateClaimsFtsBootstrap(db);
   cached = db;
   return db;
 }
@@ -220,6 +229,36 @@ function migrateUsageEvents(db: Database.Database): void {
     db.exec("ALTER TABLE usage_events ADD COLUMN estimated_ms_saved INTEGER");
   }
   if (!have.has("kind")) db.exec("ALTER TABLE usage_events ADD COLUMN kind TEXT");
+}
+
+function migrateClaimsColumns(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(claims)").all() as { name: string }[];
+  const have = new Set(cols.map((c) => c.name));
+  if (!have.has("status")) {
+    db.exec(`ALTER TABLE claims ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`);
+  }
+  if (!have.has("superseded_by")) {
+    db.exec(`ALTER TABLE claims ADD COLUMN superseded_by TEXT`);
+  }
+}
+
+/** One-shot FTS rebuild flag so upgrades populate the index. */
+function migrateClaimsFtsBootstrap(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS amem_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+  const row = db
+    .prepare(`SELECT value FROM amem_meta WHERE key = 'claims_fts_v1'`)
+    .get() as { value: string } | undefined;
+  if (row?.value === "1") return;
+  reindexAllClaimsFts(db);
+  db.prepare(
+    `INSERT INTO amem_meta (key, value) VALUES ('claims_fts_v1', '1')
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run();
 }
 
 export function closeDb(): void {
@@ -315,10 +354,35 @@ export function requireRepo(cwd: string = process.cwd()): RepoRow {
   return repo;
 }
 
-export function listClaims(repoId: string): ClaimRow[] {
+export function listClaims(
+  repoId: string,
+  opts: { includeSuperseded?: boolean } = {},
+): ClaimRow[] {
+  if (opts.includeSuperseded) {
+    return openDb()
+      .prepare("SELECT * FROM claims WHERE repo_id = ? ORDER BY updated_at DESC")
+      .all(repoId) as ClaimRow[];
+  }
   return openDb()
-    .prepare("SELECT * FROM claims WHERE repo_id = ? ORDER BY updated_at DESC")
+    .prepare(
+      `SELECT * FROM claims WHERE repo_id = ?
+       AND COALESCE(status, 'active') = 'active'
+       ORDER BY updated_at DESC`,
+    )
     .all(repoId) as ClaimRow[];
+}
+
+export function getClaim(repoId: string, claimId: string): ClaimRow | null {
+  return (
+    (openDb()
+      .prepare("SELECT * FROM claims WHERE repo_id = ? AND id = ?")
+      .get(repoId, claimId) as ClaimRow | undefined) ?? null
+  );
+}
+
+/** Reindex FTS for one repo (after propose apply / wipe helpers). */
+export function reindexClaimsSearch(repoId: string): void {
+  reindexRepoClaimsFts(openDb(), repoId);
 }
 
 export function listComponents(repoId: string): ComponentRow[] {
@@ -340,13 +404,29 @@ export function listEdges(repoId: string): EdgeRow[] {
 }
 
 export function wipeRepo(repoId: string): void {
-  openDb().prepare("DELETE FROM repos WHERE id = ?").run(repoId);
+  const db = openDb();
+  const claimIds = db
+    .prepare("SELECT id FROM claims WHERE repo_id = ?")
+    .all(repoId) as Array<{ id: string }>;
+  for (const c of claimIds) {
+    removeClaimFts(db, repoId, c.id);
+  }
+  db.prepare("DELETE FROM repos WHERE id = ?").run(repoId);
 }
 
 /** Delete every bound repo (cascade clears claims/flows/usage). Returns count wiped. */
 export function wipeAllRepos(): number {
   const db = openDb();
   const row = db.prepare("SELECT COUNT(*) AS c FROM repos").get() as { c: number };
+  const repos = db.prepare("SELECT id FROM repos").all() as Array<{ id: string }>;
+  for (const r of repos) {
+    const claimIds = db
+      .prepare("SELECT id FROM claims WHERE repo_id = ?")
+      .all(r.id) as Array<{ id: string }>;
+    for (const c of claimIds) {
+      removeClaimFts(db, r.id, c.id);
+    }
+  }
   db.exec("DELETE FROM repos");
   return row.c;
 }

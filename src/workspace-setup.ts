@@ -34,7 +34,7 @@ export function provisionWorkspace(repo: RepoRow, platform = repo.platform || "a
 
   const query = `What should I know about the ${slug} workspace?`;
   const started = Date.now();
-  const packet = buildContext(repo.id, query);
+  const packet = buildContext(repo.id, query, { rootPath: repo.root_path });
   const markdown = renderContextMarkdown(packet);
   const metrics = metricsFromPacket(packet, markdown);
   insertUsageEvent({

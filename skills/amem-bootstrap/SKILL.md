@@ -63,6 +63,8 @@ Example shape:
 }
 ```
 
+When correcting a prior fact under a new claim id, include `"supersedes": ["claim.old_id"]` so the old claim is archived locally.
+
 4. Validate and apply locally:
 
 ```bash

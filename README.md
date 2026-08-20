@@ -156,11 +156,11 @@ Memory is a small local graph in SQLite:
 | --- | --- |
 | **Component** | A subsystem / module (`component.api`) |
 | **Flow** | How work moves (`flow.checkout`) |
-| **Claim** | A durable fact with file anchors |
-| **Edge** | Links (claim → flow → component) |
+| **Claim** | A durable fact with file anchors (may be `active` or `superseded`) |
+| **Edge** | Links (claim → flow → component); `kind: "supersedes"` archives the target claim |
 | **Usage event** | Each `amem context` hit + token estimate |
 
-Claims are the retrieval unit. Keyword search ranks claims, then pulls related flows and components into a short Markdown packet.
+Claims are the retrieval unit. Search uses **SQLite FTS5** (Porter stemming) plus keyword ranking, then pulls related flows and components into a short Markdown packet. Claims whose anchors changed on disk after `updated_at` are marked **stale** and down-ranked.
 
 Example claim:
 
@@ -169,10 +169,12 @@ Example claim:
   "id": "claim.webhook_idempotency",
   "kind": "constraint",
   "text": "Stripe webhooks must be idempotent on event.id before mutating invoices.",
-  "code_anchors": ["src/webhooks/stripe.ts"]
+  "code_anchors": ["src/webhooks/stripe.ts"],
+  "supersedes": ["claim.webhook_old_rule"]
 }
 ```
 
+`supersedes` (or an edge with `kind: "supersedes"`) marks older claim ids as archived so they leave retrieval.
 ---
 
 ## Token savings (estimates)
@@ -417,8 +419,10 @@ Suggested rollout: small DevEx pilot → MDM package + policy → signed builds/
 - Company-shared or synced memory  
 - Cloud hosted “team brain”  
 - Exact provider billing integration  
-- Embedding / hybrid search (v1 is keyword ranking)  
+- Cloud/remote embedding APIs (local FTS5 is in; optional local embeddings may come later)  
 - Writing memory contents into product git history  
+
+Upcoming ideas (not scheduled): see [docs/backlog.md](docs/backlog.md).
 
 ---
 

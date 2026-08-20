@@ -29,9 +29,9 @@ amem usage report --platform <cursor|claude> --saved <n>
    ```
    If uninitialized, stop and ask the user to run `amem init`.
 
-2. Draft a small proposal JSON (prefer `/tmp/amem-update-<date>.json`) with only new or corrected durable claims. Prefer updating existing claim ids when correcting prior memory.
+2. Draft a small proposal JSON (prefer `/tmp/amem-update-<date>.json`) with only new or corrected durable claims. Prefer updating existing claim ids when correcting prior memory. When a new claim replaces an old one under a **new** id, set `"supersedes": ["claim.old_id"]` (or an edge with `kind: "supersedes"`) so the old claim leaves retrieval.
 
-3. Every claim must include at least one `code_anchors` path that exists in the repo.
+3. Every claim must include at least one `code_anchors` path that exists in the repo. If validate prints **conflict warnings** (shared anchors + similar text), resolve them with `supersedes` or by updating the existing id.
 
 4. Validate and apply:
 
