@@ -28,6 +28,8 @@ Updated after completing the prior “next candidates” set (hosts, personal pr
 5. **Draft quality scoring** — confidence / reject noisy session-end drafts in Brain.
 6. **Conflict UI** — surface supersede suggestions before apply in Brain.
 
+Docs/README and agent install instructions were refreshed after the comprehensive test pass.
+
 ## Explicit non-goals (keep)
 
 - Cloud/team sync, shared org brain, hosted RAG

@@ -11,11 +11,13 @@ alwaysApply: true
 amem injects matching local memory into Cursor automatically (session start + each prompt). Treat that packet as the first map of this repo.
 
 1. Prefer amem file anchors over broad greps and multi-folder reads.
-2. Still verify current code before editing — memory can be stale.
-3. After durable learnings, the stop hook stores a compact session claim. You can also run `amem-update-working-memory` for higher-quality facts.
+2. Still verify current code before editing — memory can be stale. Trust **fresh** claims more; re-check anything marked **stale**.
+3. Use the **Why:** line as ranking explainability, not as proof.
+4. After durable learnings, the stop hook queues a compact **session draft** (and may queue **miss→learn** drafts). Approve in `amem ui` → Brain, or run `amem-update-working-memory` for higher-quality facts.
+5. Cross-repo personal prefs may appear with Why reason `personal` — they are local “how I work” notes, not org wiki.
 
 Do not re-run `amem context` unless the injected packet is empty or clearly wrong.
 
-Memory is personal and stored under `~/.amem` on this machine. Do not commit exports or database copies to shared remotes.
+Memory is personal and stored under `~/.amem` on this machine. Do not commit exports, backups, or database copies to shared remotes.
 
-Open the local UI anytime with `amem ui` (setup wizard, brain map, token estimates).
+Open the local UI anytime with `amem ui` (Setup, Brain drafts, Stats).
