@@ -19,7 +19,9 @@
     "dev": "tsc --watch",
     "prepare": "npm run build",
     "amem": "node dist/cli.js",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "test": "npm run build && node --test --test-concurrency=1 test/**/*.test.mjs",
+    "test:all": "npm run test && npm run smoke"
   },
   "engines": {
     "node": ">=20"
