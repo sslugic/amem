@@ -41,8 +41,12 @@ const UI_API_CALLS = [
   ["POST", "/api/vault/backup/unschedule"],
   ["POST", "/api/vault/restore"],
   ["GET", "/api/hygiene"],
+  ["GET", "/api/hygiene/preview"],
   ["POST", "/api/hygiene/decay"],
+  ["POST", "/api/hygiene/accept-safe"],
   ["POST", "/api/hygiene/merge"],
+  ["POST", "/api/hygiene/schedule"],
+  ["POST", "/api/hygiene/unschedule"],
   ["POST", "/api/rules/sync"],
 ];
 

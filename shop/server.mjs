@@ -75,18 +75,12 @@ async function licenseFns() {
   return import(join(REPO, "dist", "license.js"));
 }
 
-function siteChrome(active, body) {
-  const tab = (href, id, label) =>
-    `<a class="nav-tab${active === id ? " active" : ""}" href="${href}">${label}</a>`;
+function siteChrome(_active, body) {
   return htmlPage(
-    active === "plans" ? "amem — plans" : "amem — get started",
+    "amem — get started",
     `<div class="shell">
   <header class="top">
     <a class="brand" href="/">amem</a>
-    <nav class="nav" aria-label="Site">
-      ${tab("/", "start", "Get started")}
-      ${tab("/plans", "plans", "Plans")}
-    </nav>
   </header>
   ${body}
 </div>
@@ -254,7 +248,7 @@ function installCommands() {
     </div>
   </div>
 </div>
-<p class="cmd-hint">Node 20+. Then <code>amem ui</code>. Until npm is live, clone from <a href="https://github.com/sslugic/amem">GitHub</a>.</p>`;
+<p class="cmd-hint">Node 20+. Then <code>amem ui</code> — upgrade to Pro there when you want it. Until npm is live, clone from <a href="https://github.com/sslugic/amem">GitHub</a>.</p>`;
 }
 
 function dollars(cents) {
@@ -272,55 +266,9 @@ function landing() {
     <p class="hero-kicker">Local agent memory</p>
     <p class="hero-brand">amem</p>
     <h1>Get started for free</h1>
-    <p class="hero-lead">Facts stay in <code>~/.amem</code> on your machine. One command — then open the UI.</p>
+    <p class="hero-lead">Facts stay in <code>~/.amem</code> on your machine. One command — then open the UI. Upgrade to Pro later inside the app if you want richer retrieval and hygiene.</p>
     ${installCommands()}
   </div>
-</main>`,
-  );
-}
-
-function plansPage() {
-  const pro = dollars(TIERS.pro.amountCents);
-  const it = dollars(TIERS.it.amountCents);
-  return siteChrome(
-    "plans",
-    `<main class="plans-wrap">
-  <h1>Plans</h1>
-  <p class="plans-lead">Free already remembers, retrieves, and backs up. Pay only if you want extras — memory never uploads.</p>
-  <div class="plan-grid">
-    <article class="plan-card">
-      <h2>Free</h2>
-      <p class="plan-price">$0</p>
-      <ul>
-        <li>Memory, MCP, and Stats</li>
-        <li>Lock and local backup</li>
-        <li>Hashing embedder — no download</li>
-      </ul>
-      <a class="btn secondary" href="/">Get started</a>
-    </article>
-    <article class="plan-card featured">
-      <h2>Pro</h2>
-      <p class="plan-price">${pro} <span>once</span></p>
-      <ul>
-        <li>Everything in Free</li>
-        <li>Local n-gram or external embedder</li>
-        <li>Hygiene inbox — decay and merge</li>
-        <li>Pin facts → Cursor rules</li>
-      </ul>
-      <a class="btn" href="/buy/pro">Buy Pro</a>
-    </article>
-    <article class="plan-card">
-      <h2>IT</h2>
-      <p class="plan-price">${it} <span>once</span></p>
-      <ul>
-        <li>Everything in Pro</li>
-        <li>Richer <code>amem doctor --attest</code></li>
-        <li><code>amem it-pack</code> for local rollout</li>
-      </ul>
-      <a class="btn secondary" href="/buy/it">Buy IT</a>
-    </article>
-  </div>
-  <p class="fine">After pay, apply <code>amem-license.json</code> in <code>amem ui</code>.</p>
 </main>`,
   );
 }
@@ -331,14 +279,14 @@ function successPage(result) {
       "amem · thanks",
       `<div class="page"><h1>Payment received</h1>
 <p>If the license did not appear, reopen this page from Stripe’s success redirect (it includes a session id).</p>
-<p class="actions"><a class="btn secondary" href="/plans">Back to plans</a></p></div>`,
+<p class="actions"><a class="btn secondary" href="/">Get started</a></p></div>`,
     );
   }
   if (result.pending) {
     return htmlPage(
       "amem · pending",
       `<div class="page"><h1>Payment not finished</h1><p>${escapeHtml(result.reason || "Not paid yet.")}</p>
-<p class="actions"><a class="btn secondary" href="/plans">Back to plans</a></p></div>`,
+<p class="actions"><a class="btn secondary" href="/">Get started</a></p></div>`,
     );
   }
   if (!result.ok) {
@@ -347,7 +295,7 @@ function successPage(result) {
       `<div class="page"><h1>Paid, license not issued</h1>
 <p>${escapeHtml(result.reason || "unknown")}</p>
 <p>Keep this tab and retry, or open the Mailtrap inbox. Do not pay again.</p>
-<p class="actions"><a class="btn secondary" href="/plans">Back to plans</a></p></div>`,
+<p class="actions"><a class="btn secondary" href="/">Get started</a></p></div>`,
     );
   }
   const mailNote = result.emailed
@@ -364,15 +312,15 @@ function successPage(result) {
 amem license status</pre>
 <p class="note">Then use <strong>Turn on Pro retrieval</strong> in the UI to enable n-gram + reindex.</p>
 ${mailNote}
-<p class="actions"><a class="btn secondary" href="/">Get started</a><a class="btn secondary" href="/plans">Plans</a></p></div>`,
+<p class="actions"><a class="btn secondary" href="/">Get started</a></p></div>`,
   );
 }
 
 function cancelPage() {
   return htmlPage(
     "amem · cancelled",
-    `<div class="page"><h1>Checkout cancelled</h1><p>No charge.</p>
-<p class="actions"><a class="btn" href="/plans">Back to plans</a></p></div>`,
+    `<div class="page"><h1>Checkout cancelled</h1><p>No charge. You can upgrade anytime from <code>amem ui</code>.</p>
+<p class="actions"><a class="btn" href="/">Get started</a></p></div>`,
   );
 }
 
@@ -578,7 +526,8 @@ async function onRequest(req, res) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/plans") {
-      html(res, 200, plansPage());
+      res.writeHead(302, { Location: "/" });
+      res.end();
       return;
     }
     if (req.method === "GET" && url.pathname.startsWith("/public/")) {

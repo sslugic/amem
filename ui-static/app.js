@@ -226,7 +226,7 @@ function setTab(tab) {
     state.brainError = null;
   }
   state.tab = tab;
-  document.querySelectorAll(".tabs button").forEach((b) => {
+  document.querySelectorAll("#tabs button[data-tab]").forEach((b) => {
     b.classList.toggle("active", b.dataset.tab === tab);
   });
   writeUrlState();
@@ -692,6 +692,7 @@ function defaultProposal() {
 function renderWelcome() {
   const main = $("#main");
   setMainMode("page");
+  renderPageInsight();
   const shop = state.shop || {};
   const proUrl = shop.proUrl || "https://getamem.com/buy/pro";
   const itUrl = shop.itUrl || "https://getamem.com/buy/it";
@@ -948,7 +949,7 @@ function proOnboardHtml(idPrefix = "onboard") {
   const steps = [
     { id: "embed", done: ngramOn, label: "Pro retrieval (n-gram)" },
     { id: "reindex", done: ngramOn, label: "Reindex embeddings" },
-    { id: "hygiene", done: false, label: "Memory Review (hygiene)" },
+    { id: "hygiene", done: false, label: "Weekly hygiene schedule" },
     { id: "rules", done: false, label: "Sync pinned → Cursor rules" },
   ];
   return `
@@ -963,6 +964,9 @@ function proOnboardHtml(idPrefix = "onboard") {
           )
           .join("")}
       </ol>
+      <label class="autostart brain-auto" style="margin:0.5rem 0 0.75rem;display:flex">
+        <input type="checkbox" id="${idPrefix}HygieneSched" checked /> Also schedule weekly hygiene (Sunday)
+      </label>
       <div class="actions">
         <button class="btn" type="button" id="${idPrefix}EnablePro">Turn on Pro retrieval</button>
         <button class="btn secondary" type="button" id="${idPrefix}OpenReview">Open Memory Review</button>
@@ -1034,7 +1038,26 @@ function wireProOnboard(idPrefix) {
       });
       if (msg) msg.textContent = "Reindexing…";
       await apiUnscoped("/api/embed/reindex", { method: "POST", body: "{}" });
-      if (msg) msg.textContent = "Pro retrieval is on. Run a showdown in Memory anytime.";
+      const schedOn = Boolean($(`#${idPrefix}HygieneSched`)?.checked);
+      if (schedOn) {
+        if (msg) msg.textContent = "Scheduling weekly hygiene…";
+        try {
+          await apiUnscoped("/api/hygiene/schedule", {
+            method: "POST",
+            body: JSON.stringify({ hour: 4 }),
+          });
+        } catch (schedErr) {
+          if (msg) msg.textContent = `Pro retrieval is on. Hygiene schedule failed: ${schedErr?.message || schedErr}`;
+          if (state.tab === "welcome") renderWelcome();
+          else if (state.tab === "setup") renderSetup();
+          return;
+        }
+      }
+      if (msg) {
+        msg.textContent = schedOn
+          ? "Pro retrieval is on and weekly hygiene is scheduled. Run a showdown in Memory anytime."
+          : "Pro retrieval is on. Run a showdown in Memory anytime.";
+      }
       if (state.tab === "welcome") renderWelcome();
       else if (state.tab === "setup") renderSetup();
     } catch (e) {
@@ -1274,6 +1297,7 @@ function renderSetup() {
   const ctx = setupContext();
   const main = $("#main");
   setMainMode("page");
+  renderPageInsight();
   const showDone = setupIsComplete() && !state.setupEdit;
   main.innerHTML = showDone ? setupDoneHtml(ctx) : setupWizardHtml(ctx);
   bindSetupEvents(main, ctx);
@@ -1597,6 +1621,81 @@ function setMainMode(mode) {
   const main = $("#main");
   if (!main) return;
   main.classList.toggle("tab-brain", mode === "brain");
+  syncShellChrome(mode);
+}
+
+function syncShellChrome(mode) {
+  const isBrain = mode === "brain";
+  $("#topSearchWrap")?.classList.toggle("hidden", !isBrain);
+  document.querySelectorAll(".top-mem-only").forEach((el) => {
+    if (el.id === "rulesSyncBtn") return;
+    el.classList.toggle("hidden", !isBrain);
+  });
+  const rules = $("#rulesSyncBtn");
+  if (rules) {
+    const show = isBrain && state.license?.features?.includes("rules_sync") && !state.brainAll;
+    rules.classList.toggle("hidden", !show);
+  }
+  const search = $("#brainSearch");
+  if (search) {
+    if (isBrain) search.value = state.brainSearch || "";
+    else search.value = "";
+  }
+  const auto = $("#autoApplyAll");
+  if (auto && isBrain) auto.checked = Boolean(state.prefs?.autoApplyAll);
+  const sd = $("#showdownToggle");
+  if (sd && isBrain) sd.textContent = state.showdownOpen ? "Hide compare" : "Compare retrieval";
+}
+
+function renderPageInsight() {
+  const el = $("#rightPanel");
+  if (!el) return;
+  const tier = state.license?.tier || "free";
+  const locked = Boolean(state.vault?.locked);
+  const embed = state.embed?.backend || "hashing";
+  const repo = state.status?.repo?.repo_name || (state.brainAll ? "All memory" : "—");
+  el.innerHTML = `
+    <h2>Overview</h2>
+    <div class="fact-kpis">
+      <div class="fact-kpi"><b>${esc(String(tier))}</b><span>License</span></div>
+      <div class="fact-kpi"><b>${locked ? "Yes" : "No"}</b><span>Vault locked</span></div>
+      <div class="fact-kpi"><b>${esc(embed)}</b><span>Embedder</span></div>
+      <div class="fact-kpi"><b>${(state.graph?.claims || []).length || "—"}</b><span>Facts loaded</span></div>
+    </div>
+    <div class="insight-card">
+      <strong>Focus</strong>
+      <p>${esc(repo)}</p>
+    </div>
+    <div class="insight-card">
+      <strong>Local only</strong>
+      <p>Memory stays in <code>~/.amem</code>. Use Lock / backup in the sidebar for passphrase protection.</p>
+    </div>`;
+}
+
+function renderBrainRight() {
+  const el = $("#rightPanel");
+  if (!el) return;
+  const g = state.graph || emptyGraph(state.brainAll ? "all" : "current");
+  const events = g.recentEvents || [];
+  const hits = events.filter((e) => eventKindOf(e) === "local_hit").length;
+  const files = new Set((g.claims || []).flatMap(claimAnchors)).size;
+  const drafts = (g.drafts || []).filter((d) => d.status === "pending");
+  const drawerOpen = Boolean(state.selectedNode);
+  el.innerHTML = `
+    <h2>Fact panels</h2>
+    <div class="fact-kpis">
+      <div class="fact-kpi"><b>${g.claims?.length ?? 0}</b><span>Facts</span></div>
+      <div class="fact-kpi"><b>${drafts.length}</b><span>Drafts</span></div>
+      <div class="fact-kpi"><b>${files}</b><span>Files</span></div>
+      <div class="fact-kpi"><b>${hits}</b><span>Hits</span></div>
+    </div>
+    ${state.brainError ? `<p class="note">${esc(brainErrorNote())}</p>` : ""}
+    <div class="right-section">
+      <aside class="brain-feed" id="brainFeed"></aside>
+    </div>
+    <div class="right-section">
+      <aside class="drawer ${drawerOpen ? "" : ""}" id="drawer"></aside>
+    </div>`;
 }
 
 function brainErrorNote() {
@@ -1691,37 +1790,75 @@ async function runRetrievalShowdown() {
   }
 }
 
+function softPaywallDismissed() {
+  try {
+    return sessionStorage.getItem("amem.softPaywall.dismissed") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function dismissSoftPaywall() {
+  try {
+    sessionStorage.setItem("amem.softPaywall.dismissed", "1");
+  } catch {
+    /* ignore */
+  }
+  $("#softPaywall")?.classList.add("hidden");
+}
+
+async function loadSoftPaywall() {
+  const el = $("#softPaywall");
+  if (!el) return;
+  if (isPaidLicense() || softPaywallDismissed()) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  try {
+    const path = state.brainAll ? "/api/hygiene/preview?scope=all" : "/api/hygiene/preview";
+    const preview = state.brainAll ? await apiUnscoped(path) : await api(path);
+    if (!preview?.softPaywall) {
+      el.classList.add("hidden");
+      el.innerHTML = "";
+      return;
+    }
+    const noise = (preview.staleCount || 0) + (preview.duplicateCount || 0);
+    const shop = state.shop || {};
+    const proUrl = shop.proUrl || "https://getamem.com/buy/pro";
+    el.classList.remove("hidden");
+    el.innerHTML = `
+      <div class="soft-paywall-inner">
+        <div>
+          <strong>Pro can clean this</strong>
+          <p class="note" style="margin:0.25rem 0 0">${preview.active} facts · ~${noise} unused/duplicates → about <b>${preview.afterCleanup}</b> after cleanup. Free still works — this is optional.</p>
+        </div>
+        <div class="soft-paywall-actions">
+          <a class="btn small" href="${esc(proUrl)}" target="_blank" rel="noopener">Buy Pro</a>
+          <button class="btn secondary small" type="button" id="softPaywallShowdown">Compare retrieval</button>
+          <button class="btn secondary small" type="button" id="softPaywallDismiss">Dismiss</button>
+        </div>
+      </div>`;
+    $("#softPaywallDismiss")?.addEventListener("click", () => dismissSoftPaywall());
+    $("#softPaywallShowdown")?.addEventListener("click", () => {
+      state.showdownOpen = true;
+      renderBrain();
+    });
+  } catch {
+    el.classList.add("hidden");
+  }
+}
+
 function renderBrain() {
   const main = $("#main");
   state.graphTick += 1;
   setMainMode("brain");
-  const g = state.graph || emptyGraph(state.brainAll ? "all" : "current");
-  const events = g.recentEvents || [];
-  const hits = events.filter((e) => eventKindOf(e) === "local_hit").length;
-  const files = new Set((g.claims || []).flatMap(claimAnchors)).size;
-  const drafts = (g.drafts || []).filter((d) => d.status === "pending");
-  const autoOn = Boolean(state.prefs?.autoApplyAll);
-  const drawerOpen = Boolean(state.selectedNode);
+  const drafts = (state.graph?.drafts || []).filter((d) => d.status === "pending");
   const showdownOpen = Boolean(state.showdownOpen);
 
   main.innerHTML = `
-    <div class="brain-v2 ${drawerOpen ? "has-drawer" : "no-drawer"}">
-      <div class="brain-toolbar">
-        <div class="brain-title">
-          <h1>${state.brainAll ? "All memory" : "Memory"}</h1>
-          ${state.brainError ? `<p class="note">${esc(brainErrorNote())}</p>` : ""}
-        </div>
-        <div class="brain-kpis">
-          <span><b>${g.claims?.length ?? 0}</b> facts</span>
-          <span><b>${drafts.length}</b> drafts</span>
-          <span><b>${files}</b> files</span>
-          <span><b>${hits}</b> hits</span>
-          <label class="autostart brain-auto"><input type="checkbox" id="autoApplyAll" ${autoOn ? "checked" : ""}/> Auto-approve</label>
-          ${state.license?.features?.includes("rules_sync") && !state.brainAll ? `<button class="btn secondary small" type="button" id="rulesSyncBtn">Sync rules</button>` : ""}
-        </div>
-      </div>
+    <div class="brain-v2">
       <div class="brain-chrome">
-        <input id="brainSearch" type="search" placeholder="Filter facts…" value="${esc(state.brainSearch || "")}" />
         <div class="brain-filters" id="brainFilters">
           <button type="button" data-filter="files" class="${state.brainFilter === "files" ? "active" : ""}">By file</button>
           <button type="button" data-filter="drafts" class="${state.brainFilter === "drafts" ? "active" : ""}">Drafts${drafts.length ? ` (${drafts.length})` : ""}</button>
@@ -1730,8 +1867,8 @@ function renderBrain() {
           <button type="button" data-filter="pinned" class="${state.brainFilter === "pinned" ? "active" : ""}">Pinned</button>
           <button type="button" data-filter="review" class="${state.brainFilter === "review" ? "active" : ""}">Review</button>
         </div>
-        <button class="btn secondary small" type="button" id="showdownToggle">${showdownOpen ? "Hide compare" : "Compare retrieval"}</button>
       </div>
+      <div id="softPaywall" class="soft-paywall hidden"></div>
       <div class="showdown-panel ${showdownOpen ? "open" : "closed"}" id="showdownPanel">
         <div class="showdown-run">
           <input id="showdownQuery" type="search" placeholder="Same query · free hash vs Pro n-gram…" value="${esc(state.showdownQuery || "")}" />
@@ -1741,21 +1878,13 @@ function renderBrain() {
         <div id="showdownResult" class="showdown-result"></div>
       </div>
       <div class="brain-body">
-        <aside class="brain-feed" id="brainFeed"></aside>
         <section class="brain-map" id="brainMap"></section>
-        <aside class="drawer ${drawerOpen ? "" : "hidden"}" id="drawer"></aside>
       </div>
     </div>`;
 
-  $("#brainSearch")?.addEventListener("input", (e) => {
-    state.brainSearch = e.target.value;
-    paintBrain();
-  });
-  $("#showdownToggle")?.addEventListener("click", () => {
-    state.showdownOpen = !state.showdownOpen;
-    if (!state.showdownOpen) clearRetrievalShowdown();
-    renderBrain();
-  });
+  renderBrainRight();
+  loadSoftPaywall();
+
   $("#showdownBtn")?.addEventListener("click", () => runRetrievalShowdown());
   $("#showdownClearTop")?.addEventListener("click", () => clearRetrievalShowdown());
   $("#showdownQuery")?.addEventListener("input", (e) => {
@@ -1774,29 +1903,6 @@ function renderBrain() {
       renderBrain();
     });
   });
-  $("#autoApplyAll")?.addEventListener("change", async (e) => {
-    const on = Boolean(e.target.checked);
-    try {
-      const result = await apiUnscoped("/api/prefs", {
-        method: "POST",
-        body: JSON.stringify({ autoApplyAll: on }),
-      });
-      state.prefs = { autoApplyAll: result.autoApplyAll };
-      await refreshGraph();
-      renderBrain();
-    } catch (err) {
-      e.target.checked = !on;
-      alert(err.message);
-    }
-  });
-  $("#rulesSyncBtn")?.addEventListener("click", async () => {
-    try {
-      const result = await api("/api/rules/sync", { method: "POST", body: "{}" });
-      alert(`Wrote ${result.pinned} pinned facts to ${result.path}`);
-    } catch (err) {
-      alert(err.message);
-    }
-  });
   try {
     paintBrain();
   } catch (e) {
@@ -1804,7 +1910,6 @@ function renderBrain() {
     if (map) map.innerHTML = `<p class="note">${esc(e.message || e)}</p>`;
   }
 }
-
 function paintBrain() {
   renderBrainFeed();
   renderBrainMap();
@@ -2057,12 +2162,20 @@ function renderBrainMap() {
         const stale = h.stale || [];
         const dups = h.duplicates || [];
         if (!stale.length && !dups.length) {
-          el.innerHTML = `<div class="brain-empty">Nothing to review. Unused facts (90 days) and near-duplicates show up here on Pro/IT.</div>`;
+          el.innerHTML = `<div class="brain-empty">Nothing to review. Unused facts (90 days) and near-duplicates show up here on Pro/IT.${
+            h.schedule?.installed ? " Weekly hygiene is scheduled." : ""
+          }</div>`;
           return;
         }
         el.innerHTML = `
           <div class="draft-toolbar">
+            <button class="btn small" type="button" id="acceptSafe">Accept safe cleanups</button>
             <button class="btn secondary small" type="button" id="decayStale">Decay ${stale.length} unused</button>
+            ${
+              h.schedule?.installed
+                ? `<button class="btn secondary small" type="button" id="hygieneUnsched">Unschedule weekly</button>`
+                : `<button class="btn secondary small" type="button" id="hygieneSched">Schedule weekly</button>`
+            }
           </div>
           ${
             dups.length
@@ -2082,12 +2195,43 @@ function renderBrainMap() {
                   .join("")}`
               : ""
           }`;
+        $("#acceptSafe")?.addEventListener("click", async () => {
+          try {
+            const result = await api("/api/hygiene/accept-safe", { method: "POST", body: "{}" });
+            await refreshGraph();
+            renderBrain();
+            alert(
+              `Decayed ${result.decayed?.length || 0}; merged ${result.merged?.length || 0}.`,
+            );
+          } catch (err) {
+            alert(err.message);
+          }
+        });
         $("#decayStale")?.addEventListener("click", async () => {
           try {
             const result = await api("/api/hygiene/decay", { method: "POST", body: "{}" });
             await refreshGraph();
             renderBrain();
             alert(`Decayed ${result.decayed?.length || 0} facts.`);
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+        $("#hygieneSched")?.addEventListener("click", async () => {
+          try {
+            await apiUnscoped("/api/hygiene/schedule", {
+              method: "POST",
+              body: JSON.stringify({ hour: 4 }),
+            });
+            renderBrain();
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+        $("#hygieneUnsched")?.addEventListener("click", async () => {
+          try {
+            await apiUnscoped("/api/hygiene/unschedule", { method: "POST", body: "{}" });
+            renderBrain();
           } catch (err) {
             alert(err.message);
           }
@@ -2263,8 +2407,11 @@ function showBrainOverview() {
   const g = state.graph || {};
   const durable = (g.claims || []).filter((c) => !isSessionClaim(c)).length;
   const chats = (g.claims || []).filter(isSessionClaim).length;
+  const title = state.brainAll
+    ? "All memory"
+    : state.status?.repo?.repo_name || "Memory";
   drawer.innerHTML = `
-    <h2>${esc(state.status.repo.repo_name)}</h2>
+    <h2>${esc(title)}</h2>
     <div class="meta">Local memory map</div>
     <p>The map is what amem can inject instead of a repo search. Bigger tiles have more facts. Teal tiles were used in a recent query.</p>
     <div class="meta">${durable} durable facts · ${chats} chat takeaways · ${g.flows?.length ?? 0} flows · ${g.components?.length ?? 0} components</div>
@@ -2495,6 +2642,7 @@ function formatChartDay(iso) {
 function renderStats() {
   const main = $("#main");
   setMainMode("page");
+  renderPageInsight();
   if (!state.brainAll && !state.status?.repo) {
     main.innerHTML = `<section class="hero"><div class="hero-inner"><h1>Stats</h1><p>Pick <strong>All memory</strong> in the header, or a tracked repo, to see savings.</p></div></section>`;
     return;
@@ -2705,7 +2853,8 @@ async function render() {
     await refreshVault();
     if (/encrypted|unlock|Passphrase/i.test(String(e.message))) {
       setMainMode("page");
-      $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>Locked</h1><p>Unlock from the header to open Memory and Stats. Memory never left this machine.</p></div></section>`;
+      $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>Locked</h1><p>Unlock from <strong>Lock / backup</strong> in the sidebar to open Memory and Stats. Memory never left this machine.</p></div></section>`;
+      renderPageInsight();
       return;
     }
     throw e;
@@ -2744,10 +2893,47 @@ async function render() {
   }
 }
 
-document.querySelectorAll(".tabs button").forEach((b) => {
+document.querySelectorAll("#tabs button[data-tab]").forEach((b) => {
   b.addEventListener("click", () => setTab(b.dataset.tab));
 });
 $("#brandBtn")?.addEventListener("click", () => setTab("welcome"));
+
+$("#brainSearch")?.addEventListener("input", (e) => {
+  if (state.tab !== "brain") return;
+  state.brainSearch = e.target.value;
+  paintBrain();
+});
+$("#showdownToggle")?.addEventListener("click", () => {
+  if (state.tab !== "brain") return;
+  state.showdownOpen = !state.showdownOpen;
+  if (!state.showdownOpen) clearRetrievalShowdown();
+  renderBrain();
+});
+$("#autoApplyAll")?.addEventListener("change", async (e) => {
+  if (state.tab !== "brain") return;
+  const on = Boolean(e.target.checked);
+  try {
+    const result = await apiUnscoped("/api/prefs", {
+      method: "POST",
+      body: JSON.stringify({ autoApplyAll: on }),
+    });
+    state.prefs = { autoApplyAll: result.autoApplyAll };
+    await refreshGraph();
+    renderBrain();
+  } catch (err) {
+    e.target.checked = !on;
+    alert(err.message);
+  }
+});
+$("#rulesSyncBtn")?.addEventListener("click", async () => {
+  if (state.tab !== "brain") return;
+  try {
+    const result = await api("/api/rules/sync", { method: "POST", body: "{}" });
+    alert(`Wrote ${result.pinned} pinned facts to ${result.path}`);
+  } catch (err) {
+    alert(err.message);
+  }
+});
 
 $("#repoSelect")?.addEventListener("change", async (e) => {
   const value = e.target.value;
@@ -2806,7 +2992,7 @@ $("#addRepoPath")?.addEventListener("keydown", (e) => {
   if (e.key === "Enter") openAddedPath();
 });
 
-document.querySelectorAll(".tabs button").forEach((b) => {
+document.querySelectorAll("#tabs button[data-tab]").forEach((b) => {
   b.classList.toggle("active", b.dataset.tab === state.tab);
 });
 

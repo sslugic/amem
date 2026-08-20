@@ -5,7 +5,7 @@ Memory still never leaves the laptop. A license only unlocks **local** extras.
 | Tier | What it unlocks |
 | --- | --- |
 | **free** | Memory UI, MCP, stats, backups |
-| **pro** | Local n-gram or **external** embedder, hygiene inbox, pin → Cursor rules |
+| **pro** | Local n-gram or **external** embedder, hygiene (inbox + weekly schedule + accept-safe), pin → Cursor rules |
 | **it** | Pro + richer `amem doctor --attest` packet + `amem it-pack` |
 
 There is no license server and no telemetry.
@@ -19,6 +19,8 @@ amem embed use ngram
 # amem embed use external --cmd /usr/bin/my-embedder
 amem embed reindex
 amem hygiene
+amem hygiene --accept-safe
+amem hygiene schedule
 amem rules sync
 amem license status
 ```

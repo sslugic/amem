@@ -8,74 +8,126 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
   </head>
   <body>
     <div class="app">
-      <header class="top">
-        <div class="top-main">
-          <div class="brand-block">
-            <button class="brand" id="brandBtn" type="button">amem</button>
-            <div class="repo-switcher">
-              <select id="repoSelect" aria-label="Git repo or workspace"></select>
-              <button class="btn secondary small hidden" id="renameWsBtn" type="button">Rename</button>
-              <button class="btn secondary small" id="personalBtn" type="button">Personal</button>
-              <button class="btn secondary small" id="addRepoBtn" type="button">Add repo</button>
-            </div>
-          </div>
-          <nav class="tabs" id="tabs">
-            <button data-tab="welcome" class="active">Plans</button>
-            <button data-tab="setup">Setup</button>
-            <button data-tab="brain">Memory</button>
-            <button data-tab="stats">Stats</button>
-          </nav>
+      <aside class="side-nav" id="sideNav">
+        <button class="brand" id="brandBtn" type="button">amem</button>
+        <nav class="side-tabs" id="tabs" aria-label="Primary">
+          <button type="button" data-tab="welcome" class="active">
+            <span class="nav-ico" aria-hidden="true"></span>
+            Plans
+          </button>
+          <button type="button" data-tab="setup">
+            <span class="nav-ico" aria-hidden="true"></span>
+            Setup
+          </button>
+          <button type="button" data-tab="brain">
+            <span class="nav-ico" aria-hidden="true"></span>
+            Memory
+          </button>
+          <button type="button" data-tab="stats">
+            <span class="nav-ico" aria-hidden="true"></span>
+            Stats
+          </button>
+        </nav>
+        <div class="side-footer">
+          <button class="side-foot-btn" id="personalBtn" type="button">Personal</button>
+          <button class="side-foot-btn" id="vaultToggle" type="button">Lock / backup</button>
         </div>
-        <div class="top-meta" id="vaultBar">
+      </aside>
+
+      <div class="app-main">
+        <header class="top-bar" id="topBar">
+          <div class="repo-switcher">
+            <select id="repoSelect" aria-label="Git repo or workspace"></select>
+            <button class="btn secondary small hidden" id="renameWsBtn" type="button">Rename</button>
+            <button class="btn secondary small" id="addRepoBtn" type="button">Add repo</button>
+          </div>
+          <div class="top-search-wrap" id="topSearchWrap">
+            <input
+              id="brainSearch"
+              class="top-search"
+              type="search"
+              placeholder="Filter facts…"
+              autocomplete="off"
+            />
+          </div>
+          <div class="top-actions" id="topActions">
+            <label class="autostart brain-auto top-mem-only hidden" id="autoApplyLabel">
+              <input type="checkbox" id="autoApplyAll" /> Auto-approve
+            </label>
+            <button class="btn secondary small top-mem-only hidden" type="button" id="showdownToggle">
+              Compare retrieval
+            </button>
+            <button class="btn secondary small top-mem-only hidden" type="button" id="rulesSyncBtn">
+              Sync rules
+            </button>
+          </div>
           <p class="vault-summary" id="vaultChips"></p>
-          <button class="btn secondary small" id="vaultToggle" type="button">Lock / backup</button>
+        </header>
+
+        <div id="vaultPanel" class="vault-panel hidden">
+          <div class="vault-panel-inner">
+            <div>
+              <strong>Lock &amp; local backup</strong>
+              <p class="note" style="margin: 0.35rem 0 0">
+                AES-256-GCM on this machine. Passphrase never leaves localhost. No cloud.
+              </p>
+            </div>
+            <div class="add-repo-row">
+              <input id="vaultPass" type="password" autocomplete="new-password" placeholder="Passphrase" />
+              <button class="btn" id="vaultLockBtn" type="button">Lock</button>
+              <button class="btn secondary" id="vaultUnlockBtn" type="button">Unlock</button>
+            </div>
+            <div class="add-repo-row">
+              <button class="btn secondary" id="vaultBackupBtn" type="button">Backup now</button>
+              <label class="note" for="vaultHour">Hour</label>
+              <input id="vaultHour" type="number" min="0" max="23" value="3" />
+              <button class="btn secondary" id="vaultScheduleBtn" type="button">Schedule daily</button>
+              <button class="btn secondary" id="vaultUnscheduleBtn" type="button">Unschedule</button>
+            </div>
+            <div class="add-repo-row">
+              <input
+                id="vaultRestorePath"
+                type="text"
+                placeholder="Path to backup .db or .db.enc on this machine"
+              />
+              <button class="btn secondary" id="vaultRestoreBtn" type="button">Restore</button>
+            </div>
+            <div class="add-repo-row" id="shopRow">
+              <a class="btn" id="buyPro" href="https://getamem.com/buy/pro" target="_blank" rel="noopener"
+                >Buy Pro · $12</a
+              >
+              <a class="btn secondary" id="buyIt" href="https://getamem.com/buy/it" target="_blank" rel="noopener"
+                >Buy IT · $49</a
+              >
+              <span class="note"
+                >After pay, download <code>amem-license.json</code> on the thank-you page, then
+                <code>amem license apply --file</code>. Mailtrap testing also keeps a copy in the sandbox inbox.</span
+              >
+            </div>
+            <p class="note" id="vaultDetail"></p>
+          </div>
         </div>
-      </header>
-      <div id="vaultPanel" class="vault-panel hidden">
-        <div class="vault-panel-inner">
-          <div>
-            <strong>Lock &amp; local backup</strong>
-            <p class="note" style="margin:0.35rem 0 0">AES-256-GCM on this machine. Passphrase never leaves localhost. No cloud.</p>
-          </div>
+
+        <div id="addRepoPanel" class="add-repo-panel hidden">
+          <label for="addRepoPath">Path to another git repo on this machine</label>
           <div class="add-repo-row">
-            <input id="vaultPass" type="password" autocomplete="new-password" placeholder="Passphrase" />
-            <button class="btn" id="vaultLockBtn" type="button">Lock</button>
-            <button class="btn secondary" id="vaultUnlockBtn" type="button">Unlock</button>
+            <input id="addRepoPath" type="text" placeholder="/Users/you/projects/other-repo" />
+            <button class="btn" id="addRepoGo" type="button">Open setup</button>
+            <button class="btn secondary" id="addRepoCancel" type="button">Cancel</button>
           </div>
-          <div class="add-repo-row">
-            <button class="btn secondary" id="vaultBackupBtn" type="button">Backup now</button>
-            <label class="note" for="vaultHour">Hour</label>
-            <input id="vaultHour" type="number" min="0" max="23" value="3" />
-            <button class="btn secondary" id="vaultScheduleBtn" type="button">Schedule daily</button>
-            <button class="btn secondary" id="vaultUnscheduleBtn" type="button">Unschedule</button>
-          </div>
-          <div class="add-repo-row">
-            <input id="vaultRestorePath" type="text" placeholder="Path to backup .db or .db.enc on this machine" />
-            <button class="btn secondary" id="vaultRestoreBtn" type="button">Restore</button>
-          </div>
-          <div class="add-repo-row" id="shopRow">
-            <a class="btn" id="buyPro" href="https://getamem.com/buy/pro" target="_blank" rel="noopener">Buy Pro · $12</a>
-            <a class="btn secondary" id="buyIt" href="https://getamem.com/buy/it" target="_blank" rel="noopener">Buy IT · $49</a>
-            <span class="note">After pay, download <code>amem-license.json</code> on the thank-you page, then <code>amem license apply --file</code>. Mailtrap testing also keeps a copy in the sandbox inbox.</span>
-          </div>
-          <p class="note" id="vaultDetail"></p>
+        </div>
+
+        <div class="workspace" id="workspace">
+          <main id="main"></main>
+          <aside class="right-panel" id="rightPanel" aria-label="Insights"></aside>
         </div>
       </div>
-      <div id="addRepoPanel" class="add-repo-panel hidden">
-        <label for="addRepoPath">Path to another git repo on this machine</label>
-        <div class="add-repo-row">
-          <input id="addRepoPath" type="text" placeholder="/Users/you/projects/other-repo" />
-          <button class="btn" id="addRepoGo" type="button">Open setup</button>
-          <button class="btn secondary" id="addRepoCancel" type="button">Cancel</button>
-        </div>
-      </div>
-      <main id="main"></main>
     </div>
     <script type="module" src="/app.js"></script>
   </body>

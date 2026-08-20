@@ -86,7 +86,14 @@ import {
   reindexAllEmbeds,
   setEmbedBackend,
 } from "./embed.js";
-import { decayStaleClaims, hygieneReport, mergeDuplicate } from "./hygiene.js";
+import { acceptSafeCleanups, decayStaleClaims, hygieneReport, mergeDuplicate, runScheduledHygiene } from "./hygiene.js";
+import {
+  hygieneSchedulePath,
+  installHygieneSchedule,
+  isHygieneScheduleInstalled,
+  uninstallHygieneSchedule,
+  writeHygieneHelperScript,
+} from "./hygiene-schedule.js";
 import { syncPinnedRules } from "./rules-sync.js";
 import { buildSbom, writeItPack } from "./it-pack.js";
 
@@ -116,7 +123,10 @@ Usage:
   amem backup schedule [--out <dir>] [--hour <0-23>]
   amem backup unschedule
   amem restore --file <backup.db|backup.db.enc> [--passphrase <secret>]
-  amem hygiene [--days 90] [--decay] [--merge <keepId> <dropId>]
+  amem hygiene [--days 90] [--decay] [--accept-safe] [--merge <keepId> <dropId>]
+  amem hygiene --scheduled
+  amem hygiene schedule [--hour <0-23>]
+  amem hygiene unschedule
   amem rules sync
   amem it-pack [--out <dir>]
   amem doctor [--attest] [--sbom] [--json]
@@ -640,6 +650,38 @@ async function main(): Promise<void> {
         break;
       }
       case "hygiene": {
+        const sub = positional[1];
+        if (sub === "schedule") {
+          const hourRaw = flagString(flags, "hour");
+          const hour = hourRaw !== undefined ? Number(hourRaw) : undefined;
+          if (hour !== undefined && (!Number.isFinite(hour) || hour < 0 || hour > 23)) {
+            throw new Error("--hour must be 0–23");
+          }
+          const result = installHygieneSchedule({ hour });
+          const helper = writeHygieneHelperScript();
+          console.log(`Scheduled weekly hygiene (${result.platform}): ${result.path}`);
+          console.log(`Runs Sunday ~${result.hour}:20 local (Pro/IT required at run time)`);
+          console.log(`Helper script: ${helper}`);
+          break;
+        }
+        if (sub === "unschedule") {
+          const result = uninstallHygieneSchedule();
+          console.log(`Removed hygiene schedule (${result.platform}): ${result.path}`);
+          break;
+        }
+        if (flags.get("scheduled") || sub === "run") {
+          const days = Number(flagString(flags, "days") ?? "90");
+          const result = runScheduledHygiene(Number.isFinite(days) ? days : 90);
+          if (result.skipped) {
+            console.log(`Hygiene schedule skipped: ${result.reason}`);
+            break;
+          }
+          for (const row of result.repos) {
+            if (row.error) console.log(`${row.name}: error — ${row.error}`);
+            else console.log(`${row.name}: decayed ${row.decayed}, merged ${row.merged}`);
+          }
+          break;
+        }
         const repo = resolveBinding(flags);
         const days = Number(flagString(flags, "days") ?? "90");
         const keep = flagString(flags, "merge");
@@ -648,6 +690,11 @@ async function main(): Promise<void> {
           if (!drop) throw new Error("Usage: amem hygiene --merge <keepId> <dropId>");
           const merged = mergeDuplicate(repo.id, keep, drop);
           console.log(`Merged ${merged.dropId} into ${merged.keepId}`);
+          break;
+        }
+        if (flags.get("accept-safe")) {
+          const result = acceptSafeCleanups(repo.id, Number.isFinite(days) ? days : 90);
+          console.log(`Decayed ${result.decayed.length}; merged ${result.merged.length}`);
           break;
         }
         const report = hygieneReport(repo.id, Number.isFinite(days) ? days : 90);
@@ -662,6 +709,9 @@ async function main(): Promise<void> {
           console.log(`stale (unused ${Number.isFinite(days) ? days : 90}d): ${report.stale.length}`);
           console.log(`duplicates: ${report.duplicates.length}`);
           console.log(`pending drafts: ${report.pendingDrafts}`);
+          console.log(
+            `schedule: ${isHygieneScheduleInstalled() ? hygieneSchedulePath() : "not installed"}`,
+          );
           for (const d of report.duplicates.slice(0, 8)) {
             console.log(`  merge ${d.dropId} → ${d.keepId} (${Math.round(d.similarity * 100)}%)`);
           }

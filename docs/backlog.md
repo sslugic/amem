@@ -37,9 +37,8 @@ Updated after completing the Feature Map **Later** phase (local embedding model 
 
 ## Open
 
-- First npm publish (`NPM_TOKEN` + `v*` tag) when you want `npx amem setup` for others.
+- First npm publish (`NPM_TOKEN` + package rename — `amem` blocked as too similar to mem/pem/viem).
 - Turn Mailtrap from testing → live send for real license emails (success-page download works either way).
-- Hygiene weekly auto-cleanup + soft paywall at ~200 facts (Phase 1 remainder).
 - Prompt-pack before/after Stats benchmark; restore wizard polish; IT seat pack.
 - Decide one-time vs subscription (offline files cannot revoke on cancel unless you add `expires_at` and re-issue).
 - Optional vendored ONNX/MiniLM weights in a paid pack (external command is the local hook today).
@@ -49,6 +48,7 @@ Updated after completing the Feature Map **Later** phase (local embedding model 
 - Public Checkout at **getamem.com** (tryamem redirects); Stripe live webhook.
 - UI **Apply license** (paste/drop) + **Turn on Pro retrieval** checklist.
 - Memory **retrieval showdown** (free hash vs Pro n-gram).
+- **Hygiene auto-cleanup** — `accept-safe`, weekly OS schedule, soft paywall banner at ~200 facts / noisy dups (free preview; apply stays Pro).
 
 ## Explicit non-goals (keep)
 

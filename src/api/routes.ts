@@ -89,7 +89,13 @@ import {
   restoreBackup,
   unlockDatabase,
 } from "../crypto.js";
-import { decayStaleClaims, hygieneReport, mergeDuplicate } from "../hygiene.js";
+import { decayStaleClaims, hygieneReport, hygienePreview, hygienePreviewAll, mergeDuplicate, acceptSafeCleanups } from "../hygiene.js";
+import {
+  hygieneScheduleStatus,
+  installHygieneSchedule,
+  uninstallHygieneSchedule,
+  writeHygieneHelperScript,
+} from "../hygiene-schedule.js";
 import { syncPinnedRules } from "../rules-sync.js";
 import {
   installBackupSchedule,
@@ -847,6 +853,45 @@ export function handleApi(req: ApiRequest): ApiResponse {
     return ok({ repo: found, ...summarizeRepo(found) });
   }
 
+  if (method === "GET" && pathname === "/api/hygiene/preview") {
+    const days = Number(searchParams.get("days") ?? "90");
+    const unused = Number.isFinite(days) ? days : 90;
+    if (searchParams.get("scope") === "all") {
+      return ok({ ...hygienePreviewAll(unused), schedule: hygieneScheduleStatus() });
+    }
+    const repoId = searchParams.get("repo");
+    const found = repoId ? getRepoById(repoId) : getRepoByCwd(cwd);
+    if (!found) return err(400, "Repo not initialized");
+    return ok({ ...hygienePreview(found.id, unused), schedule: hygieneScheduleStatus() });
+  }
+
+  if (method === "GET" && pathname === "/api/hygiene/schedule") {
+    return ok(hygieneScheduleStatus());
+  }
+
+  if (method === "POST" && pathname === "/api/hygiene/schedule") {
+    try {
+      const hour = bodyNumber(body, "hour");
+      if (hour !== undefined && (!Number.isFinite(hour) || hour < 0 || hour > 23)) {
+        return err(400, "hour must be 0–23");
+      }
+      const result = installHygieneSchedule({ hour });
+      const helper = writeHygieneHelperScript();
+      return ok({ ...result, helper, ...hygieneScheduleStatus() });
+    } catch (error) {
+      return err(403, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/hygiene/unschedule") {
+    try {
+      const result = uninstallHygieneSchedule();
+      return ok({ ...result, ...hygieneScheduleStatus() });
+    } catch (error) {
+      return err(400, error instanceof Error ? error.message : String(error));
+    }
+  }
+
   const scoped = resolveScope(req);
   if (!scoped.ok) return scoped.response;
   const { identity, repo } = scoped;
@@ -958,7 +1003,10 @@ export function handleApi(req: ApiRequest): ApiResponse {
     if (!repo) return err(400, "Repo not initialized");
     try {
       const days = Number(searchParams.get("days") ?? "90");
-      return ok(hygieneReport(repo.id, Number.isFinite(days) ? days : 90));
+      return ok({
+        ...hygieneReport(repo.id, Number.isFinite(days) ? days : 90),
+        schedule: hygieneScheduleStatus(),
+      });
     } catch (error) {
       return err(403, error instanceof Error ? error.message : String(error));
     }
@@ -969,6 +1017,16 @@ export function handleApi(req: ApiRequest): ApiResponse {
     try {
       const days = bodyNumber(body, "days") ?? 90;
       return ok(decayStaleClaims(repo.id, days));
+    } catch (error) {
+      return err(403, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/hygiene/accept-safe") {
+    if (!repo) return err(400, "Repo not initialized");
+    try {
+      const days = bodyNumber(body, "days") ?? 90;
+      return ok(acceptSafeCleanups(repo.id, days));
     } catch (error) {
       return err(403, error instanceof Error ? error.message : String(error));
     }

@@ -1,16 +1,18 @@
 /**
  * Local memory hygiene: decay unused facts, find near-duplicates, review inbox.
- * Pro/IT only. Nothing is uploaded.
+ * Apply/schedule is Pro/IT only. Preview counts are free (soft paywall).
+ * Nothing is uploaded.
  */
 import {
   getClaim,
   listClaims,
   listProposalDrafts,
+  listRepos,
   listUsageEvents,
   setClaimStatus,
   type ClaimRow,
 } from "./db.js";
-import { FEATURE_HYGIENE, requireFeature } from "./license.js";
+import { FEATURE_HYGIENE, hasFeature, requireFeature } from "./license.js";
 import { applyProposal, applySupersedes } from "./proposal.js";
 import { tokenJaccard } from "./search.js";
 import { parseAnchors } from "./freshness.js";
@@ -28,6 +30,19 @@ export type HygieneReport = {
   active: number;
 };
 
+export type HygienePreview = {
+  active: number;
+  staleCount: number;
+  duplicateCount: number;
+  pendingDrafts: number;
+  /** Estimated active count after decay + merge */
+  afterCleanup: number;
+  softPaywall: boolean;
+};
+
+export const SOFT_PAYWALL_FACTS = 200;
+export const SOFT_PAYWALL_NOISE = 15;
+
 function usedClaimIds(repoId: string, days: number): Set<string> {
   const ids = new Set<string>();
   for (const event of listUsageEvents({ repoId, days })) {
@@ -42,8 +57,8 @@ function usedClaimIds(repoId: string, days: number): Set<string> {
   return ids;
 }
 
-export function hygieneReport(repoId: string, unusedDays = 90): HygieneReport {
-  requireFeature(FEATURE_HYGIENE, "Memory hygiene");
+/** Shared heuristics — no license gate (used by free preview + Pro report). */
+function computeHygiene(repoId: string, unusedDays = 90): HygieneReport {
   const claims = listClaims(repoId);
   const used = usedClaimIds(repoId, unusedDays);
   const cutoff = Date.now() - unusedDays * 86_400_000;
@@ -80,10 +95,53 @@ export function hygieneReport(repoId: string, unusedDays = 90): HygieneReport {
   };
 }
 
+/** Free: counts only for soft paywall / banners. Never applies changes. */
+export function hygienePreview(repoId: string, unusedDays = 90): HygienePreview {
+  const report = computeHygiene(repoId, unusedDays);
+  const staleCount = report.stale.length;
+  const duplicateCount = report.duplicates.length;
+  const removable = Math.min(report.active, staleCount + duplicateCount);
+  const afterCleanup = Math.max(0, report.active - removable);
+  const softPaywall =
+    report.active >= SOFT_PAYWALL_FACTS || staleCount + duplicateCount >= SOFT_PAYWALL_NOISE;
+  return {
+    active: report.active,
+    staleCount,
+    duplicateCount,
+    pendingDrafts: report.pendingDrafts,
+    afterCleanup,
+    softPaywall,
+  };
+}
+
+/** Aggregate preview across all tracked repos (for All memory scope). */
+export function hygienePreviewAll(unusedDays = 90): HygienePreview {
+  let active = 0;
+  let staleCount = 0;
+  let duplicateCount = 0;
+  let pendingDrafts = 0;
+  for (const repo of listRepos()) {
+    const p = hygienePreview(repo.id, unusedDays);
+    active += p.active;
+    staleCount += p.staleCount;
+    duplicateCount += p.duplicateCount;
+    pendingDrafts += p.pendingDrafts;
+  }
+  const removable = Math.min(active, staleCount + duplicateCount);
+  const afterCleanup = Math.max(0, active - removable);
+  const softPaywall = active >= SOFT_PAYWALL_FACTS || staleCount + duplicateCount >= SOFT_PAYWALL_NOISE;
+  return { active, staleCount, duplicateCount, pendingDrafts, afterCleanup, softPaywall };
+}
+
+export function hygieneReport(repoId: string, unusedDays = 90): HygieneReport {
+  requireFeature(FEATURE_HYGIENE, "Memory hygiene");
+  return computeHygiene(repoId, unusedDays);
+}
+
 export function decayStaleClaims(repoId: string, unusedDays = 90): { decayed: string[] } {
   requireFeature(FEATURE_HYGIENE, "Memory hygiene");
   const decayed: string[] = [];
-  for (const claim of hygieneReport(repoId, unusedDays).stale) {
+  for (const claim of computeHygiene(repoId, unusedDays).stale) {
     if (setClaimStatus(repoId, claim.id, "decayed")) decayed.push(claim.id);
   }
   return { decayed };
@@ -112,4 +170,77 @@ export function mergeDuplicate(repoId: string, keepId: string, dropId: string): 
   );
   applyProposal(repoId, proposal);
   return { keepId: keep.id, dropId: drop.id };
+}
+
+/** Decay unused + merge near-duplicates in one step (Pro/IT). */
+export function acceptSafeCleanups(
+  repoId: string,
+  unusedDays = 90,
+): { decayed: string[]; merged: Array<{ keepId: string; dropId: string; similarity: number }> } {
+  requireFeature(FEATURE_HYGIENE, "Memory hygiene");
+  const report = computeHygiene(repoId, unusedDays);
+  const decayed: string[] = [];
+  for (const claim of report.stale) {
+    if (setClaimStatus(repoId, claim.id, "decayed")) decayed.push(claim.id);
+  }
+  const decayedSet = new Set(decayed);
+  const gone = new Set<string>(decayed);
+  const merged: Array<{ keepId: string; dropId: string; similarity: number }> = [];
+  const ordered = [...report.duplicates].sort((a, b) => b.similarity - a.similarity);
+  for (const d of ordered) {
+    if (gone.has(d.keepId) || gone.has(d.dropId)) continue;
+    if (decayedSet.has(d.keepId) || decayedSet.has(d.dropId)) continue;
+    try {
+      mergeDuplicate(repoId, d.keepId, d.dropId);
+      merged.push(d);
+      gone.add(d.dropId);
+    } catch {
+      // claim may have been removed mid-loop
+    }
+  }
+  return { decayed, merged };
+}
+
+/** Scheduled job: clean every tracked repo when licensed. */
+export function runScheduledHygiene(unusedDays = 90): {
+  skipped?: boolean;
+  reason?: string;
+  repos: Array<{
+    repoId: string;
+    name: string;
+    decayed: number;
+    merged: number;
+    error?: string;
+  }>;
+} {
+  if (!hasFeature(FEATURE_HYGIENE)) {
+    return { skipped: true, reason: "Pro/IT license required for hygiene", repos: [] };
+  }
+  const repos: Array<{
+    repoId: string;
+    name: string;
+    decayed: number;
+    merged: number;
+    error?: string;
+  }> = [];
+  for (const repo of listRepos()) {
+    try {
+      const result = acceptSafeCleanups(repo.id, unusedDays);
+      repos.push({
+        repoId: repo.id,
+        name: repo.repo_name,
+        decayed: result.decayed.length,
+        merged: result.merged.length,
+      });
+    } catch (error) {
+      repos.push({
+        repoId: repo.id,
+        name: repo.repo_name,
+        decayed: 0,
+        merged: 0,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { repos };
 }
