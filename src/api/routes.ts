@@ -17,25 +17,40 @@ import {
   listRepos,
   listSessions,
   listUsageEvents,
+  listProposalDrafts,
+  getProposalDraft,
+  setProposalDraftStatus,
+  updateClaim,
+  setClaimPinned,
+  deleteClaim,
   setReportedOnLatest,
   setReportedTokensSaved,
   upsertRepo,
   upsertSetupState,
   wipeRepo,
+  openDb,
   type RepoRow,
   type UsageEventRow,
 } from "../db.js";
 import { buildContext, renderContextMarkdown } from "../context.js";
 import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
+import { installHost } from "../install/hosts.js";
 import {
   assertPlatformAllowed,
   assertRemoteAllowed,
   loadPolicy,
 } from "../policy.js";
 import { applyProposal, parseProposalJson, validateProposal } from "../proposal.js";
-import { detectRepoIdentity, normalizeRemoteUrl, parseWorkspaceSlug, slugifyWorkspace, workspaceIdentity, type RepoIdentity } from "../repo-identity.js";
-import { KNOWN_PLATFORMS, normalizePlatforms } from "../platforms.js";
+import {
+  detectRepoIdentity,
+  normalizeRemoteUrl,
+  parseWorkspaceSlug,
+  slugifyWorkspace,
+  workspaceIdentity,
+  type RepoIdentity,
+} from "../repo-identity.js";
+import { HOST_INSTALL_IDS, KNOWN_PLATFORMS, normalizePlatforms } from "../platforms.js";
 import { amemHome, dbPath } from "../paths.js";
 import { buildAttestReport } from "../attest.js";
 import { scanGitRepos } from "../scan.js";
@@ -43,8 +58,11 @@ import { provisionWorkspace } from "../workspace-setup.js";
 import {
   installLoginService,
   isServiceInstalled,
+  isServiceSupported,
+  servicePlatform,
   uninstallLoginService,
 } from "../service.js";
+import { searchClaimsFts, tokenize } from "../search.js";
 
 export type ApiRequest = {
   method: string;
@@ -511,6 +529,12 @@ export function handleApi(req: ApiRequest): ApiResponse {
         current = upsertRepo(identity, platform);
         if (platform === "cursor") installCursor(identity.rootPath);
         else if (platform === "claude") installClaude(identity.rootPath);
+        else if (HOST_INSTALL_IDS.has(platform)) {
+          installHost(platform, {
+            repoRoot: identity.rootPath,
+            workspace: identity.repoName,
+          });
+        }
       }
       upsertSetupState(current.id, platforms, true);
       tracked.push(summarizeRepo(current));
@@ -521,7 +545,8 @@ export function handleApi(req: ApiRequest): ApiResponse {
   if (method === "GET" && pathname === "/api/service") {
     return ok({
       platform: process.platform,
-      supported: process.platform === "darwin",
+      servicePlatform: servicePlatform(),
+      supported: isServiceSupported(),
       installed: isServiceInstalled(),
     });
   }
@@ -531,7 +556,7 @@ export function handleApi(req: ApiRequest): ApiResponse {
     if (typeof enabled !== "boolean") return err(400, "enabled must be true or false");
     try {
       const result = enabled ? installLoginService() : uninstallLoginService();
-      return ok({ ...result, supported: process.platform === "darwin" });
+      return ok({ ...result, supported: isServiceSupported() });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return err(400, message);
@@ -576,6 +601,14 @@ export function handleApi(req: ApiRequest): ApiResponse {
       current = upsertRepo(identity, platform);
       if (platform === "cursor") results.push(installCursor(identity.rootPath));
       else if (platform === "claude") results.push(installClaude(identity.rootPath));
+      else if (HOST_INSTALL_IDS.has(platform)) {
+        results.push(
+          installHost(platform, {
+            repoRoot: identity.rootPath,
+            workspace: identity.repoName,
+          }),
+        );
+      }
     }
     const setup = upsertSetupState(current.id, valid, true);
     return ok({
@@ -643,6 +676,7 @@ export function handleApi(req: ApiRequest): ApiResponse {
       flows: listFlows(repo.id),
       claims: listClaims(repo.id),
       edges: listEdges(repo.id),
+      drafts: listProposalDrafts(repo.id, { status: "pending", limit: 30 }),
       recentClaimIds: [...recentClaimIds],
       recentEvents: events.slice(0, 30),
       activity: buildActivityGraph({
@@ -650,6 +684,115 @@ export function handleApi(req: ApiRequest): ApiResponse {
         sessions: listSessions(repo.id),
       }),
     });
+  }
+
+  if (method === "GET" && pathname === "/api/drafts") {
+    if (!repo) return err(400, "Repo not initialized");
+    const status = searchParams.get("status") ?? "pending";
+    return ok({ drafts: listProposalDrafts(repo.id, { status, limit: 50 }) });
+  }
+
+  if (method === "POST" && pathname === "/api/drafts/apply") {
+    if (!repo) return err(400, "Repo not initialized");
+    const draftId = bodyField(body, "id");
+    if (!draftId) return err(400, "id required");
+    const draft = getProposalDraft(draftId);
+    if (!draft || draft.repo_id !== repo.id) return err(404, "Draft not found");
+    if (draft.status !== "pending") return err(400, `Draft is ${draft.status}`);
+    let proposal;
+    try {
+      proposal = parseProposalJson(draft.proposal_json);
+    } catch (error) {
+      return err(400, error instanceof Error ? error.message : String(error));
+    }
+    const policy = loadPolicy().policy;
+    const applied = applyProposal(repo.id, proposal, policy);
+    setProposalDraftStatus(draftId, "applied");
+    return ok({ applied, draft: getProposalDraft(draftId) });
+  }
+
+  if (method === "POST" && pathname === "/api/drafts/dismiss") {
+    if (!repo) return err(400, "Repo not initialized");
+    const draftId = bodyField(body, "id");
+    if (!draftId) return err(400, "id required");
+    const draft = getProposalDraft(draftId);
+    if (!draft || draft.repo_id !== repo.id) return err(404, "Draft not found");
+    setProposalDraftStatus(draftId, "dismissed");
+    return ok({ draft: getProposalDraft(draftId) });
+  }
+
+  if (method === "GET" && pathname === "/api/claims/search") {
+    if (!repo) return err(400, "Repo not initialized");
+    const q = searchParams.get("q") || bodyField(body, "q") || "";
+    if (!q.trim()) return ok({ claims: listClaims(repo.id).slice(0, 40) });
+    const hits = searchClaimsFts(openDb(), repo.id, q, 40);
+    const byId = new Map(listClaims(repo.id).map((c) => [c.id, c]));
+    const ranked = hits.map((h) => byId.get(h.id)).filter(Boolean);
+    if (ranked.length > 0) return ok({ claims: ranked });
+    // keyword fallback
+    const tokens = tokenize(q);
+    const fallback = listClaims(repo.id)
+      .map((c) => ({
+        c,
+        score: tokens.reduce(
+          (s, t) => s + (`${c.id} ${c.text} ${c.code_anchors}`.toLowerCase().includes(t) ? 1 : 0),
+          0,
+        ),
+      }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 40)
+      .map((x) => x.c);
+    return ok({ claims: fallback });
+  }
+
+  if (method === "PATCH" && pathname === "/api/claims") {
+    if (!repo) return err(400, "Repo not initialized");
+    const id = bodyField(body, "id");
+    if (!id) return err(400, "id required");
+    const payload = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const anchorsRaw = payload.code_anchors ?? payload.anchors;
+    let code_anchors: string[] | undefined;
+    if (Array.isArray(anchorsRaw)) {
+      code_anchors = anchorsRaw.filter((a): a is string => typeof a === "string" && Boolean(a.trim()));
+    } else if (typeof anchorsRaw === "string") {
+      code_anchors = anchorsRaw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    try {
+      const updated = updateClaim(repo.id, id, {
+        text: typeof payload.text === "string" ? payload.text : undefined,
+        kind: typeof payload.kind === "string" ? payload.kind : undefined,
+        code_anchors,
+        pinned: typeof payload.pinned === "boolean" ? payload.pinned : undefined,
+      });
+      if (!updated) return err(404, "Claim not found");
+      return ok({ claim: updated });
+    } catch (error) {
+      return err(400, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/claims/pin") {
+    if (!repo) return err(400, "Repo not initialized");
+    const id = bodyField(body, "id");
+    if (!id) return err(400, "id required");
+    const pinned = (body as { pinned?: boolean })?.pinned;
+    if (typeof pinned !== "boolean") return err(400, "pinned must be true or false");
+    const updated = setClaimPinned(repo.id, id, pinned);
+    if (!updated) return err(404, "Claim not found");
+    return ok({ claim: updated });
+  }
+
+  if (method === "DELETE" && pathname === "/api/claims") {
+    if (!repo) return err(400, "Repo not initialized");
+    const id = searchParams.get("id") || bodyField(body, "id");
+    if (!id) return err(400, "id required");
+    const removed = deleteClaim(repo.id, id);
+    if (!removed) return err(404, "Claim not found");
+    return ok({ deleted: id });
   }
 
   if (method === "GET" && pathname === "/api/usage") {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { buildAttestReport, formatAttestHuman } from "./attest.js";
 import { handleApi, logContextUsage } from "./api/routes.js";
@@ -23,6 +23,7 @@ import {
 import { handleHookPayload } from "./hook.js";
 import { installClaude, claudeInstallHealth } from "./install/claude.js";
 import { installCursor, cursorInstallHealth } from "./install/cursor.js";
+import { installHost } from "./install/hosts.js";
 import { amemHome, dbPath } from "./paths.js";
 import {
   assertExportAllowed,
@@ -33,38 +34,70 @@ import {
 } from "./policy.js";
 import {
   applyProposal,
+  diffProposal,
   exportRepoMemory,
+  formatProposalDiff,
   loadProposalFile,
   validateProposal,
 } from "./proposal.js";
 import { detectRepoIdentity, parseWorkspaceSlug, workspaceIdentity } from "./repo-identity.js";
 import { startUiServer, buildUiLandingUrl, openUiInBrowser, isAddrInUse } from "./ui/server.js";
-import { installLoginService, isServiceInstalled, uninstallLoginService } from "./service.js";
+import { installLoginService, isServiceInstalled, isServiceSupported, uninstallLoginService } from "./service.js";
 import { mcpClientConfig, runMcpServer } from "./mcp.js";
 import { provisionWorkspace } from "./workspace-setup.js";
+import { HOST_INSTALL_IDS } from "./platforms.js";
+import { ensurePersonalWorkspace, PERSONAL_SLUG } from "./personal.js";
+import {
+  createBackup,
+  defaultBackupDir,
+  encryptedDbPath,
+  isDbEncryptedAtRest,
+  lockDatabase,
+  resolvePassphrase,
+  unlockDatabase,
+} from "./crypto.js";
+import {
+  installBackupSchedule,
+  isBackupScheduleInstalled,
+  uninstallBackupSchedule,
+  writeBackupHelperScript,
+  backupSchedulePath,
+} from "./backup-schedule.js";
 
 function usage(): never {
   console.log(`amem — local personal agent memory
 
 Usage:
-  amem init --platform cursor|claude
-  amem init --workspace <name> [--path <dir>] [--platform luna|cursor|claude]
+  amem setup [--personal] [--platform <host>]
+  amem init --platform cursor|claude|windsurf|continue|aider|zed
+  amem init --workspace <name> [--path <dir>] [--platform …]
+  amem init --personal
   amem rename "<display name>" --workspace <slug>
   amem status [--workspace <name>]
   amem doctor [--attest] [--json]
   amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna]
   amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>]
   amem propose validate <file.json>
+  amem propose diff <file.json>
   amem propose apply <file.json>
   amem export [--out <file.json>]
   amem wipe --yes
   amem wipe --all --yes
+  amem lock --passphrase <secret>
+  amem unlock --passphrase <secret>
+  amem backup [--out <dir>] [--passphrase <secret>] [--label <name>]
+  amem backup schedule [--out <dir>] [--hour <0-23>]
+  amem backup unschedule
   amem session touch --platform cursor|claude [--session-id <id>]
   amem hook
   amem usage report --saved <n> [--platform cursor|claude] [--event-id <id>]
   amem ui [--port 7843] [--no-open]
   amem service install|uninstall|status
   amem mcp [--print-config] [--workspace <name>]
+
+Install (npx-ready once published):
+  npx amem setup
+  npm i -g amem && amem setup
 
 Privacy:
   All memory stays in ${amemHome()} on this machine.
@@ -128,11 +161,57 @@ async function readStdin(): Promise<string> {
 async function main(): Promise<void> {
   const { positional, flags } = parseArgs(process.argv);
   const cmd = positional[0];
-  if (!cmd) usage();
+  if (!cmd) {
+    console.log("amem — local personal agent memory\n");
+    console.log("Quick start:  amem setup");
+    console.log("Help:         amem help\n");
+    console.log(`Home: ${amemHome()}`);
+    process.exit(0);
+  }
 
   try {
     switch (cmd) {
+      case "setup": {
+        const personal = Boolean(flags.get("personal")) || !flagString(flags, "platform");
+        if (personal || flags.get("personal")) {
+          const repo = ensurePersonalWorkspace(flagString(flags, "platform") ?? "app");
+          console.log(`Personal prefs workspace ready: ${repo.repo_name} (${repo.id})`);
+          console.log(`  remember: amem remember "I prefer …" --workspace ${PERSONAL_SLUG}`);
+        }
+        const platform = flagString(flags, "platform");
+        if (platform && HOST_INSTALL_IDS.has(platform)) {
+          const result = installHost(platform, {
+            repoRoot: process.cwd(),
+            workspace: PERSONAL_SLUG,
+          });
+          console.log(`Installed host hints for ${result.host}:`);
+          for (const p of result.paths) console.log(`  ${p}`);
+          for (const n of result.notes) console.log(`  note: ${n}`);
+        } else if (platform === "cursor") {
+          const identity = detectRepoIdentity();
+          const info = installCursor(identity.rootPath);
+          console.log(`Cursor install under ${identity.rootPath}`);
+          for (const s of info.skills) console.log(`  skill: ${s}`);
+        } else if (platform === "claude") {
+          const info = installClaude(detectRepoIdentity().rootPath);
+          console.log("Claude Code hooks/skills installed");
+          for (const s of info.skills) console.log(`  skill: ${s}`);
+        }
+        console.log(`Memory DB: ${dbPath()}`);
+        console.log("Next: amem ui   or   amem context \"What should I know?\"");
+        console.log("npx: once published, `npx amem setup` works the same (Node 20+, native better-sqlite3).");
+        break;
+      }
       case "init": {
+        if (flags.get("personal")) {
+          const repo = ensurePersonalWorkspace(flagString(flags, "platform") ?? "app");
+          upsertSetupState(repo.id, [repo.platform ?? "app"], true);
+          console.log(`Personal prefs workspace ${repo.repo_name} (${repo.id})`);
+          console.log(`Memory DB: ${dbPath()}`);
+          console.log(`Root: ${repo.root_path}`);
+          console.log(`Use: amem remember "…" --workspace ${PERSONAL_SLUG}`);
+          break;
+        }
         const workspace = flagString(flags, "workspace");
         if (workspace) {
           const platform = flagString(flags, "platform") ?? "app";
@@ -144,6 +223,9 @@ async function main(): Promise<void> {
           upsertSetupState(repo.id, [platform], true);
           if (platform === "cursor") installCursor(identity.rootPath);
           else if (platform === "claude") installClaude(identity.rootPath);
+          else if (HOST_INSTALL_IDS.has(platform)) {
+            installHost(platform, { repoRoot: identity.rootPath, workspace });
+          }
           const ready = provisionWorkspace(repo, platform);
           console.log(`Workspace ${repo.repo_name} (${repo.id})`);
           console.log(`Memory DB: ${dbPath()}`);
@@ -153,19 +235,30 @@ async function main(): Promise<void> {
           break;
         }
         const platform = flagString(flags, "platform");
-        if (platform !== "cursor" && platform !== "claude") {
-          throw new Error("amem init requires --platform cursor|claude or --workspace <name>");
+        if (!platform) {
+          throw new Error(
+            "amem init requires --platform cursor|claude|windsurf|continue|aider|zed, --workspace <name>, or --personal",
+          );
         }
         const policy = loadPolicy().policy;
         assertPlatformAllowed(platform, policy);
         const identity = detectRepoIdentity();
         assertRemoteAllowed(identity.remoteUrl, policy);
         const repo = upsertRepo(identity, platform);
-        let installInfo;
+        let installInfo: { skills?: string[]; rulePath?: string; hooksPath?: string; settingsPath?: string; paths?: string[]; notes?: string[]; host?: string } = { skills: [] };
         if (platform === "cursor") {
           installInfo = installCursor(identity.rootPath);
-        } else {
+        } else if (platform === "claude") {
           installInfo = installClaude(identity.rootPath);
+        } else if (HOST_INSTALL_IDS.has(platform)) {
+          installInfo = installHost(platform, {
+            repoRoot: identity.rootPath,
+            workspace: identity.repoName,
+          });
+        } else {
+          throw new Error(
+            `Unknown platform "${platform}". Use cursor|claude|windsurf|continue|aider|zed`,
+          );
         }
         upsertSetupState(repo.id, [platform], true);
         console.log(`Bound repo ${repo.repo_name} (${repo.repo_key})`);
@@ -180,8 +273,14 @@ async function main(): Promise<void> {
         if ("settingsPath" in installInfo && installInfo.settingsPath) {
           console.log(`Claude settings: ${installInfo.settingsPath}`);
         }
-        for (const s of installInfo.skills) {
-          console.log(`Skill: ${s}`);
+        if (installInfo.skills) {
+          for (const s of installInfo.skills) console.log(`Skill: ${s}`);
+        }
+        if (installInfo.paths) {
+          for (const p of installInfo.paths) console.log(`Config: ${p}`);
+        }
+        if (installInfo.notes) {
+          for (const n of installInfo.notes) console.log(`Note: ${n}`);
         }
         console.log('Next: amem ui   or   amem context "What should I know?"');
         break;
@@ -202,8 +301,11 @@ async function main(): Promise<void> {
         console.log(`remote:   ${identity.remoteUrl ?? "(none)"}`);
         console.log(`amem home:${amemHome()}`);
         console.log(`db:       ${dbPath()}`);
+        console.log(`encrypted:${isDbEncryptedAtRest() ? `yes (${encryptedDbPath()})` : existsSync(encryptedDbPath()) ? "unlocked (enc copy present)" : "no"}`);
         console.log(`export:   ${policy.allow_export ? "allowed" : "blocked by policy"}`);
         console.log(`ui:       ${policy.ui_enabled ? `enabled (${policy.ui_bind})` : "disabled by policy"}`);
+        console.log(`auto-apply kinds: ${(policy.auto_apply_kinds ?? []).join(", ") || "(none)"}`);
+        console.log(`backup schedule: ${isBackupScheduleInstalled() ? backupSchedulePath() : "not installed"}`);
         if (!repo) {
           console.log("binding:  not initialized");
         } else {
@@ -331,16 +433,19 @@ async function main(): Promise<void> {
       case "propose": {
         const sub = positional[1];
         const file = positional[2];
-        if ((sub !== "validate" && sub !== "apply") || !file) {
-          throw new Error("Usage: amem propose validate|apply <file.json>");
+        if ((sub !== "validate" && sub !== "apply" && sub !== "diff") || !file) {
+          throw new Error("Usage: amem propose validate|diff|apply <file.json>");
         }
         const policy = loadPolicy().policy;
         const proposal = loadProposalFile(resolve(file));
         let existingClaims = undefined as ReturnType<typeof listClaims> | undefined;
+        let repoId: string | null = null;
         try {
-          existingClaims = listClaims(resolveBinding(flags).id, { includeSuperseded: true });
+          const bound = resolveBinding(flags);
+          repoId = bound.id;
+          existingClaims = listClaims(bound.id, { includeSuperseded: true });
         } catch {
-          // validate can run without a binding; conflict checks need one
+          // validate/diff can run without a binding; conflict checks need one
         }
         const validated = validateProposal(proposal, policy, { existingClaims });
         if (!validated.ok) {
@@ -353,8 +458,11 @@ async function main(): Promise<void> {
           console.log("Warnings:");
           for (const w of validated.warnings) console.log(`- ${w}`);
         }
-        if (sub === "validate") {
-          console.log("Proposal is valid.");
+        if (repoId) {
+          console.log(formatProposalDiff(diffProposal(repoId, proposal)));
+        }
+        if (sub === "validate" || sub === "diff") {
+          console.log(sub === "diff" ? "Diff complete." : "Proposal is valid.");
           break;
         }
         const repo = resolveBinding(flags);
@@ -391,6 +499,63 @@ async function main(): Promise<void> {
         } else {
           process.stdout.write(json);
         }
+        break;
+      }
+      case "lock": {
+        const passphrase = resolvePassphrase(flagString(flags, "passphrase"));
+        closeDb();
+        const result = lockDatabase(passphrase);
+        console.log(`Locked database → ${result.encPath}`);
+        console.log("Plaintext graph.db removed. Unlock with: amem unlock --passphrase …");
+        break;
+      }
+      case "unlock": {
+        const passphrase = resolvePassphrase(flagString(flags, "passphrase"));
+        closeDb();
+        const result = unlockDatabase(passphrase);
+        console.log(`Unlocked database → ${result.dbPath}`);
+        console.log("Keep AMEM_PASSPHRASE set in your shell if you re-lock between sessions.");
+        break;
+      }
+      case "backup": {
+        const sub = positional[1];
+        if (sub === "schedule") {
+          const out = flagString(flags, "out");
+          const hourRaw = flagString(flags, "hour");
+          const hour = hourRaw !== undefined ? Number(hourRaw) : undefined;
+          if (hour !== undefined && (!Number.isFinite(hour) || hour < 0 || hour > 23)) {
+            throw new Error("--hour must be 0–23");
+          }
+          const result = installBackupSchedule({ outDir: out, hour });
+          const helper = writeBackupHelperScript(result.outDir);
+          console.log(`Scheduled local backup (${result.platform}): ${result.path}`);
+          console.log(`Backup dir: ${result.outDir}`);
+          console.log(`Helper script: ${helper}`);
+          console.log("Passphrase (if set via AMEM_PASSPHRASE) is used by `amem backup` when encrypting.");
+          break;
+        }
+        if (sub === "unschedule") {
+          const result = uninstallBackupSchedule();
+          console.log(`Removed backup schedule (${result.platform}): ${result.path}`);
+          break;
+        }
+        if (sub && sub !== "now") {
+          throw new Error("Usage: amem backup [--out <dir>] [--passphrase …] | amem backup schedule|unschedule");
+        }
+        closeDb();
+        let passphrase: string | undefined;
+        try {
+          passphrase = resolvePassphrase(flagString(flags, "passphrase"));
+        } catch {
+          passphrase = undefined;
+        }
+        const result = createBackup({
+          outDir: flagString(flags, "out") || defaultBackupDir(),
+          passphrase,
+          label: flagString(flags, "label"),
+        });
+        console.log(`Backup written: ${result.path}`);
+        console.log(`Encrypted: ${result.encrypted ? "yes" : "no (pass --passphrase to encrypt)"}`);
         break;
       }
       case "wipe": {
@@ -497,18 +662,20 @@ async function main(): Promise<void> {
       case "service": {
         const sub = positional[1];
         if (sub === "status") {
+          console.log(`platform: ${process.platform}`);
+          console.log(`supported: ${isServiceSupported() ? "yes" : "no"}`);
           console.log(`login item: ${isServiceInstalled() ? "installed" : "not installed"}`);
           break;
         }
         if (sub === "install") {
           const result = installLoginService();
-          console.log(`Installed login item: ${result.path}`);
+          console.log(`Installed login item (${result.platform}): ${result.path}`);
           console.log("amem ui will start on login (localhost only).");
           break;
         }
         if (sub === "uninstall") {
           const result = uninstallLoginService();
-          console.log(`Removed login item: ${result.path}`);
+          console.log(`Removed login item (${result.platform}): ${result.path}`);
           break;
         }
         throw new Error("Usage: amem service install|uninstall|status");

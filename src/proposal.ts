@@ -269,6 +269,88 @@ export function loadProposalFile(path: string): Proposal {
   return parseProposalJson(readFileSync(path, "utf8"));
 }
 
+export type ProposalDiff = {
+  claimsAdded: string[];
+  claimsUpdated: string[];
+  claimsUnchanged: string[];
+  willSupersede: string[];
+  componentsAdded: string[];
+  flowsAdded: string[];
+};
+
+function anchorsEqual(a: string | undefined, b: string[] | undefined): boolean {
+  let left: string[] = [];
+  try {
+    left = a ? (JSON.parse(a) as string[]) : [];
+  } catch {
+    left = [];
+  }
+  const right = b ?? [];
+  if (left.length !== right.length) return false;
+  const s = new Set(left);
+  return right.every((x) => s.has(x));
+}
+
+/** Preview what apply would change against current active (+ superseded targets). */
+export function diffProposal(repoId: string, proposal: Proposal): ProposalDiff {
+  const existing = listClaims(repoId, { includeSuperseded: true });
+  const byId = new Map(existing.map((c) => [c.id, c]));
+  const components = listComponents(repoId);
+  const flows = listFlows(repoId);
+  const componentIds = new Set(components.map((c) => c.id));
+  const flowIds = new Set(flows.map((f) => f.id));
+
+  const claimsAdded: string[] = [];
+  const claimsUpdated: string[] = [];
+  const claimsUnchanged: string[] = [];
+  for (const claim of proposal.claims ?? []) {
+    const prior = byId.get(claim.id);
+    if (!prior) {
+      claimsAdded.push(claim.id);
+      continue;
+    }
+    const same =
+      prior.text === claim.text &&
+      prior.kind === claim.kind &&
+      anchorsEqual(prior.code_anchors, claim.code_anchors) &&
+      (prior.status ?? "active") === "active";
+    if (same) claimsUnchanged.push(claim.id);
+    else claimsUpdated.push(claim.id);
+  }
+
+  const willSupersede = [...collectSupersedeTargets(proposal).keys()].filter((id) => {
+    const row = byId.get(id);
+    return row && (row.status ?? "active") === "active";
+  });
+
+  return {
+    claimsAdded,
+    claimsUpdated,
+    claimsUnchanged,
+    willSupersede,
+    componentsAdded: (proposal.components ?? [])
+      .map((c) => c.id)
+      .filter((id) => !componentIds.has(id)),
+    flowsAdded: (proposal.flows ?? []).map((f) => f.id).filter((id) => !flowIds.has(id)),
+  };
+}
+
+export function formatProposalDiff(diff: ProposalDiff): string {
+  const lines: string[] = ["Diff:"];
+  const push = (label: string, ids: string[]) => {
+    if (!ids.length) return;
+    lines.push(`- ${label}: ${ids.map((id) => `\`${id}\``).join(", ")}`);
+  };
+  push("add claims", diff.claimsAdded);
+  push("update claims", diff.claimsUpdated);
+  push("unchanged claims", diff.claimsUnchanged);
+  push("supersede", diff.willSupersede);
+  push("add components", diff.componentsAdded);
+  push("add flows", diff.flowsAdded);
+  if (lines.length === 1) lines.push("- (no claim/component/flow changes detected)");
+  return lines.join("\n");
+}
+
 export type ApplyResult = {
   components: number;
   flows: number;
@@ -309,8 +391,8 @@ export function applyProposal(
      ON CONFLICT(repo_id, id) DO UPDATE SET name = excluded.name`,
   );
   const upsertClaim = db.prepare(
-    `INSERT INTO claims (repo_id, id, kind, text, code_anchors, source_ref, created_at, updated_at, status, superseded_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL)
+    `INSERT INTO claims (repo_id, id, kind, text, code_anchors, source_ref, created_at, updated_at, status, superseded_by, pinned)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 0)
      ON CONFLICT(repo_id, id) DO UPDATE SET
        kind = excluded.kind,
        text = excluded.text,

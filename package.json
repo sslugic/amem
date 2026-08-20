@@ -6,6 +6,14 @@
   "bin": {
     "amem": "./dist/cli.js"
   },
+  "main": "./dist/cli.js",
+  "exports": {
+    ".": "./dist/cli.js"
+  },
+  "preferGlobal": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "dist",
     "skills",
@@ -19,7 +27,9 @@
     "dev": "tsc --watch",
     "prepare": "npm run build",
     "amem": "node dist/cli.js",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "test": "npm run build && node --test --test-concurrency=1 test/**/*.test.mjs",
+    "test:all": "npm run test && npm run smoke"
   },
   "engines": {
     "node": ">=20"
@@ -32,6 +42,14 @@
     "sqlite"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sslugic/amem.git"
+  },
+  "homepage": "https://github.com/sslugic/amem#readme",
+  "bugs": {
+    "url": "https://github.com/sslugic/amem/issues"
+  },
   "dependencies": {
     "better-sqlite3": "^12.11.1"
   },

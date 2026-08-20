@@ -313,6 +313,9 @@ try {
   if (serviceRes.status !== 200 || typeof serviceRes.body.installed !== "boolean") {
     throw new Error("api/service failed");
   }
+  if (serviceRes.body.supported !== true && process.platform === "linux") {
+    throw new Error("linux should support login service");
+  }
 
   const hookOut = execFileSync(process.execPath, [cli, "hook"], {
     cwd: repoDir,
@@ -366,6 +369,103 @@ try {
       CLAUDE_HOME: join(amemHome, "claude-home"),
     },
   });
+
+  const graphAfterStop = handleApi({
+    method: "GET",
+    pathname: "/api/graph",
+    searchParams: new URLSearchParams(),
+    body: null,
+    cwd: repoDir,
+  });
+  const pendingDrafts = graphAfterStop.body?.drafts || [];
+  if (!Array.isArray(pendingDrafts) || pendingDrafts.length < 1) {
+    throw new Error("stop hook should create a pending draft for approval");
+  }
+  const draftId = pendingDrafts[0].id;
+  const applyDraft = handleApi({
+    method: "POST",
+    pathname: "/api/drafts/apply",
+    searchParams: new URLSearchParams(),
+    body: { id: draftId },
+    cwd: repoDir,
+  });
+  if (applyDraft.status !== 200) {
+    throw new Error(`draft apply failed: ${JSON.stringify(applyDraft.body)}`);
+  }
+  console.log("session-end draft capture + apply ok");
+
+  const pinRes = handleApi({
+    method: "POST",
+    pathname: "/api/claims/pin",
+    searchParams: new URLSearchParams(),
+    body: { id: "claim.boot_order", pinned: true },
+    cwd: repoDir,
+  });
+  if (pinRes.status !== 200 || !pinRes.body?.claim?.pinned) {
+    throw new Error(`pin failed: ${JSON.stringify(pinRes.body)}`);
+  }
+  const pinnedCtx = run(["context", "unrelated query about nothing", "--platform", "cursor"]);
+  if (!pinnedCtx.includes("claim.boot_order")) {
+    throw new Error("pinned claim should still surface in weak queries");
+  }
+  console.log("pin boost ok");
+
+  const editRes = handleApi({
+    method: "PATCH",
+    pathname: "/api/claims",
+    searchParams: new URLSearchParams(),
+    body: {
+      id: "claim.boot_order",
+      text: "Boot flow initializes API before serving requests (edited)",
+      kind: "constraint",
+      code_anchors: ["src/api.ts"],
+    },
+    cwd: repoDir,
+  });
+  if (editRes.status !== 200 || !String(editRes.body?.claim?.text || "").includes("edited")) {
+    throw new Error(`claim edit failed: ${JSON.stringify(editRes.body)}`);
+  }
+
+  const delRes = handleApi({
+    method: "DELETE",
+    pathname: "/api/claims",
+    searchParams: new URLSearchParams({ id: "claim.boot_order" }),
+    body: null,
+    cwd: repoDir,
+  });
+  if (delRes.status !== 200) {
+    throw new Error(`claim delete failed: ${JSON.stringify(delRes.body)}`);
+  }
+  const afterDelete = run(["context", "boot order initializes", "--platform", "cursor"]);
+  if (afterDelete.includes("### claim.boot_order")) {
+    throw new Error("deleted claim should not appear in context");
+  }
+  // Restore for later FTS/staleness checks in this smoke run
+  const restorePath = join(amemHome, "restore-boot.json");
+  writeFileSync(
+    restorePath,
+    JSON.stringify({
+      claims: [
+        {
+          id: "claim.boot_order",
+          kind: "constraint",
+          text: "Boot flow initializes API before serving requests",
+          code_anchors: ["src/api.ts"],
+        },
+      ],
+    }),
+  );
+  run(["propose", "apply", restorePath]);
+  console.log("claim edit/delete ok");
+
+  // Linux service unit install (best-effort file write; enable may no-op in CI)
+  if (process.platform === "linux") {
+    const before = run(["service", "status"]);
+    if (!before.includes("supported: yes")) {
+      throw new Error(`expected linux service support: ${before}`);
+    }
+  }
+
   const afterHook = run(["status"]);
   if (!afterHook.includes("claims:")) {
     throw new Error("status missing claims after hook");

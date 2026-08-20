@@ -13,6 +13,8 @@ export type AmemPolicy = {
   allowed_platforms: string[];
   allowed_remote_hosts: string[];
   deny_claim_patterns: string[];
+  /** Draft kinds that may auto-apply without Brain approve (still local). */
+  auto_apply_kinds: string[];
 };
 
 export type PolicySource = {
@@ -46,6 +48,7 @@ export const DEFAULT_POLICY: AmemPolicy = {
   allowed_platforms: KNOWN_PLATFORMS.map((p) => p.id),
   allowed_remote_hosts: [],
   deny_claim_patterns: [],
+  auto_apply_kinds: [],
 };
 
 let cached: LoadedPolicy | null = null;
@@ -95,6 +98,7 @@ export function parsePolicyToml(raw: string): Partial<AmemPolicy> {
       case "allowed_platforms":
       case "allowed_remote_hosts":
       case "deny_claim_patterns":
+      case "auto_apply_kinds":
         out[key] = parseStringArray(valueRaw, key, i + 1);
         break;
       default:
@@ -153,6 +157,7 @@ function mergePolicy(base: AmemPolicy, overlay: Partial<AmemPolicy>): AmemPolicy
     allowed_platforms: overlay.allowed_platforms ?? base.allowed_platforms,
     allowed_remote_hosts: overlay.allowed_remote_hosts ?? base.allowed_remote_hosts,
     deny_claim_patterns: overlay.deny_claim_patterns ?? base.deny_claim_patterns,
+    auto_apply_kinds: overlay.auto_apply_kinds ?? base.auto_apply_kinds,
   };
 }
 

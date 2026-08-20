@@ -68,7 +68,26 @@ git clone <this-repo-url> amem
 cd amem
 npm install
 npm link          # puts `amem` on your PATH
+amem setup        # personal prefs workspace + next steps
 amem status       # sanity check from any directory
+```
+
+Once published to npm: `npx amem setup` or `npm i -g amem` (Node 20+; builds native `better-sqlite3`).
+
+Other hosts (thin installers on the same local DB):
+
+```bash
+amem init --platform windsurf|continue|aider|zed
+amem init --personal   # cross-repo “how I work” prefs
+```
+
+Optional encrypt-at-rest and local backups:
+
+```bash
+amem lock --passphrase '…'     # or AMEM_PASSPHRASE
+amem unlock --passphrase '…'
+amem backup --passphrase '…'   # ~/.amem/backups by default
+amem backup schedule           # daily local timer (no cloud)
 ```
 
 ---
@@ -84,7 +103,7 @@ That opens `http://127.0.0.1:7843` on the **Setup** tab. It scans your home fold
 Optional: check **Start amem ui when this computer logs in** so the localhost server comes back after a reboot (macOS LaunchAgent). Same thing from the CLI:
 
 ```bash
-amem service install    # start on login
+amem service install    # start on login (macOS LaunchAgent, Linux systemd --user, or Windows Startup)
 amem service status
 amem service uninstall
 ```
@@ -92,7 +111,7 @@ amem service uninstall
 Tabs after setup:
 
 1. **Setup** — scan/select repos, platforms, login auto-start, bootstrap proposal  
-2. **Brain** — facts grouped by file, plus recent Cursor hits/misses (what was injected vs what had to be explored)  
+2. **Brain** — facts by file, pending session drafts (approve/dismiss), edit/pin/delete, search, recent hits/misses  
 3. **Stats** — estimated tokens saved per LLM (clearly labeled as estimates)
 
 Server-only (no browser open):
@@ -160,7 +179,8 @@ Memory is a small local graph in SQLite:
 | **Edge** | Links (claim → flow → component); `kind: "supersedes"` archives the target claim |
 | **Usage event** | Each `amem context` hit + token estimate |
 
-Claims are the retrieval unit. Search uses **SQLite FTS5** (Porter stemming) plus keyword ranking, then pulls related flows and components into a short Markdown packet. Claims whose anchors changed on disk after `updated_at` are marked **stale** and down-ranked.
+Claims are the retrieval unit. Search uses **SQLite FTS5** (Porter stemming) plus keyword ranking, then pulls related flows and components into a short Markdown packet. Claims whose anchors changed on disk after `updated_at` are marked **stale** and down-ranked. Higher-priority kinds (`constraint`, `gotcha`, …) win ties, and each claim includes a **Why:** line explaining the rank. After a context miss, amem can queue a **miss→learn** draft when the agent later cites real files — approve it in Brain.
+
 
 Example claim:
 
@@ -295,6 +315,7 @@ amem context "<query>" [--workspace <name>] [--platform …]
 amem remember "<text>" [--workspace <name>]
 amem mcp [--print-config] [--workspace <name>]
 amem propose validate <file.json>
+amem propose diff <file.json>
 amem propose apply <file.json>
 amem export [--out <file.json>]
 amem wipe --yes
@@ -314,7 +335,7 @@ amem service install|uninstall|status
 | `mcp` | Stdio MCP tools; HTTP MCP is at `http://127.0.0.1:7843/mcp` while the UI is running |
 | `propose apply` | Upsert structured memory locally |
 | `ui` | Setup wizard + brain + stats on localhost |
-| `service` | Install a macOS login item so `amem ui` starts after reboot |
+| `service` | Install a login item so `amem ui` starts after reboot (macOS / Linux / Windows) |
 | `doctor --attest` | Privacy/policy attestation for IT tickets |
 | `export` / `wipe` | Personal backup or delete (still local) |
 | `wipe --all --yes` | Offboard: wipe every repo and remove `~/.amem` |
@@ -348,7 +369,9 @@ Reload Cursor if skills/rules do not appear immediately.
 cd amem
 npm install
 npm run build
-npm run smoke
+npm run test          # unit + integration (node:test)
+npm run smoke         # end-to-end CLI/API smoke
+npm run test:all      # both
 npm link
 ```
 

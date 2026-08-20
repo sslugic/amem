@@ -1,21 +1,32 @@
 # amem backlog (next)
 
-Captured for follow-up work after FTS retrieval, claim staleness, and supersede/conflict handling shipped.
+Updated after completing the prior “next candidates” set (hosts, personal prefs, encrypt/backup, local embeddings, smarter drafts, auto-apply policy).
+
+## Shipped recently
+
+- FTS retrieval, claim staleness, supersede/conflict
+- Session-end **draft capture** + Brain approve/dismiss
+- Brain **edit / delete / pin / search**
+- Login service on **macOS + Linux + Windows**
+- **Miss → learn** drafts after empty context lookups
+- **Claim-kind ranking** + **Why:** explainability in context packets
+- **`amem propose diff`** before apply
+- Claude Code hooks call full `amem hook` pipeline
+- **`amem setup`** / npx-ready package metadata
+- Thin installers: **Windsurf, Continue, Aider, Zed**
+- Cross-repo **personal** prefs workspace (`amem init --personal`)
+- Optional **AES-256-GCM lock/unlock** + encrypted **backup** / schedule
+- On-device **hashing embeddings** hybrid with FTS
+- Smarter multi-turn draft compaction + **`auto_apply_kinds`** policy
 
 ## Next candidates
 
-1. **Auto-capture at session end** — draft proposals from durable outcomes without relying on the agent remembering `amem-update-working-memory`; human approve in UI (or auto-apply low-risk kinds).
-2. **Brain UI as memory manager** — edit / delete / pin / search claims; fix bad facts without CLI JSON.
-3. **One-command install** — `npx amem` / published npm package (clones ≠ installs).
-4. **Linux / Windows login service** — `amem service` beyond macOS LaunchAgent so MCP/HTTP stays up.
-5. **More hosts** — Windsurf, Continue, Aider, Zed, etc. (thin installers on the same local DB).
-6. **Cross-repo personal prefs** — optional local “how I work” memory spanning projects (not org wiki).
-7. **Miss → learn loop** — when context misses and the agent later finds the answer, auto-propose a claim.
-8. **Optional encrypted-at-rest `~/.amem`**
-9. **Claim-kind injection priority** — constraint / gotcha / owner / howto weighting.
-10. **Diff on propose apply** — show what will change before write.
-11. **Scheduled local encrypted backup** to a user-chosen path (still no sync).
-12. **“Why was this injected?”** ranking explainability in packet / UI.
+1. **Publish to npm** — land `npx amem setup` for real (CI release, prebuilds for `better-sqlite3`).
+2. **Brain UX polish** — personal workspace switcher, backup status, lock indicator.
+3. **Richer host adapters** — Continue/Zed deep links as those MCP shapes stabilize.
+4. **Optional on-device embedding model** (still local) if hashing hybrid plateaus.
+5. **Draft quality scoring** — confidence / reject noisy session-end drafts in Brain.
+6. **Conflict UI** — surface supersede suggestions before apply in Brain.
 
 ## Explicit non-goals (keep)
 

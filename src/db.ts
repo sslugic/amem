@@ -3,7 +3,14 @@ import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { dbPath, ensureAmemHome } from "./paths.js";
 import { detectRepoIdentity, newId, parseWorkspaceSlug, slugifyWorkspace, type RepoIdentity } from "./repo-identity.js";
-import { ensureClaimsFts, reindexAllClaimsFts, reindexRepoClaimsFts, removeClaimFts } from "./search.js";
+import { ensureClaimsFts, reindexAllClaimsFts, reindexRepoClaimsFts, removeClaimFts, upsertClaimFts } from "./search.js";
+import {
+  ensureClaimsEmbed,
+  reindexRepoEmbeds,
+  removeClaimEmbed,
+  upsertClaimEmbed,
+} from "./embed.js";
+import { isDbEncryptedAtRest, resolvePassphrase, unlockDatabase } from "./crypto.js";
 
 export type RepoRow = {
   id: string;
@@ -29,6 +36,21 @@ export type ClaimRow = {
   /** active | superseded — superseded claims are excluded from retrieval */
   status: string;
   superseded_by: string | null;
+  /** 1 when pinned — boosted in retrieval and sorted first in Brain */
+  pinned: number;
+};
+
+export type ProposalDraftRow = {
+  id: string;
+  repo_id: string;
+  platform: string;
+  session_id: string | null;
+  title: string;
+  proposal_json: string;
+  status: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ComponentRow = {
@@ -135,6 +157,7 @@ CREATE TABLE IF NOT EXISTS claims (
   updated_at TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   superseded_by TEXT,
+  pinned INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(repo_id, id)
 );
 
@@ -192,6 +215,19 @@ CREATE TABLE IF NOT EXISTS conversation_notes (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS proposal_drafts (
+  id TEXT PRIMARY KEY,
+  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL,
+  session_id TEXT,
+  title TEXT NOT NULL,
+  proposal_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  source TEXT NOT NULL DEFAULT 'session-end',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS claims_repo_idx ON claims(repo_id);
 CREATE INDEX IF NOT EXISTS edges_repo_idx ON edges(repo_id);
 CREATE INDEX IF NOT EXISTS components_repo_idx ON components(repo_id);
@@ -201,6 +237,8 @@ CREATE INDEX IF NOT EXISTS usage_events_repo_idx ON usage_events(repo_id);
 CREATE INDEX IF NOT EXISTS usage_events_created_idx ON usage_events(created_at);
 CREATE INDEX IF NOT EXISTS conversation_notes_repo_idx ON conversation_notes(repo_id);
 CREATE INDEX IF NOT EXISTS conversation_notes_created_idx ON conversation_notes(created_at);
+CREATE INDEX IF NOT EXISTS proposal_drafts_repo_idx ON proposal_drafts(repo_id);
+CREATE INDEX IF NOT EXISTS proposal_drafts_status_idx ON proposal_drafts(status);
 `;
 
 let cached: Database.Database | null = null;
@@ -208,6 +246,16 @@ let cached: Database.Database | null = null;
 export function openDb(): Database.Database {
   if (cached) return cached;
   ensureAmemHome();
+  if (isDbEncryptedAtRest()) {
+    try {
+      unlockDatabase(resolvePassphrase(process.env.AMEM_PASSPHRASE));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `amem database is encrypted at rest. Unlock with \`amem unlock --passphrase …\` or set AMEM_PASSPHRASE. (${detail})`,
+      );
+    }
+  }
   const db = new Database(dbPath());
   db.pragma("journal_mode = WAL");
   db.pragma("busy_timeout = 5000");
@@ -217,6 +265,8 @@ export function openDb(): Database.Database {
   migrateClaimsColumns(db);
   ensureClaimsFts(db);
   migrateClaimsFtsBootstrap(db);
+  ensureProposalDrafts(db);
+  ensureClaimsEmbed(db);
   cached = db;
   return db;
 }
@@ -240,6 +290,28 @@ function migrateClaimsColumns(db: Database.Database): void {
   if (!have.has("superseded_by")) {
     db.exec(`ALTER TABLE claims ADD COLUMN superseded_by TEXT`);
   }
+  if (!have.has("pinned")) {
+    db.exec(`ALTER TABLE claims ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
+  }
+}
+
+function ensureProposalDrafts(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS proposal_drafts (
+      id TEXT PRIMARY KEY,
+      repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+      platform TEXT NOT NULL,
+      session_id TEXT,
+      title TEXT NOT NULL,
+      proposal_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      source TEXT NOT NULL DEFAULT 'session-end',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS proposal_drafts_repo_idx ON proposal_drafts(repo_id);
+    CREATE INDEX IF NOT EXISTS proposal_drafts_status_idx ON proposal_drafts(status);
+  `);
 }
 
 /** One-shot FTS rebuild flag so upgrades populate the index. */
@@ -360,14 +432,17 @@ export function listClaims(
 ): ClaimRow[] {
   if (opts.includeSuperseded) {
     return openDb()
-      .prepare("SELECT * FROM claims WHERE repo_id = ? ORDER BY updated_at DESC")
+      .prepare(
+        `SELECT * FROM claims WHERE repo_id = ?
+         ORDER BY COALESCE(pinned, 0) DESC, updated_at DESC`,
+      )
       .all(repoId) as ClaimRow[];
   }
   return openDb()
     .prepare(
       `SELECT * FROM claims WHERE repo_id = ?
        AND COALESCE(status, 'active') = 'active'
-       ORDER BY updated_at DESC`,
+       ORDER BY COALESCE(pinned, 0) DESC, updated_at DESC`,
     )
     .all(repoId) as ClaimRow[];
 }
@@ -380,9 +455,59 @@ export function getClaim(repoId: string, claimId: string): ClaimRow | null {
   );
 }
 
-/** Reindex FTS for one repo (after propose apply / wipe helpers). */
+export function updateClaim(
+  repoId: string,
+  claimId: string,
+  patch: {
+    text?: string;
+    kind?: string;
+    code_anchors?: string[];
+    pinned?: boolean;
+  },
+): ClaimRow | null {
+  const existing = getClaim(repoId, claimId);
+  if (!existing) return null;
+  const ts = nowIso();
+  const text = patch.text !== undefined ? patch.text.trim() : existing.text;
+  const kind = patch.kind !== undefined ? patch.kind.trim() : existing.kind;
+  const anchors =
+    patch.code_anchors !== undefined
+      ? JSON.stringify(patch.code_anchors)
+      : existing.code_anchors;
+  const pinned =
+    patch.pinned !== undefined ? (patch.pinned ? 1 : 0) : (existing.pinned ?? 0);
+  if (!text || !kind) throw new Error("claim text and kind are required");
+  openDb()
+    .prepare(
+      `UPDATE claims SET text = ?, kind = ?, code_anchors = ?, pinned = ?, updated_at = ?
+       WHERE repo_id = ? AND id = ?`,
+    )
+    .run(text, kind, anchors, pinned, ts, repoId, claimId);
+  const updated = getClaim(repoId, claimId);
+  if (updated) {
+    upsertClaimFts(openDb(), updated);
+    upsertClaimEmbed(openDb(), updated);
+  }
+  return updated;
+}
+
+export function setClaimPinned(repoId: string, claimId: string, pinned: boolean): ClaimRow | null {
+  return updateClaim(repoId, claimId, { pinned });
+}
+
+export function deleteClaim(repoId: string, claimId: string): boolean {
+  const db = openDb();
+  removeClaimFts(db, repoId, claimId);
+  removeClaimEmbed(db, repoId, claimId);
+  const result = db.prepare(`DELETE FROM claims WHERE repo_id = ? AND id = ?`).run(repoId, claimId);
+  return Number(result.changes ?? 0) > 0;
+}
+
+/** Reindex FTS + local embeddings for one repo (after propose apply / wipe helpers). */
 export function reindexClaimsSearch(repoId: string): void {
-  reindexRepoClaimsFts(openDb(), repoId);
+  const db = openDb();
+  reindexRepoClaimsFts(db, repoId);
+  reindexRepoEmbeds(db, repoId);
 }
 
 export function listComponents(repoId: string): ComponentRow[] {
@@ -410,6 +535,7 @@ export function wipeRepo(repoId: string): void {
     .all(repoId) as Array<{ id: string }>;
   for (const c of claimIds) {
     removeClaimFts(db, repoId, c.id);
+    removeClaimEmbed(db, repoId, c.id);
   }
   db.prepare("DELETE FROM repos WHERE id = ?").run(repoId);
 }
@@ -425,6 +551,7 @@ export function wipeAllRepos(): number {
       .all(r.id) as Array<{ id: string }>;
     for (const c of claimIds) {
       removeClaimFts(db, r.id, c.id);
+      removeClaimEmbed(db, r.id, c.id);
     }
   }
   db.exec("DELETE FROM repos");
@@ -683,6 +810,76 @@ export function listConversationNotes(repoId: string, limit = 40): ConversationN
        ORDER BY created_at DESC LIMIT ?`,
     )
     .all(repoId, limit) as ConversationNoteRow[];
+}
+
+export function insertProposalDraft(input: {
+  repoId: string;
+  platform: string;
+  sessionId?: string | null;
+  title: string;
+  proposal: unknown;
+  source?: string;
+}): ProposalDraftRow {
+  const id = newId("draft");
+  const ts = nowIso();
+  openDb()
+    .prepare(
+      `INSERT INTO proposal_drafts (
+         id, repo_id, platform, session_id, title, proposal_json, status, source, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+    )
+    .run(
+      id,
+      input.repoId,
+      input.platform,
+      input.sessionId ?? null,
+      input.title.slice(0, 200),
+      JSON.stringify(input.proposal),
+      input.source ?? "session-end",
+      ts,
+      ts,
+    );
+  return getProposalDraft(id)!;
+}
+
+export function getProposalDraft(id: string): ProposalDraftRow | null {
+  return (
+    (openDb().prepare(`SELECT * FROM proposal_drafts WHERE id = ?`).get(id) as
+      | ProposalDraftRow
+      | undefined) ?? null
+  );
+}
+
+export function listProposalDrafts(
+  repoId: string,
+  opts: { status?: string; limit?: number } = {},
+): ProposalDraftRow[] {
+  const limit = opts.limit ?? 40;
+  if (opts.status) {
+    return openDb()
+      .prepare(
+        `SELECT * FROM proposal_drafts WHERE repo_id = ? AND status = ?
+         ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(repoId, opts.status, limit) as ProposalDraftRow[];
+  }
+  return openDb()
+    .prepare(
+      `SELECT * FROM proposal_drafts WHERE repo_id = ?
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(repoId, limit) as ProposalDraftRow[];
+}
+
+export function setProposalDraftStatus(
+  id: string,
+  status: "pending" | "applied" | "dismissed",
+): ProposalDraftRow | null {
+  const ts = nowIso();
+  openDb()
+    .prepare(`UPDATE proposal_drafts SET status = ?, updated_at = ? WHERE id = ?`)
+    .run(status, ts, id);
+  return getProposalDraft(id);
 }
 
 export { nowIso };

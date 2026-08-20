@@ -2,7 +2,7 @@ export type KnownPlatform = {
   id: string;
   label: string;
   hint: string;
-  installs?: "cursor" | "claude";
+  installs?: "cursor" | "claude" | "host";
 };
 
 /** Clients the Setup picker can record. Cursor/Claude also get local installers. */
@@ -12,7 +12,10 @@ export const KNOWN_PLATFORMS: KnownPlatform[] = [
   { id: "copilot", label: "GitHub Copilot", hint: "MCP / HTTP API" },
   { id: "codex", label: "ChatGPT / Codex", hint: "MCP / HTTP API" },
   { id: "gemini", label: "Gemini", hint: "MCP / HTTP API" },
-  { id: "windsurf", label: "Windsurf", hint: "MCP / HTTP API" },
+  { id: "windsurf", label: "Windsurf", hint: "MCP config installer", installs: "host" },
+  { id: "continue", label: "Continue", hint: "MCP config installer", installs: "host" },
+  { id: "aider", label: "Aider", hint: "CLI hint file in repo", installs: "host" },
+  { id: "zed", label: "Zed", hint: "context_servers MCP", installs: "host" },
   { id: "grok", label: "Grok", hint: "MCP / HTTP API" },
 ];
 
@@ -33,3 +36,7 @@ export function normalizePlatforms(raw: unknown): string[] {
   }
   return out;
 }
+
+export const HOST_INSTALL_IDS = new Set(
+  KNOWN_PLATFORMS.filter((p) => p.installs === "host").map((p) => p.id),
+);
