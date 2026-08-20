@@ -16,6 +16,7 @@ import {
   type ClaimFreshness,
   type FreshnessStatus,
 } from "./freshness.js";
+import { kindRankBoost } from "./kinds.js";
 import {
   ftsBoostFromBm25,
   keywordScoreClaim,
@@ -36,6 +37,8 @@ function scoreNote(note: ConversationNoteRow, queryTokens: string[]): number {
 export type RankedClaim = ClaimRow & {
   score: number;
   freshness: ClaimFreshness;
+  /** Human-readable ranking factors for "why was this injected?" */
+  reasons: string[];
 };
 
 export type ContextPacket = {
@@ -75,11 +78,23 @@ export function buildContext(
       const keyword = keywordScoreClaim(c, queryTokens);
       const boost = ftsBoost.get(c.id) ?? 0;
       const pinBoost = (c.pinned ?? 0) > 0 ? 40 : 0;
-      const raw = keyword + boost + pinBoost;
-      // If FTS alone hit, give a floor so stem matches still surface
-      const withFloor = raw > 0 || boost > 0 || pinBoost > 0 ? Math.max(raw, boost > 0 ? boost + pinBoost : raw) : 0;
+      const kindBoost = kindRankBoost(c.kind);
+      const matchSignal = keyword + boost + pinBoost;
+      const reasons: string[] = [];
+      if (keyword > 0) reasons.push(`keyword+${keyword}`);
+      if (boost > 0) reasons.push(`fts+${boost.toFixed(1)}`);
+      if (pinBoost > 0) reasons.push("pinned");
+      if (matchSignal > 0 && kindBoost >= 8) reasons.push(`kind:${c.kind}`);
+      if (freshness.status === "stale") reasons.push("stale↓");
+      else if (freshness.status === "fresh" && matchSignal > 0) reasons.push("fresh");
+
+      // Kind weight is a tie-breaker on top of keyword/FTS/pin — never a sole match.
+      const raw = matchSignal > 0 ? matchSignal + kindBoost * 0.35 : 0;
+      const withFloor =
+        raw > 0 ? Math.max(raw, boost > 0 ? boost + pinBoost + kindBoost * 0.35 : raw) : 0;
       const score = withFloor * freshnessScoreMultiplier(freshness.status);
-      return { ...c, score, freshness };
+      if (score > 0 && reasons.length === 0) reasons.push("rank");
+      return { ...c, score, freshness, reasons };
     })
     .filter((c) => (queryTokens.length === 0 ? true : c.score > 0))
     .sort((a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at))
@@ -91,7 +106,9 @@ export function buildContext(
       ? scored
       : allActive.slice(0, Math.min(5, limit)).map((c) => {
           const freshness = assessClaimFreshness(rootPath, c);
-          return { ...c, score: 0, freshness };
+          const reasons = ["fallback:recent"];
+          if ((c.pinned ?? 0) > 0) reasons.unshift("pinned");
+          return { ...c, score: 0, freshness, reasons };
         });
 
   const edges = listEdges(repoId);
@@ -185,6 +202,9 @@ export function renderContextMarkdown(packet: ContextPacket): string {
               ? ` — missing ${claim.freshness.missingAnchors.map((a) => `\`${a}\``).join(", ")}`
               : "";
         lines.push(`Freshness: \`${fl}\`${detail}`);
+      }
+      if (claim.reasons?.length) {
+        lines.push(`Why: ${claim.reasons.map((r) => `\`${r}\``).join(", ")}`);
       }
       lines.push("");
       lines.push(claim.text);
