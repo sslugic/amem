@@ -160,7 +160,8 @@ Memory is a small local graph in SQLite:
 | **Edge** | Links (claim → flow → component); `kind: "supersedes"` archives the target claim |
 | **Usage event** | Each `amem context` hit + token estimate |
 
-Claims are the retrieval unit. Search uses **SQLite FTS5** (Porter stemming) plus keyword ranking, then pulls related flows and components into a short Markdown packet. Claims whose anchors changed on disk after `updated_at` are marked **stale** and down-ranked.
+Claims are the retrieval unit. Search uses **SQLite FTS5** (Porter stemming) plus keyword ranking, then pulls related flows and components into a short Markdown packet. Claims whose anchors changed on disk after `updated_at` are marked **stale** and down-ranked. Higher-priority kinds (`constraint`, `gotcha`, …) win ties, and each claim includes a **Why:** line explaining the rank. After a context miss, amem can queue a **miss→learn** draft when the agent later cites real files — approve it in Brain.
+
 
 Example claim:
 
@@ -295,6 +296,7 @@ amem context "<query>" [--workspace <name>] [--platform …]
 amem remember "<text>" [--workspace <name>]
 amem mcp [--print-config] [--workspace <name>]
 amem propose validate <file.json>
+amem propose diff <file.json>
 amem propose apply <file.json>
 amem export [--out <file.json>]
 amem wipe --yes
