@@ -1,6 +1,6 @@
 # amem backlog (next)
 
-Updated after completing the Feature Map **Next** phase (draft quality, conflict UI, savings export, richer Continue/Zed adapters).
+Updated after completing the Feature Map **Later** phase (local embedding model + license/attest SKU).
 
 ## Shipped recently
 
@@ -25,11 +25,13 @@ Updated after completing the Feature Map **Next** phase (draft quality, conflict
 - **Conflict UI** — structured supersede suggestions; apply requires `resolve=supersede|keep` when facts overlap
 - **Savings export** — `amem usage export` / Stats JSON · markdown · PDF (proxy, not a bill)
 - **Richer host adapters** — Continue `mcpServers/amem.yaml`, Zed HTTP `url`, doctor health for continue/zed/windsurf
+- **Local n-gram embedder** — Pro/IT; no model download, no cloud API (`amem embed use ngram`)
+- **License + IT attest SKU** — signed or machine-local dev license; IT attest adds vault/host packet
 
-## Later
+## Open
 
-- Optional on-device embedding model (still local) if hashing hybrid plateaus.
-- Signed license + attest SKU (Pro / IT). Do not add cloud sync.
+- First npm publish (`NPM_TOKEN` + `v*` tag) when you want `npx amem setup` for others.
+- Charge for signed licenses when you have buyers. Plumbing is in place.
 
 ## Explicit non-goals (keep)
 

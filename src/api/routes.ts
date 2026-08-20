@@ -72,6 +72,8 @@ import {
 import { searchClaimsFts, tokenize } from "../search.js";
 import { rememberContract } from "../remember-contract.js";
 import { vaultStatus } from "../vault.js";
+import { licenseStatus } from "../license.js";
+import { embedStatus, reindexAllEmbeds, setEmbedBackend, type EmbedBackend } from "../embed.js";
 import {
   createBackup,
   lockDatabase,
@@ -202,6 +204,8 @@ function statusPayload(identity: RepoIdentity, repo: RepoRow | null) {
       version: rememberContract().version,
       mcpUrlTemplate: rememberContract().mcpUrlTemplate,
     },
+    license: licenseStatus(),
+    embed: embedStatus(),
   };
 }
 
@@ -581,6 +585,28 @@ function runVaultSchedule(body: unknown): ApiResponse {
 
 export function handleApi(req: ApiRequest): ApiResponse {
   const { method, pathname, searchParams, body, cwd } = req;
+
+  if (method === "GET" && pathname === "/api/license") {
+    return ok(licenseStatus());
+  }
+
+  if (method === "GET" && pathname === "/api/embed") {
+    return ok(embedStatus());
+  }
+
+  if (method === "POST" && pathname === "/api/embed") {
+    const backend = bodyField(body, "backend");
+    if (backend !== "hash" && backend !== "ngram") return err(400, "backend must be hash or ngram");
+    try {
+      return ok(setEmbedBackend(backend as EmbedBackend));
+    } catch (error) {
+      return err(403, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/embed/reindex") {
+    return ok(reindexAllEmbeds(openDb()));
+  }
 
   if (method === "GET" && pathname === "/api/recipe") {
     return ok(rememberContract());

@@ -19,6 +19,7 @@ import {
   upsertSetupState,
   wipeAllRepos,
   wipeRepo,
+  openDb,
 } from "./db.js";
 import { handleHookPayload } from "./hook.js";
 import { installClaude, claudeInstallHealth } from "./install/claude.js";
@@ -65,6 +66,18 @@ import {
 } from "./backup-schedule.js";
 import { rememberContract } from "./remember-contract.js";
 import { vaultStatus } from "./vault.js";
+import {
+  activateDevLicense,
+  applyLicenseFile,
+  clearLicense,
+  licenseStatus,
+  signLicense,
+} from "./license.js";
+import {
+  embedStatus,
+  reindexAllEmbeds,
+  setEmbedBackend,
+} from "./embed.js";
 
 function usage(): never {
   console.log(`amem — local personal agent memory
@@ -98,6 +111,8 @@ Usage:
   amem ui [--port 7843] [--no-open]
   amem service install|uninstall|status
   amem mcp [--print-config] [--workspace <name>]
+  amem license status|apply|activate|clear|issue
+  amem embed status|use hash|use ngram|reindex
 
 Install (npx-ready once published):
   npx amem setup
@@ -315,6 +330,10 @@ async function main(): Promise<void> {
         console.log(
           `last backup: ${vault.backup.last ? `${vault.backup.last.name} (${vault.backup.last.mtime})` : "none"}`,
         );
+        const lic = licenseStatus();
+        console.log(`license:  ${lic.tier} (${lic.kind}${lic.valid ? "" : ", invalid"})`);
+        const emb = embedStatus();
+        console.log(`embed:    ${emb.backend} dim=${emb.dim}${emb.requested !== emb.backend ? ` (requested ${emb.requested})` : ""}`);
         if (!repo) {
           console.log("binding:  not initialized");
         } else {
@@ -746,6 +765,90 @@ async function main(): Promise<void> {
         }
         await runMcpServer();
         break;
+      }
+      case "license": {
+        const sub = positional[1];
+        if (!sub || sub === "status") {
+          const status = licenseStatus();
+          if (flags.get("json")) console.log(JSON.stringify(status, null, 2));
+          else {
+            console.log(`tier: ${status.tier} (${status.kind}${status.valid ? "" : ", invalid"})`);
+            console.log(`features: ${status.features.join(", ") || "(none)"}`);
+            console.log(`path: ${status.path}`);
+            if (status.issues.length) {
+              for (const issue of status.issues) console.log(`issue: ${issue}`);
+            }
+          }
+          break;
+        }
+        if (sub === "apply") {
+          const file = flagString(flags, "file") || positional[2];
+          if (!file) throw new Error("Usage: amem license apply --file <license.json>");
+          const status = applyLicenseFile(file);
+          console.log(`Applied ${status.kind} license · tier ${status.tier}`);
+          break;
+        }
+        if (sub === "activate") {
+          if (!flags.get("dev")) throw new Error("Usage: amem license activate --dev --tier pro|it");
+          const tier = flagString(flags, "tier");
+          if (tier !== "pro" && tier !== "it") throw new Error("--tier must be pro or it");
+          const status = activateDevLicense(tier);
+          console.log(`Dev license on this machine · tier ${status.tier} (not transferable)`);
+          break;
+        }
+        if (sub === "clear") {
+          clearLicense();
+          console.log("License cleared · tier free");
+          break;
+        }
+        if (sub === "issue") {
+          const priv = process.env.AMEM_LICENSE_PRIVKEY;
+          if (!priv) throw new Error("Set AMEM_LICENSE_PRIVKEY to issue a signed license");
+          const tier = flagString(flags, "tier");
+          if (tier !== "pro" && tier !== "it" && tier !== "free") {
+            throw new Error("--tier must be free, pro, or it");
+          }
+          const issued = signLicense(priv, {
+            tier,
+            subject: flagString(flags, "subject"),
+            issued_at: new Date().toISOString(),
+            expires_at: flagString(flags, "expires"),
+          });
+          const out = flagString(flags, "out") || "amem-license.json";
+          writeFileSync(out, `${JSON.stringify(issued, null, 2)}\n`, "utf8");
+          console.log(`Wrote signed license to ${out}`);
+          break;
+        }
+        throw new Error("Usage: amem license status|apply|activate|clear|issue");
+      }
+      case "embed": {
+        const sub = positional[1];
+        if (!sub || sub === "status") {
+          const status = embedStatus();
+          if (flags.get("json")) console.log(JSON.stringify(status, null, 2));
+          else {
+            console.log(`backend: ${status.backend} (requested ${status.requested})`);
+            console.log(`dim: ${status.dim}`);
+            console.log(`licensed: ${status.licensed}`);
+          }
+          break;
+        }
+        if (sub === "use") {
+          const backend = positional[2];
+          if (backend !== "hash" && backend !== "ngram") {
+            throw new Error("Usage: amem embed use hash|ngram");
+          }
+          const status = setEmbedBackend(backend);
+          console.log(`Embed backend ${status.backend} dim=${status.dim}`);
+          console.log("Reindex with: amem embed reindex");
+          break;
+        }
+        if (sub === "reindex") {
+          const result = reindexAllEmbeds(openDb());
+          console.log(`Reindexed ${result.claims} claims across ${result.repos} repos (${embedStatus().backend})`);
+          break;
+        }
+        throw new Error("Usage: amem embed status|use hash|use ngram|reindex");
       }
       case "help":
       case "--help":

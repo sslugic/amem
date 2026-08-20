@@ -16,6 +16,7 @@ Personal memory stays on the laptop. IT governs **install, policy, attestation, 
 | Repo allowlist | `allowed_remote_hosts` |
 | Draft auto-apply | `auto_apply_kinds` (default empty = Brain approve only) |
 | Optional at-rest encryption | User/local `amem lock` + encrypted `amem backup` (still no sync) |
+| License SKU | `amem license` (signed file or machine-local dev). IT tier adds vault/host fields to attest |
 
 ## Install (DevEx / IT)
 

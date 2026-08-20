@@ -83,6 +83,8 @@ const state = {
   graphTick: 0,
   vault: null,
   recipe: null,
+  license: null,
+  embed: null,
 };
 
 function scopedPath(path) {
@@ -218,6 +220,16 @@ async function refreshVault() {
       state.recipe = null;
     }
   }
+  try {
+    state.license = await apiUnscoped("/api/license");
+  } catch {
+    state.license = state.status?.license || null;
+  }
+  try {
+    state.embed = await apiUnscoped("/api/embed");
+  } catch {
+    state.embed = state.status?.embed || null;
+  }
   paintVault();
 }
 
@@ -235,7 +247,13 @@ function vaultChipHtml() {
   const last = v.backup?.last
     ? `<span class="vault-chip">Last ${esc(v.backup.last.mtime.slice(0, 10))}</span>`
     : `<span class="vault-chip">No backup yet</span>`;
-  return `${lock}${backup}${last}`;
+  const lic = state.license;
+  const license = lic
+    ? `<span class="vault-chip ${lic.tier === "free" ? "" : "ok"}">License ${esc(lic.tier)}</span>`
+    : "";
+  const emb = state.embed;
+  const embed = emb ? `<span class="vault-chip">Embed ${esc(emb.backend)}</span>` : "";
+  return `${lock}${backup}${last}${license}${embed}`;
 }
 
 function paintVault() {
@@ -666,6 +684,8 @@ function renderSetup() {
           <div class="stat-line"><span>Focused ${focusedWs ? "workspace" : "git repo"}</span><b>${esc(focused?.repo_name || s?.identity?.repoName || "—")}</b></div>
           ${focusedWs && focusedSlug && focusedSlug !== focused?.repo_name ? `<div class="stat-line"><span>MCP id</span><b>${esc(focusedSlug)}</b></div>` : ""}
           <div class="stat-line"><span>Claims</span><b>${s.counts?.claims ?? 0}</b></div>
+          <div class="stat-line"><span>License</span><b>${esc(s.license?.tier || state.license?.tier || "free")}</b></div>
+          <div class="stat-line"><span>Embed</span><b>${esc(s.embed?.backend || state.embed?.backend || "hash")}</b></div>
           <div class="stat-line"><span>DB</span><b>${s.dbPath}</b></div>
         </div>
         ${issues.length ? `<div class="issues">${issues.map((i) => `• ${i}`).join("<br/>")}</div>` : ""}

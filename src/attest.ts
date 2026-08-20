@@ -13,6 +13,10 @@ import {
   type LoadedPolicy,
 } from "./policy.js";
 import { detectRepoIdentity } from "./repo-identity.js";
+import { FEATURE_ATTEST_SKU, hasFeature, licenseStatus } from "./license.js";
+import { embedStatus } from "./embed.js";
+import { vaultStatus } from "./vault.js";
+import { hostInstallHealth } from "./install/hosts.js";
 
 export type AttestReport = {
   tool: "amem";
@@ -47,6 +51,15 @@ export type AttestReport = {
   platforms: {
     cursor_issues: string[];
     claude_issues: string[];
+  };
+  license: ReturnType<typeof licenseStatus>;
+  embed: ReturnType<typeof embedStatus>;
+  sku?: {
+    tier: string;
+    airgap: true;
+    network_egress: "none";
+    vault: ReturnType<typeof vaultStatus>;
+    host_health: Record<string, string[]>;
   };
   ok: boolean;
   issues: string[];
@@ -137,7 +150,27 @@ export function buildAttestReport(cwd: string = process.cwd()): AttestReport {
 
   issues.push(...cursorIssues, ...claudeIssues);
 
+  const license = licenseStatus();
+  issues.push(...license.issues.map((i) => `license: ${i}`));
+  const embed = embedStatus();
+  if (embed.requested === "ngram" && !embed.licensed) {
+    issues.push("embed_backend ngram requested but license is not Pro/IT — using hash");
+  }
+
   const pkgPath = join(packageRoot(), "package.json");
+  const sku = hasFeature(FEATURE_ATTEST_SKU)
+    ? {
+        tier: license.tier,
+        airgap: true as const,
+        network_egress: "none" as const,
+        vault: vaultStatus(),
+        host_health: {
+          continue: hostInstallHealth("continue"),
+          zed: hostInstallHealth("zed"),
+          windsurf: hostInstallHealth("windsurf"),
+        },
+      }
+    : undefined;
 
   return {
     tool: "amem",
@@ -173,6 +206,9 @@ export function buildAttestReport(cwd: string = process.cwd()): AttestReport {
       cursor_issues: cursorIssues,
       claude_issues: claudeIssues,
     },
+    license,
+    embed,
+    sku,
     ok: issues.length === 0,
     issues,
   };
@@ -194,7 +230,12 @@ export function formatAttestHuman(report: AttestReport): string {
     `repo: ${report.repo.root_path}`,
     `remote: ${report.repo.remote_url ?? "(none)"}`,
     `bound: ${report.repo.bound}`,
+    `license: ${report.license.tier} (${report.license.kind}${report.license.valid ? "" : ", invalid"})`,
+    `embed: ${report.embed.backend} dim=${report.embed.dim}`,
   ];
+  if (report.sku) {
+    lines.push(`sku: IT airgap packet · vault locked=${report.sku.vault.encryptedAtRest} · backup=${report.sku.vault.backup.scheduled ? "scheduled" : "off"}`);
+  }
   const applied = report.policy.sources.filter((s) => s.applied).map((s) => `${s.role}:${s.path}`);
   lines.push(`policy_sources: ${applied.join(" → ")}`);
   if (report.issues.length) {

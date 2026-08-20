@@ -106,6 +106,19 @@ amem backup unschedule
 
 While locked, set `AMEM_PASSPHRASE` (or unlock) before any command that opens the DB.
 
+### License SKU + local embeddings
+
+Free includes the hashing embedder (no download). Pro/IT can switch to a **local n-gram model** — still no cloud embed API.
+
+```bash
+amem license activate --dev --tier pro   # this machine only
+amem embed use ngram
+amem embed reindex
+amem doctor --attest                     # IT tier adds a vault/host SKU packet
+```
+
+See [docs/license.md](docs/license.md). Signed license files verify offline. Nothing is uploaded.
+
 ---
 
 ## First-time setup (recommended)
@@ -359,6 +372,8 @@ amem session touch --platform cursor|claude [--session-id <id>]
 amem hook
 amem usage report --saved <n> [--platform …] [--event-id …]
 amem usage export [--format json|md|pdf] [--days 30] [--scope current|all] [--out <file>]
+amem license status|apply|activate|clear|issue
+amem embed status|use hash|use ngram|reindex
 amem ui [--port 7843] [--no-open]
 amem service install|uninstall|status
 ```
