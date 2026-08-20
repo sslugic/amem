@@ -1,6 +1,6 @@
 # amem backlog (next)
 
-Updated after auto-capture drafts, Brain memory manager, and cross-platform login service.
+Updated after miss→learn, kind-weighted ranking, why-injected, propose diff, and Claude hook parity.
 
 ## Shipped recently
 
@@ -8,19 +8,21 @@ Updated after auto-capture drafts, Brain memory manager, and cross-platform logi
 - Session-end **draft capture** + Brain approve/dismiss
 - Brain **edit / delete / pin / search**
 - Login service on **macOS + Linux + Windows**
+- **Miss → learn** drafts after empty context lookups
+- **Claim-kind ranking** + **Why:** explainability in context packets
+- **`amem propose diff`** before apply
+- Claude Code hooks call full `amem hook` pipeline
 
 ## Next candidates
 
 1. **One-command install** — publish to npm so `npx amem` / `npm i -g amem` works (native `better-sqlite3` story).
 2. **More hosts** — Windsurf, Continue, Aider, Zed, etc. (thin installers on the same local DB).
 3. **Cross-repo personal prefs** — optional local “how I work” memory spanning projects (not org wiki).
-4. **Miss → learn loop** — when context misses and the agent later finds the answer, auto-propose a claim.
-5. **Optional encrypted-at-rest `~/.amem`**
-6. **Claim-kind injection priority** — constraint / gotcha / owner / howto weighting.
-7. **Diff on propose apply** — show what will change before write.
-8. **Scheduled local encrypted backup** to a user-chosen path (still no sync).
-9. **“Why was this injected?”** ranking explainability in packet / UI.
-10. **Claude Code full hook parity** — same draft capture path as Cursor (today Claude mostly session-touch).
+4. **Optional encrypted-at-rest `~/.amem`**
+5. **Scheduled local encrypted backup** to a user-chosen path (still no sync).
+6. **Local embeddings** (optional, still on-device) for hybrid search beyond FTS.
+7. **Smarter draft quality** — LLM-free summarization heuristics / multi-turn compaction.
+8. **Auto-apply low-risk kinds** with policy allowlist (still local).
 
 ## Explicit non-goals (keep)
 

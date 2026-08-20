@@ -1,7 +1,12 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { logContextUsage } from "./api/routes.js";
-import { captureSessionDraft, isUsefulCaptureText } from "./capture.js";
+import {
+  captureMissLearnDraft,
+  captureSessionDraft,
+  findRecentContextMisses,
+  isUsefulCaptureText,
+} from "./capture.js";
 import {
   getRepoByCwd,
   insertConversationNote,
@@ -13,11 +18,14 @@ import { detectRepoIdentity } from "./repo-identity.js";
 
 export type HookPayload = {
   hook_event_name?: string;
+  /** Claude Code uses `hook_event_name` or top-level event aliases */
+  event?: string;
   prompt?: string;
   text?: string;
   conversation_id?: string;
   session_id?: string;
   workspace_roots?: string[];
+  cwd?: string;
   transcript_path?: string | null;
 };
 
@@ -29,6 +37,9 @@ function workspaceRoot(payload: HookPayload): string {
   const roots = payload.workspace_roots;
   if (Array.isArray(roots) && typeof roots[0] === "string" && roots[0]) {
     return resolve(roots[0]);
+  }
+  if (typeof payload.cwd === "string" && payload.cwd.trim()) {
+    return resolve(payload.cwd);
   }
   const envRoot = process.env.CURSOR_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR;
   if (envRoot) return resolve(envRoot);
@@ -44,7 +55,7 @@ function bindRepo(cwd: string): RepoRow | null {
   const existing = getRepoByCwd(cwd);
   if (existing) return existing;
   const identity = detectRepoIdentity(cwd);
-  return upsertRepo(identity, "cursor");
+  return upsertRepo(identity, hookPlatform());
 }
 
 function cap(text: string, max = 2400): string {
@@ -55,6 +66,18 @@ function cap(text: string, max = 2400): string {
 function hookPlatform(): "cursor" | "claude" {
   if (process.env.CLAUDE_PROJECT_DIR && !process.env.CURSOR_PROJECT_DIR) return "claude";
   return "cursor";
+}
+
+/** Normalize Cursor + Claude Code event names into the Cursor-style set. */
+export function normalizeHookEvent(raw: string): string {
+  const e = (raw || "").trim();
+  if (!e) return "";
+  const lower = e.toLowerCase();
+  if (lower === "userpromptsubmit" || e === "UserPromptSubmit") return "beforeSubmitPrompt";
+  if (lower === "stop" || e === "Stop") return "stop";
+  if (lower === "sessionstart" || e === "SessionStart") return "sessionStart";
+  if (lower === "sessionend" || e === "SessionEnd") return "sessionEnd";
+  return e;
 }
 
 function injectPacket(repo: RepoRow, query: string, session: string, platform: string): string | null {
@@ -87,7 +110,7 @@ function handleHookPayloadInner(raw: string): HookResponse {
     }
   }
 
-  const event = payload.hook_event_name || "";
+  const event = normalizeHookEvent(payload.hook_event_name || payload.event || "");
   const cwd = workspaceRoot(payload);
   const repo = bindRepo(cwd);
   if (!repo) return { continue: true };
@@ -135,15 +158,37 @@ function handleHookPayloadInner(raw: string): HookResponse {
         role: "assistant",
         text,
       });
+      // Miss → learn: if a recent context lookup returned nothing, draft from this answer.
+      const misses = findRecentContextMisses(repo.id, { sessionId: sid, limit: 3 });
+      for (const miss of misses) {
+        captureMissLearnDraft({
+          repo,
+          platform,
+          sessionId: sid,
+          miss,
+          answer: text,
+        });
+      }
     }
     return {};
   }
 
   if (event === "stop" || event === "sessionEnd") {
-    // Draft for human approve in Brain UI — do not auto-apply durable claims.
     const recent = listConversationNotes(repo.id, 12);
     const lastUser = recent.find((n) => n.role === "user");
     const lastAssistant = recent.find((n) => n.role === "assistant");
+    if (lastAssistant?.text) {
+      const misses = findRecentContextMisses(repo.id, { sessionId: sid, limit: 3 });
+      for (const miss of misses) {
+        captureMissLearnDraft({
+          repo,
+          platform,
+          sessionId: sid,
+          miss,
+          answer: lastAssistant.text,
+        });
+      }
+    }
     if (lastUser) {
       captureSessionDraft({
         repo,

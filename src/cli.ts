@@ -33,7 +33,9 @@ import {
 } from "./policy.js";
 import {
   applyProposal,
+  diffProposal,
   exportRepoMemory,
+  formatProposalDiff,
   loadProposalFile,
   validateProposal,
 } from "./proposal.js";
@@ -55,6 +57,7 @@ Usage:
   amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna]
   amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>]
   amem propose validate <file.json>
+  amem propose diff <file.json>
   amem propose apply <file.json>
   amem export [--out <file.json>]
   amem wipe --yes
@@ -331,16 +334,19 @@ async function main(): Promise<void> {
       case "propose": {
         const sub = positional[1];
         const file = positional[2];
-        if ((sub !== "validate" && sub !== "apply") || !file) {
-          throw new Error("Usage: amem propose validate|apply <file.json>");
+        if ((sub !== "validate" && sub !== "apply" && sub !== "diff") || !file) {
+          throw new Error("Usage: amem propose validate|diff|apply <file.json>");
         }
         const policy = loadPolicy().policy;
         const proposal = loadProposalFile(resolve(file));
         let existingClaims = undefined as ReturnType<typeof listClaims> | undefined;
+        let repoId: string | null = null;
         try {
-          existingClaims = listClaims(resolveBinding(flags).id, { includeSuperseded: true });
+          const bound = resolveBinding(flags);
+          repoId = bound.id;
+          existingClaims = listClaims(bound.id, { includeSuperseded: true });
         } catch {
-          // validate can run without a binding; conflict checks need one
+          // validate/diff can run without a binding; conflict checks need one
         }
         const validated = validateProposal(proposal, policy, { existingClaims });
         if (!validated.ok) {
@@ -353,8 +359,11 @@ async function main(): Promise<void> {
           console.log("Warnings:");
           for (const w of validated.warnings) console.log(`- ${w}`);
         }
-        if (sub === "validate") {
-          console.log("Proposal is valid.");
+        if (repoId) {
+          console.log(formatProposalDiff(diffProposal(repoId, proposal)));
+        }
+        if (sub === "validate" || sub === "diff") {
+          console.log(sub === "diff" ? "Diff complete." : "Proposal is valid.");
           break;
         }
         const repo = resolveBinding(flags);
