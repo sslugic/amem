@@ -21,7 +21,7 @@ Usage logging: every `amem context` call already records an estimated token savi
 amem usage report --platform <cursor|claude> --saved <n>
 ```
 
-Session-end / miss→learn drafts may already be waiting in Brain (`amem ui`). Prefer approving those when they match this session; use this skill for higher-quality curated claims.
+Session-end / miss→learn drafts may already be waiting in Memory (`amem ui`). Prefer approving those when they match this session; use this skill for higher-quality curated claims.
 
 ## Steps
 

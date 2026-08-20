@@ -372,6 +372,8 @@ describe("MCP dispatch", () => {
 
         assert.equal(isJsonRpcMessage({ jsonrpc: "2.0", method: "x", id: 1 }), true);
         assert.equal(isJsonRpcMessage({ foo: 1 }), false);
+        assert.equal(isJsonRpcMessage({ method: "tools/call", params: {} }), false);
+        assert.equal(isJsonRpcMessage({ passphrase: "secret" }), false);
 
         const init = dispatchMcp({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
         assert.ok(init?.result);
@@ -539,6 +541,7 @@ describe("attest + UI helpers", () => {
     const url = buildUiLandingUrl(7843, "/tmp/project");
     assert.match(url, /^http:\/\/127\.0\.0\.1:7843/);
     assert.match(url, /tab=setup/);
+    assert.match(url, /scope=all/);
     assert.match(url, /path=/);
   });
 });
@@ -598,12 +601,15 @@ describe("API workspaces + status", () => {
 
 describe("embed vector codec", () => {
   it("round-trips vectors through blob encoding", async () => {
-    const { embedText, vectorToBlob, blobToVector, cosine, EMBED_DIM } =
-      await import("../dist/embed.js");
-    const v = embedText("hello world vectors");
-    assert.equal(v.length, EMBED_DIM);
-    const back = blobToVector(vectorToBlob(v));
-    assert.ok(Math.abs(cosine(v, back) - 1) < 1e-5);
-    assert.equal(embedText("").every((x) => x === 0), true);
+    await withAmemHome(async () => {
+      const { embedText, vectorToBlob, blobToVector, cosine, HASH_DIM, embedDim } =
+        await import("../dist/embed.js");
+      const v = embedText("hello world vectors", "hash");
+      assert.equal(v.length, HASH_DIM);
+      assert.equal(embedDim("hash"), HASH_DIM);
+      const back = blobToVector(vectorToBlob(v));
+      assert.ok(Math.abs(cosine(v, back) - 1) < 1e-5);
+      assert.equal(embedText("", "hash").every((x) => x === 0), true);
+    });
   });
 });

@@ -14,9 +14,19 @@ Personal memory stays on the laptop. IT governs **install, policy, attestation, 
 | Export control | `allow_export = false` in system policy |
 | Platform allowlist | `allowed_platforms` |
 | Repo allowlist | `allowed_remote_hosts` |
-| Draft auto-apply | `auto_apply_kinds` (default empty = Brain approve only) |
+| Draft auto-apply | `auto_apply_kinds` (default empty = Memory approve only) |
 | Optional at-rest encryption | User/local `amem lock` + encrypted `amem backup` (still no sync) |
 | License SKU | `amem license` (signed file or machine-local dev). IT tier adds vault/host fields to attest |
+
+## IT pack (one folder for the security ticket)
+
+```bash
+amem it-pack --out ~/Desktop/amem-it-pack
+amem doctor --sbom --out ~/Desktop/amem-it-pack/sbom.json
+amem doctor --attest --json
+```
+
+The pack includes deny-by-default `policy.toml`, an MDM plist stub, `mdm-offboard.sh`, and a CycloneDX-lite SBOM. Signed installers still need your org’s cert — amem does not upload binaries.
 
 ## Install (DevEx / IT)
 
@@ -55,7 +65,7 @@ See [templates/policy.example.toml](../templates/policy.example.toml).
 | `allowed_platforms` | Restricts `init` / setup (cursor, claude, windsurf, …) |
 | `allowed_remote_hosts` | Restricts which git remotes can init/apply |
 | `deny_claim_patterns` | Extra regexes blocked in claim text/anchors |
-| `auto_apply_kinds` | Draft kinds that may auto-apply without Brain (empty = never) |
+| `auto_apply_kinds` | Draft kinds that may auto-apply without Memory approve (empty = never) |
 
 Hard stops (not overridable): telemetry stays off; UI bind forced to loopback.
 

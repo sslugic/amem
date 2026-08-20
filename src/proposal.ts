@@ -184,7 +184,7 @@ export function findConflictWarnings(
   );
 }
 
-/** Attach supersede targets to the first claim (Brain “replace older facts”). */
+/** Attach supersede targets to the first claim (Memory “replace older facts”). */
 export function applySupersedes(proposal: Proposal, otherIds: string[]): Proposal {
   const extra = [...new Set(otherIds.filter((id) => id.trim()))];
   if (extra.length === 0) return proposal;

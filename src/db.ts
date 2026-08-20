@@ -36,7 +36,7 @@ export type ClaimRow = {
   /** active | superseded — superseded claims are excluded from retrieval */
   status: string;
   superseded_by: string | null;
-  /** 1 when pinned — boosted in retrieval and sorted first in Brain */
+  /** 1 when pinned — boosted in retrieval and sorted first in Memory */
   pinned: number;
 };
 
@@ -426,6 +426,22 @@ export function requireRepo(cwd: string = process.cwd()): RepoRow {
   return repo;
 }
 
+export function getMeta(key: string): string | null {
+  const row = openDb()
+    .prepare(`SELECT value FROM amem_meta WHERE key = ?`)
+    .get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setMeta(key: string, value: string): void {
+  openDb()
+    .prepare(
+      `INSERT INTO amem_meta (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    )
+    .run(key, value);
+}
+
 export function listClaims(
   repoId: string,
   opts: { includeSuperseded?: boolean } = {},
@@ -445,6 +461,24 @@ export function listClaims(
        ORDER BY COALESCE(pinned, 0) DESC, updated_at DESC`,
     )
     .all(repoId) as ClaimRow[];
+}
+
+export function listClaimsAll(opts: { includeSuperseded?: boolean } = {}): ClaimRow[] {
+  if (opts.includeSuperseded) {
+    return openDb()
+      .prepare(
+        `SELECT * FROM claims
+         ORDER BY COALESCE(pinned, 0) DESC, updated_at DESC`,
+      )
+      .all() as ClaimRow[];
+  }
+  return openDb()
+    .prepare(
+      `SELECT * FROM claims
+       WHERE COALESCE(status, 'active') = 'active'
+       ORDER BY COALESCE(pinned, 0) DESC, updated_at DESC`,
+    )
+    .all() as ClaimRow[];
 }
 
 export function getClaim(repoId: string, claimId: string): ClaimRow | null {
@@ -495,6 +529,26 @@ export function setClaimPinned(repoId: string, claimId: string, pinned: boolean)
   return updateClaim(repoId, claimId, { pinned });
 }
 
+export function setClaimStatus(
+  repoId: string,
+  claimId: string,
+  status: "active" | "decayed" | "superseded",
+): ClaimRow | null {
+  const existing = getClaim(repoId, claimId);
+  if (!existing) return null;
+  const ts = nowIso();
+  openDb()
+    .prepare(`UPDATE claims SET status = ?, updated_at = ? WHERE repo_id = ? AND id = ?`)
+    .run(status, ts, repoId, claimId);
+  const updated = getClaim(repoId, claimId);
+  if (updated) {
+    upsertClaimFts(openDb(), updated);
+    if ((updated.status ?? "active") !== "active") removeClaimEmbed(openDb(), repoId, claimId);
+    else upsertClaimEmbed(openDb(), updated);
+  }
+  return updated;
+}
+
 export function deleteClaim(repoId: string, claimId: string): boolean {
   const db = openDb();
   removeClaimFts(db, repoId, claimId);
@@ -516,16 +570,28 @@ export function listComponents(repoId: string): ComponentRow[] {
     .all(repoId) as ComponentRow[];
 }
 
+export function listComponentsAll(): ComponentRow[] {
+  return openDb().prepare("SELECT * FROM components ORDER BY name").all() as ComponentRow[];
+}
+
 export function listFlows(repoId: string): FlowRow[] {
   return openDb()
     .prepare("SELECT * FROM flows WHERE repo_id = ? ORDER BY name")
     .all(repoId) as FlowRow[];
 }
 
+export function listFlowsAll(): FlowRow[] {
+  return openDb().prepare("SELECT * FROM flows ORDER BY name").all() as FlowRow[];
+}
+
 export function listEdges(repoId: string): EdgeRow[] {
   return openDb()
     .prepare("SELECT * FROM edges WHERE repo_id = ?")
     .all(repoId) as EdgeRow[];
+}
+
+export function listEdgesAll(): EdgeRow[] {
+  return openDb().prepare("SELECT * FROM edges").all() as EdgeRow[];
 }
 
 export function wipeRepo(repoId: string): void {
@@ -626,6 +692,12 @@ export function listSessions(repoId: string): SessionRow[] {
       `SELECT * FROM agent_sessions WHERE repo_id = ? ORDER BY last_seen DESC`,
     )
     .all(repoId) as SessionRow[];
+}
+
+export function listSessionsAll(): SessionRow[] {
+  return openDb()
+    .prepare(`SELECT * FROM agent_sessions ORDER BY last_seen DESC`)
+    .all() as SessionRow[];
 }
 
 export function setReportedTokensSaved(eventId: string, saved: number): UsageEventRow {
@@ -869,6 +941,21 @@ export function listProposalDrafts(
        ORDER BY created_at DESC LIMIT ?`,
     )
     .all(repoId, limit) as ProposalDraftRow[];
+}
+
+export function listProposalDraftsAll(opts: { status?: string; limit?: number } = {}): ProposalDraftRow[] {
+  const limit = opts.limit ?? 80;
+  if (opts.status) {
+    return openDb()
+      .prepare(
+        `SELECT * FROM proposal_drafts WHERE status = ?
+         ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(opts.status, limit) as ProposalDraftRow[];
+  }
+  return openDb()
+    .prepare(`SELECT * FROM proposal_drafts ORDER BY created_at DESC LIMIT ?`)
+    .all(limit) as ProposalDraftRow[];
 }
 
 export function setProposalDraftStatus(

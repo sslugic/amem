@@ -310,9 +310,9 @@ function rpcError(id: number | string, message: string, code = -32601): JsonRpcR
 }
 
 export function isJsonRpcMessage(body: unknown): body is JsonRpc {
-  if (!body || typeof body !== "object") return false;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
   const msg = body as JsonRpc;
-  return msg.jsonrpc === "2.0" || typeof msg.method === "string";
+  return msg.jsonrpc === "2.0";
 }
 
 /** Handle one JSON-RPC message. Notifications (no id) return null. */

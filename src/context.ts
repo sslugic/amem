@@ -25,7 +25,8 @@ import {
   searchClaimsFts,
   tokenize,
 } from "./search.js";
-import { embedBoostFromScore, searchClaimsEmbed } from "./embed.js";
+import { embedBoostFromScore, searchClaimsEmbed, searchClaimsEmbedLive } from "./embed.js";
+import { FEATURE_LOCAL_EMBED, hasFeature } from "./license.js";
 import { PERSONAL_SLUG } from "./personal.js";
 
 function scoreNote(note: ConversationNoteRow, queryTokens: string[]): number {
@@ -224,6 +225,97 @@ export function buildContext(
       : listConversationNotes(repoId, 5).map((n) => ({ ...n, score: 0 }));
 
   return { query, claims: selected, flows, components, notes };
+}
+
+export type ShowdownClaim = {
+  id: string;
+  kind: string;
+  text: string;
+  score: number;
+  reasons: string[];
+};
+
+export type RetrievalShowdown = {
+  query: string;
+  free: ShowdownClaim[];
+  pro: ShowdownClaim[];
+  proLocked: boolean;
+  proOnlyIds: string[];
+  freeOnlyIds: string[];
+};
+
+function toShowdownClaims(ranked: RankedClaim[]): ShowdownClaim[] {
+  return ranked.map((c) => ({
+    id: c.id,
+    kind: c.kind,
+    text: c.text,
+    score: Math.round(c.score * 10) / 10,
+    reasons: c.reasons,
+  }));
+}
+
+function rankWithLiveEmbed(
+  claims: ClaimRow[],
+  query: string,
+  queryTokens: string[],
+  ftsBoost: Map<string, number>,
+  backend: "hash" | "ngram",
+  rootPath: string | undefined,
+  limit: number,
+): RankedClaim[] {
+  const embedBoost = new Map<string, number>();
+  for (const hit of searchClaimsEmbedLive(claims, query, backend, Math.max(limit * 2, 24))) {
+    embedBoost.set(hit.id, embedBoostFromScore(hit.score));
+  }
+  return rankClaims(claims, query, queryTokens, {
+    rootPath,
+    ftsBoost,
+    embedBoost,
+    extraReason: backend === "ngram" ? "embed:ngram" : "embed:hash",
+  })
+    .filter((c) => (queryTokens.length === 0 ? true : c.score > 0))
+    .sort((a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at))
+    .slice(0, limit);
+}
+
+/** Side-by-side free hash vs Pro n-gram retrieval for the same query. */
+export function buildRetrievalShowdown(
+  repoId: string,
+  query: string,
+  limitOrOpts: number | BuildContextOptions = 8,
+): RetrievalShowdown {
+  const opts: BuildContextOptions =
+    typeof limitOrOpts === "number" ? { limit: limitOrOpts } : limitOrOpts;
+  const limit = opts.limit ?? 8;
+  const rootPath = opts.rootPath;
+  const queryTokens = tokenize(query);
+  const db = openDb();
+  const allActive = listClaims(repoId);
+  const ftsBoost = new Map<string, number>();
+  for (const hit of searchClaimsFts(db, repoId, query, Math.max(limit * 2, 24))) {
+    ftsBoost.set(hit.id, ftsBoostFromBm25(hit.bm25));
+  }
+
+  const freeRanked = rankWithLiveEmbed(allActive, query, queryTokens, ftsBoost, "hash", rootPath, limit);
+  const free = toShowdownClaims(freeRanked);
+
+  const proLocked = !hasFeature(FEATURE_LOCAL_EMBED);
+  let pro: ShowdownClaim[] = [];
+  if (!proLocked) {
+    const proRanked = rankWithLiveEmbed(allActive, query, queryTokens, ftsBoost, "ngram", rootPath, limit);
+    pro = toShowdownClaims(proRanked);
+  }
+
+  const freeIds = new Set(free.map((c) => c.id));
+  const proIds = new Set(pro.map((c) => c.id));
+  return {
+    query,
+    free,
+    pro,
+    proLocked,
+    proOnlyIds: pro.filter((c) => !freeIds.has(c.id)).map((c) => c.id),
+    freeOnlyIds: free.filter((c) => !proIds.has(c.id)).map((c) => c.id),
+  };
 }
 
 function freshnessLabel(status: FreshnessStatus): string | null {

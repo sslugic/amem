@@ -80,4 +80,4 @@ amem propose apply /tmp/amem-bootstrap.json
 amem context "What should I know before changing this repository?"
 ```
 
-5. Tell the user in one line that baseline local memory was applied. Mention `amem ui` → Brain for future session drafts. Do not print the full proposal unless asked.
+5. Tell the user in one line that baseline local memory was applied. Mention `amem ui` → Memory for future session drafts. Do not print the full proposal unless asked.

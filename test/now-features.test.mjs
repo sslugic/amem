@@ -143,6 +143,42 @@ describe("vault + personal chrome APIs", () => {
     });
   });
 
+  it("vault lock without a passphrase is 400, not unknown route", async () => {
+    await withAmemHome(async () => {
+      const { handleApi } = await import("../dist/api/routes.js");
+      const missing = handleApi({
+        method: "POST",
+        pathname: "/api/vault/lock/",
+        searchParams: new URLSearchParams(),
+        body: {},
+        cwd: process.cwd(),
+      });
+      assert.equal(missing.status, 400);
+      assert.match(String(missing.body.error), /passphrase required/i);
+
+      const unlock = handleApi({
+        method: "POST",
+        pathname: "/api/vault/unlock",
+        searchParams: new URLSearchParams(),
+        body: { passphrase: "" },
+        cwd: process.cwd(),
+      });
+      assert.equal(unlock.status, 400);
+      assert.match(String(unlock.body.error), /passphrase required/i);
+
+      const health = handleApi({
+        method: "GET",
+        pathname: "/api/health",
+        searchParams: new URLSearchParams(),
+        body: null,
+        cwd: process.cwd(),
+      });
+      assert.equal(health.status, 200);
+      assert.equal(health.body.ok, true);
+      assert.ok(health.body.features.includes("vault"));
+    });
+  });
+
   it("creates the personal workspace from the API", async () => {
     await withAmemHome(async () => {
       const { handleApi } = await import("../dist/api/routes.js");

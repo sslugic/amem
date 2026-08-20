@@ -108,16 +108,22 @@ While locked, set `AMEM_PASSPHRASE` (or unlock) before any command that opens th
 
 ### License SKU + local embeddings
 
-Free includes the hashing embedder (no download). Pro/IT can switch to a **local n-gram model** — still no cloud embed API.
+Free includes the hashing embedder (no download). Pro/IT can switch to a **local n-gram model** or an **external local command** (stdin text → JSON vector). Still no cloud embed API.
 
 ```bash
 amem license activate --dev --tier pro   # this machine only
 amem embed use ngram
 amem embed reindex
+amem restore --file ~/.amem/backups/amem-….db.enc
+amem hygiene
+amem rules sync
+amem it-pack --out ~/.amem/it-pack
 amem doctor --attest                     # IT tier adds a vault/host SKU packet
 ```
 
 See [docs/license.md](docs/license.md). Signed license files verify offline. Nothing is uploaded.
+
+Checkout + email delivery is a **separate** seller process (`npm run shop`) that is not published with the CLI. It can whitelist Mailtrap and Stripe names from another project’s `.env` — see [shop/README.md](shop/README.md).
 
 ---
 
@@ -129,7 +135,7 @@ amem ui
 
 That opens `http://127.0.0.1:7843` on the **Setup** tab. It scans your home folder for git repos (skips `Library`, `node_modules`, `Downloads`, and similar noise). Check the ones you want, pick clients (Cursor, Claude Code, Windsurf, Continue, Aider, Zed, …), then **Start tracking selected**. Each pick is bound in `~/.amem` and gets the matching installer when available.
 
-The header has a **Personal** switcher (cross-repo prefs) and **Lock / backup** chrome — lock status, last backup, and a daily local schedule. Brain shows the same lock/backup chips. The Setup tab includes a copyable **remember contract** for any MCP host (`amem recipe`).
+The header has a **Personal** switcher (cross-repo prefs) and **Lock / backup** chrome — lock status, last backup, and a daily local schedule. Memory shows the same lock/backup chips. The Setup tab includes a copyable **remember contract** for any MCP host (`amem recipe`).
 
 Optional: check **Start amem ui when this computer logs in** so the localhost server comes back after a reboot:
 
@@ -142,7 +148,7 @@ amem service uninstall
 Tabs after setup:
 
 1. **Setup** — scan/select repos, platforms, login auto-start, bootstrap proposal  
-2. **Brain** — facts by file, scored drafts (approve / replace older / dismiss / reject noisy), edit/pin/delete, search, recent hits/misses  
+2. **Memory** — facts by file, scored drafts (approve / replace older / dismiss / reject noisy), edit/pin/delete, search, recent hits/misses  
 3. **Stats** — estimated tokens saved per LLM, plus JSON / markdown / PDF export (proxies, not a bill)
 
 Server-only (no browser open):
@@ -179,7 +185,7 @@ Or let the agent do it — Cursor gets an always-on project rule; Claude gets ho
 - `amem-bootstrap` — seed baseline memory  
 - `amem-update-working-memory` — save durable learnings after a session  
 
-Hooks also inject context on session start / prompt submit, store conversation notes, queue **session-end drafts**, and can queue **miss→learn** drafts after empty context lookups when the agent later cites real files. Approve drafts in **Brain** (or allow low-risk kinds via policy `auto_apply_kinds`).
+Hooks also inject context on session start / prompt submit, store conversation notes, queue **session-end drafts**, and can queue **miss→learn** drafts after empty context lookups when the agent later cites real files. Approve drafts in **Memory** (or allow low-risk kinds via policy `auto_apply_kinds`).
 
 ### 2. Work as usual
 
@@ -187,7 +193,7 @@ Treat memory as a **map**, not source of truth. Read the anchored files before y
 
 ### 3. Save what should survive
 
-Ask the agent to run `amem-update-working-memory`, approve Brain drafts, or apply a proposal yourself:
+Ask the agent to run `amem-update-working-memory`, approve Memory drafts, or apply a proposal yourself:
 
 ```bash
 amem propose validate /tmp/memory.json
@@ -211,7 +217,7 @@ Memory is a small local graph in SQLite:
 | **Flow** | How work moves (`flow.checkout`) |
 | **Claim** | A durable fact with file anchors (may be `active` or `superseded`; optional pin) |
 | **Edge** | Links (claim → flow → component); `kind: "supersedes"` archives the target claim |
-| **Draft** | Pending session / miss→learn proposals waiting for Brain approve |
+| **Draft** | Pending session / miss→learn proposals waiting for Memory approve |
 | **Usage event** | Each `amem context` hit + token estimate |
 
 Claims are the retrieval unit. Ranking combines:
@@ -372,7 +378,7 @@ amem session touch --platform cursor|claude [--session-id <id>]
 amem hook
 amem usage report --saved <n> [--platform …] [--event-id …]
 amem usage export [--format json|md|pdf] [--days 30] [--scope current|all] [--out <file>]
-amem license status|apply|activate|clear|issue
+amem license status|apply|activate|clear|issue|keys
 amem embed status|use hash|use ngram|reindex
 amem ui [--port 7843] [--no-open]
 amem service install|uninstall|status
@@ -390,7 +396,7 @@ amem service install|uninstall|status
 | `propose apply` | Upsert structured memory locally |
 | `lock` / `unlock` | Optional AES-256-GCM encrypt-at-rest for `graph.db` |
 | `backup` | Local snapshot (optionally encrypted); `schedule` for daily timer |
-| `ui` | Setup wizard + Brain + Stats on localhost |
+| `ui` | Setup wizard + Memory + Stats on localhost |
 | `service` | Login item so `amem ui` starts after reboot |
 | `doctor --attest` | Privacy/policy attestation for IT tickets |
 | `export` / `wipe` | Personal backup or delete (still local) |
@@ -444,7 +450,7 @@ Layout:
 
 ```text
 src/           CLI, SQLite, policy, attest, installers, localhost API
-ui-static/     Setup / Brain / Stats UI
+ui-static/     Setup / Memory / Stats UI
 skills/        Agent skill markdown
 templates/     Cursor rule + example enterprise policy
 docs/          Agent install prompt + IT endpoint runbook + backlog

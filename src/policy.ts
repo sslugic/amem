@@ -13,7 +13,7 @@ export type AmemPolicy = {
   allowed_platforms: string[];
   allowed_remote_hosts: string[];
   deny_claim_patterns: string[];
-  /** Draft kinds that may auto-apply without Brain approve (still local). */
+  /** Draft kinds that may auto-apply without Memory approve (still local). */
   auto_apply_kinds: string[];
 };
 

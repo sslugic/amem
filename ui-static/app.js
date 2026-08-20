@@ -1,4 +1,7 @@
 const PLATFORM_STORAGE = "amem.selectedPlatforms";
+const WELCOME_STORAGE = "amem.welcome.dismissed";
+const BRAIN_SCOPE_STORAGE = "amem.brain.scope";
+const TABS = ["welcome", "setup", "brain", "stats"];
 const FALLBACK_CLIENTS = [
   { id: "cursor", label: "Cursor", hint: "Rules, skills, hooks" },
   { id: "claude", label: "Claude Code", hint: "Skills and settings hooks" },
@@ -58,10 +61,51 @@ function knownClients() {
 const initialUrl = new URLSearchParams(location.search);
 const storedPlatforms = loadStoredPlatforms();
 
+function welcomeDismissed() {
+  try {
+    return localStorage.getItem(WELCOME_STORAGE) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function dismissWelcome() {
+  try {
+    localStorage.setItem(WELCOME_STORAGE, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+function initialTab() {
+  const fromUrl = initialUrl.get("tab");
+  if (!welcomeDismissed() && fromUrl !== "brain" && fromUrl !== "stats") return "welcome";
+  if (TABS.includes(fromUrl)) return fromUrl;
+  return "setup";
+}
+
+function loadBrainAll() {
+  const fromUrl = initialUrl.get("scope");
+  const hasTrackedRepo = Boolean(initialUrl.get("repo"));
+  if (fromUrl === "all" || !hasTrackedRepo) return true;
+  if (fromUrl === "current") return false;
+  try {
+    return localStorage.getItem(BRAIN_SCOPE_STORAGE) !== "current";
+  } catch {
+    return true;
+  }
+}
+
+function persistBrainAll(all) {
+  try {
+    localStorage.setItem(BRAIN_SCOPE_STORAGE, all ? "all" : "current");
+  } catch {
+    /* ignore */
+  }
+}
+
 const state = {
-  tab: ["setup", "brain", "stats"].includes(initialUrl.get("tab"))
-    ? initialUrl.get("tab")
-    : "setup",
+  tab: initialTab(),
   repoId: initialUrl.get("repo") || null,
   path: initialUrl.get("path") || null,
   status: null,
@@ -82,22 +126,34 @@ const state = {
   anim: 0,
   graphTick: 0,
   vault: null,
+  vaultError: null,
   recipe: null,
   license: null,
+  shop: null,
   embed: null,
+  prefs: null,
+  brainAll: loadBrainAll(),
+  brainError: null,
+  setupStep: 1,
+  setupEdit: false,
+  statsDays: 30,
+  showdown: null,
+  showdownQuery: "",
+  showdownOpen: false,
 };
 
-function scopedPath(path) {
+function scopedPath(path, repoId = state.repoId) {
   const url = new URL(path, location.origin);
-  if (state.repoId) url.searchParams.set("repo", state.repoId);
-  else if (state.path) url.searchParams.set("path", state.path);
+  if (repoId) url.searchParams.set("repo", repoId);
+  else if (state.path && !state.brainAll) url.searchParams.set("path", state.path);
   return `${url.pathname}?${url.searchParams.toString()}`;
 }
 
 async function api(path, options = {}) {
-  const res = await fetch(scopedPath(path), {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
+  const { repoId, ...rest } = options;
+  const res = await fetch(scopedPath(path, repoId), {
+    headers: { "Content-Type": "application/json", ...(rest.headers || {}) },
+    ...rest,
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || res.statusText);
@@ -157,12 +213,18 @@ function matchBoundRepo() {
 function writeUrlState() {
   const q = new URLSearchParams();
   q.set("tab", state.tab);
-  if (state.repoId) q.set("repo", state.repoId);
-  if (state.path) q.set("path", state.path);
+  q.set("scope", state.brainAll ? "all" : "current");
+  if (state.repoId && !state.brainAll) q.set("repo", state.repoId);
+  if (state.path && !state.brainAll) q.set("path", state.path);
   history.replaceState(null, "", `?${q.toString()}`);
 }
 
 function setTab(tab) {
+  if (tab === "brain") {
+    state.brainAll = true;
+    persistBrainAll(true);
+    state.brainError = null;
+  }
   state.tab = tab;
   document.querySelectorAll(".tabs button").forEach((b) => {
     b.classList.toggle("active", b.dataset.tab === tab);
@@ -204,14 +266,17 @@ async function refreshStatus() {
   }
   syncFocusFromStatus();
   hydratePlatforms(state.status);
+  state.prefs = state.status?.prefs || state.prefs;
   await refreshVault();
 }
 
 async function refreshVault() {
   try {
     state.vault = await apiUnscoped("/api/vault");
-  } catch {
+    state.vaultError = null;
+  } catch (e) {
     state.vault = state.status?.vault || null;
+    state.vaultError = e?.message || String(e);
   }
   if (!state.recipe) {
     try {
@@ -230,41 +295,55 @@ async function refreshVault() {
   } catch {
     state.embed = state.status?.embed || null;
   }
+  try {
+    state.shop = await apiUnscoped("/api/shop");
+  } catch {
+    state.shop = { url: "https://getamem.com", enabled: true, proUrl: "https://getamem.com/buy/pro", itUrl: "https://getamem.com/buy/it" };
+  }
   paintVault();
 }
 
-function vaultChipHtml() {
+function vaultSummaryText() {
+  if (state.vaultError && /unknown route/i.test(state.vaultError)) {
+    return "This amem UI is outdated — stop the process on port 7843 and run amem ui again";
+  }
   const v = state.vault;
-  if (!v) return `<span class="vault-chip">Vault…</span>`;
-  const lock = v.encryptedAtRest
-    ? `<span class="vault-chip warn">Locked</span>`
-    : v.encCopyPresent
-      ? `<span class="vault-chip ok">Unlocked</span>`
-      : `<span class="vault-chip">Plaintext</span>`;
-  const backup = v.backup?.scheduled
-    ? `<span class="vault-chip ok">Backup scheduled</span>`
-    : `<span class="vault-chip">Backup off</span>`;
-  const last = v.backup?.last
-    ? `<span class="vault-chip">Last ${esc(v.backup.last.mtime.slice(0, 10))}</span>`
-    : `<span class="vault-chip">No backup yet</span>`;
-  const lic = state.license;
-  const license = lic
-    ? `<span class="vault-chip ${lic.tier === "free" ? "" : "ok"}">License ${esc(lic.tier)}</span>`
-    : "";
-  const emb = state.embed;
-  const embed = emb ? `<span class="vault-chip">Embed ${esc(emb.backend)}</span>` : "";
-  return `${lock}${backup}${last}${license}${embed}`;
+  if (!v) return "Vault…";
+  const lock = v.encryptedAtRest ? "Locked" : v.encCopyPresent ? "Unlocked" : "Plaintext";
+  const backup = v.backup?.last
+    ? `Backup ${String(v.backup.last.mtime).slice(0, 10)}`
+    : v.backup?.scheduled
+      ? "Backup scheduled"
+      : "Backup off";
+  const bits = [lock, backup];
+  if (state.license?.tier) bits.push(`License ${state.license.tier}`);
+  if (state.embed?.backend) bits.push(`Embed ${state.embed.backend}`);
+  bits.push("Local only");
+  return bits.join(" · ");
 }
 
 function paintVault() {
   const chips = $("#vaultChips");
-  if (chips) chips.innerHTML = vaultChipHtml();
+  if (chips) chips.textContent = vaultSummaryText();
   const detail = $("#vaultDetail");
   if (detail && state.vault) {
     const last = state.vault.backup?.last;
     detail.textContent = last
       ? `Last backup: ${last.name} · ${last.encrypted ? "encrypted" : "plaintext"} · stays in ${state.vault.backup.dir}`
       : `Backups go to ${state.vault.backup?.dir || "~/.amem/backups"} on this machine.`;
+  }
+  const shop = state.shop;
+  const row = $("#shopRow");
+  if (row) row.classList.toggle("hidden", shop && shop.enabled === false);
+  const pro = $("#buyPro");
+  const it = $("#buyIt");
+  if (pro && shop?.proUrl) {
+    pro.setAttribute("href", shop.proUrl);
+    pro.textContent = `Buy Pro · ${shop.proPrice || "$12"}`;
+  }
+  if (it && shop?.itUrl) {
+    it.setAttribute("href", shop.itUrl);
+    it.textContent = `Buy IT · ${shop.itPrice || "$49"}`;
   }
 }
 
@@ -310,21 +389,71 @@ async function vaultAction(path, extra = {}) {
   }
 }
 
-async function refreshGraph() {
-  if (!state.status?.repo) {
-    state.graph = null;
-    return;
-  }
-  state.graph = await api("/api/graph?days=30");
+function emptyGraph(scope = "all") {
+  return {
+    claims: [],
+    components: [],
+    flows: [],
+    edges: [],
+    drafts: [],
+    recentClaimIds: [],
+    recentEvents: [],
+    activity: null,
+    scope,
+  };
 }
 
-async function refreshUsage(scope = "current", days = 30) {
-  if (!state.status?.repo && scope === "current") {
+async function refreshGraph() {
+  state.brainError = null;
+  try {
+    if (state.brainAll) {
+      state.graph = await apiUnscoped("/api/graph?scope=all&days=30");
+      return;
+    }
+    if (!state.status?.repo) {
+      state.graph = emptyGraph("current");
+      return;
+    }
+    state.graph = await api("/api/graph?days=30");
+  } catch (e) {
+    const message = e?.message || String(e);
+    if (state.brainAll && state.status?.repo) {
+      try {
+        state.graph = await api("/api/graph?days=30");
+        return;
+      } catch {
+        /* keep the original error */
+      }
+    }
+    state.brainError = message;
+    state.graph = emptyGraph(state.brainAll ? "all" : "current");
+  }
+}
+
+function statsScope() {
+  return state.brainAll ? "all" : "current";
+}
+
+function statsFocusLabel() {
+  if (state.brainAll) return "All memory";
+  const repo = state.status?.repo || matchBoundRepo();
+  if (!repo) return "this folder (not tracking yet)";
+  if (isPersonal(repo)) return "Personal";
+  if (isWorkspace(repo)) return `${repo.repo_name} (workspace)`;
+  return repo.repo_name;
+}
+
+async function refreshUsage(scope = statsScope(), days = state.statsDays || 30) {
+  state.statsDays = days;
+  if (scope === "all") {
+    state.usage = await apiUnscoped(`/api/usage?scope=all&days=${days}`);
+    return;
+  }
+  if (!state.status?.repo) {
     state.usage = null;
     return;
   }
-  const q = scope === "all" ? `scope=all&days=${days}` : `days=${days}`;
-  state.usage = await api(`/api/usage?${q}`);
+  state.usage = await api(`/api/usage?days=${days}`);
 }
 
 function isTrackingPath(path) {
@@ -373,6 +502,14 @@ function shortPath(p) {
   return `…/${parts.slice(-3).join("/")}`;
 }
 
+function memoryLabel(repoId) {
+  const r = listedRepos().find((x) => x.id === repoId);
+  if (!r) return "unknown";
+  if (isPersonal(r)) return "Personal";
+  if (isWorkspace(r)) return `${r.repo_name} · workspace`;
+  return `${r.repo_name} · repo`;
+}
+
 function switcherLabel(r) {
   const n = r.counts?.claims ?? 0;
   const facts = `${n} fact${n === 1 ? "" : "s"}`;
@@ -406,11 +543,17 @@ function fillRepoSelect() {
       const opt = document.createElement("option");
       opt.value = `repo:${r.id}`;
       opt.textContent = switcherLabel(r);
-      if (r.id === currentId || samePath(r.root_path, currentPath)) opt.selected = true;
+      if (!state.brainAll && (r.id === currentId || samePath(r.root_path, currentPath))) opt.selected = true;
       group.appendChild(opt);
     }
     select.appendChild(group);
   };
+
+  const allOpt = document.createElement("option");
+  allOpt.value = "__all__";
+  allOpt.textContent = "All memory";
+  if (state.brainAll) allOpt.selected = true;
+  select.appendChild(allOpt);
 
   addGroup(
     "Personal",
@@ -429,8 +572,8 @@ function fillRepoSelect() {
     const opt = document.createElement("option");
     opt.value = `path:${currentPath}`;
     opt.textContent = `${state.status?.identity?.repoName || currentPath} · not initialized`;
-    opt.selected = true;
-    select.insertBefore(opt, select.firstChild);
+    if (!state.brainAll) opt.selected = true;
+    select.appendChild(opt);
   }
 
   const add = document.createElement("option");
@@ -546,11 +689,102 @@ function defaultProposal() {
   );
 }
 
-function renderSetup() {
+function renderWelcome() {
+  const main = $("#main");
+  setMainMode("page");
+  const shop = state.shop || {};
+  const proUrl = shop.proUrl || "https://getamem.com/buy/pro";
+  const itUrl = shop.itUrl || "https://getamem.com/buy/it";
+  const proPrice = shop.proPrice || "$12";
+  const itPrice = shop.itPrice || "$49";
+  const tier = state.license?.tier || "free";
+  const shopOn = shop.enabled !== false;
+
+  main.innerHTML = `
+    <section class="hero welcome-hero">
+      <div class="hero-inner welcome-wide">
+        <div class="welcome-brand">
+          <div class="welcome-logo" aria-hidden="true">a</div>
+          <h1>amem</h1>
+        </div>
+        <p>Local agent memory for Cursor and any MCP host. Facts stay in <code>~/.amem</code> on this machine. Pay only if you want extras — free already remembers, retrieves, and backs up.</p>
+        <div class="plan-grid">
+          <article class="plan-card ${tier === "free" ? "current" : ""}">
+            <h2>Free</h2>
+            <p class="plan-price">$0</p>
+            <ul>
+              <li>Memory, MCP, and Stats</li>
+              <li>Lock and local backup</li>
+              <li>Hashing embedder — no download</li>
+            </ul>
+            <button class="btn" type="button" id="continueFree">Continue with free</button>
+          </article>
+          <article class="plan-card ${tier === "pro" ? "current" : ""}">
+            <h2>Pro</h2>
+            <p class="plan-price">${esc(proPrice)} <span>once</span></p>
+            <ul>
+              <li>Everything in Free</li>
+              <li>Local n-gram or external embedder</li>
+              <li>Hygiene inbox — decay and merge</li>
+              <li>Pin facts → Cursor rules</li>
+            </ul>
+            ${
+              shopOn
+                ? `<a class="btn" href="${esc(proUrl)}" target="_blank" rel="noopener">Buy Pro</a>`
+                : `<p class="note">Shop is off on this machine.</p>`
+            }
+          </article>
+          <article class="plan-card ${tier === "it" ? "current" : ""}">
+            <h2>IT</h2>
+            <p class="plan-price">${esc(itPrice)} <span>once</span></p>
+            <ul>
+              <li>Everything in Pro</li>
+              <li>Richer <code>amem doctor --attest</code></li>
+              <li><code>amem it-pack</code> for local rollout</li>
+            </ul>
+            ${
+              shopOn
+                ? `<a class="btn secondary" href="${esc(itUrl)}" target="_blank" rel="noopener">Buy IT</a>`
+                : `<p class="note">Shop is off on this machine.</p>`
+            }
+          </article>
+        </div>
+        ${isPaidLicense() ? proOnboardHtml("welcome") : licenseApplyHtml("welcome")}
+        <p class="note welcome-note">After pay, apply <code>amem-license.json</code> above (or in Setup). Memory never uploads.</p>
+      </div>
+    </section>`;
+
+  $("#continueFree")?.addEventListener("click", () => {
+    dismissWelcome();
+    setTab("setup");
+  });
+  wireLicenseApply("welcome", async () => {
+    await refreshVault();
+    renderWelcome();
+  });
+  wireProOnboard("welcome");
+}
+
+const SETUP_STEPS = [
+  { id: 1, title: "Clients", hint: "Which apps use local memory" },
+  { id: 2, title: "Git repos", hint: "Folders amem should watch" },
+  { id: 3, title: "Workspaces", hint: "Optional named spaces" },
+  { id: 4, title: "Connect", hint: "Paste the recipe into any host" },
+];
+
+function setupIsComplete() {
+  return listedRepos().length > 0 || Boolean(state.status?.setup?.setup_completed_at);
+}
+
+function selectedClientLabels() {
+  return knownClients()
+    .filter((c) => state.selected.has(c.id))
+    .map((c) => c.label);
+}
+
+function setupContext() {
   const s = state.status;
   const bound = matchBoundRepo();
-  const configured = Boolean(s?.setup?.setup_completed_at || s?.repo || bound);
-  const main = $("#main");
   const repos = listedRepos();
   const gitBound = repos.filter((r) => !isWorkspace(r));
   const workspaces = repos.filter(isWorkspace);
@@ -560,148 +794,520 @@ function renderSetup() {
     if (!filter) return true;
     return `${r.name} ${r.path} ${r.remote || ""}`.toLowerCase().includes(filter);
   });
-  const pickedCount = [...state.picked].length;
+  return {
+    s,
+    bound,
+    repos,
+    gitBound,
+    workspaces,
+    scanned,
+    visible,
+    pickedCount: [...state.picked].length,
+    serviceOn: Boolean(state.service?.installed),
+    focused: bound || s?.repo,
+    issues: (s?.doctor || []).filter((i) => !(bound && i === "Repo not initialized")),
+  };
+}
+
+function clientsBlockHtml() {
+  return `<div class="platform-row">
+    ${knownClients()
+      .map(
+        (p) => `<button class="chip ${state.selected.has(p.id) ? "selected" : ""}" data-platform="${esc(p.id)}" type="button">
+      <strong>${esc(p.label)}</strong>
+      <span>${esc(p.hint)}</span>
+    </button>`,
+      )
+      .join("")}
+  </div>`;
+}
+
+function autostartBlockHtml() {
   const serviceOn = Boolean(state.service?.installed);
-  const focused = bound || s?.repo;
-  const focusedWs = isWorkspace(focused);
-  const focusedSlug = focused?.slug || "";
+  if (state.service?.supported === false) {
+    return `<p class="note">Login auto-start is not supported on this OS.</p>`;
+  }
+  const extra =
+    state.service?.servicePlatform === "linux"
+      ? " (systemd user unit)"
+      : state.service?.servicePlatform === "win32"
+        ? " (Startup folder)"
+        : "";
+  return `<label class="autostart"><input type="checkbox" id="autostart" ${serviceOn ? "checked" : ""}/> Start amem ui when this computer logs in${extra}</label>`;
+}
 
-  const issues = (s.doctor || []).filter((i) => !(bound && i === "Repo not initialized"));
+function gitScanBlockHtml(ctx) {
+  const { scanned, visible, gitBound, pickedCount } = ctx;
+  return `
+    <div class="scan-head">
+      <div>
+        <strong>Git repos on this Mac</strong>
+        <div class="note" style="margin:0.25rem 0 0">${
+          state.scanLoading
+            ? "Scanning your home folder…"
+            : `${scanned.length} found · ${gitBound.length} git repo${gitBound.length === 1 ? "" : "s"} tracking${state.scan?.truncated ? " · scan capped" : ""}`
+        }</div>
+      </div>
+      <div class="scan-actions">
+        <input id="scanFilter" type="search" placeholder="Filter repos" value="${state.scanFilter.replaceAll('"', "&quot;")}" />
+        <button class="btn secondary small" id="rescanBtn" type="button">Rescan</button>
+      </div>
+    </div>
+    <div class="repo-list" id="repoList">
+      ${
+        state.scanLoading && scanned.length === 0
+          ? `<div class="note">Scanning…</div>`
+          : visible.length === 0
+            ? `<div class="note">No git repos found in your home folder.</div>`
+            : visible
+                .map((r) => {
+                  const tracking = r.tracking || isTrackingPath(r.path);
+                  const checked = state.picked.has(r.path);
+                  return `<label class="repo-row ${tracking ? "tracking" : ""}">
+                    <input type="checkbox" data-path="${r.path.replaceAll('"', "&quot;")}" ${checked ? "checked" : ""} />
+                    <span>
+                      <b>${r.name}</b>
+                      ${tracking ? `<em>tracking</em>` : ""}
+                      <small>${r.path}</small>
+                    </span>
+                  </label>`;
+                })
+                .join("")
+      }
+    </div>
+    <div class="actions">
+      <button class="btn" id="trackBtn">Start tracking selected (${pickedCount || visible.filter((r) => r.tracking).length})</button>
+    </div>`;
+}
 
-  main.innerHTML = `
-    <section class="hero">
-      <div class="hero-inner setup-wide">
-        <h1>amem</h1>
-        <p>Track git repos and named workspaces separately. Memory stays in ~/.amem and never leaves localhost.</p>
-        <div class="platform-row">
-          ${knownClients()
-            .map(
-              (p) => `<button class="chip ${state.selected.has(p.id) ? "selected" : ""}" data-platform="${esc(p.id)}" type="button">
-            <strong>${esc(p.label)}</strong>
-            <span>${esc(p.hint)}</span>
-          </button>`,
-            )
-            .join("")}
-        </div>
+function workspaceBlockHtml(ctx) {
+  const { workspaces, focused } = ctx;
+  return `
+    <div class="scan-head">
+      <div>
+        <strong>Named workspaces</strong>
+        <div class="note" style="margin:0.25rem 0 0">Not git checkouts. Rename the label anytime — the MCP id and memory stay put.</div>
+      </div>
+    </div>
+    <div class="repo-list" id="workspaceList">
+      ${
+        workspaces.length === 0
+          ? `<div class="note">None yet. Create one below for Luna or any MCP host.</div>`
+          : workspaces
+              .map((w) => {
+                const slug = w.slug || "";
+                const n = w.counts?.claims ?? 0;
+                const active = focused?.id === w.id;
+                return `<div class="repo-row workspace-row ${active ? "tracking" : ""}" data-focus-ws="${esc(w.id)}">
+                  <span>
+                    <b>${esc(w.repo_name)}</b>
+                    <em>workspace</em>
+                    <small>MCP id ${esc(slug)} · ${n} fact${n === 1 ? "" : "s"}</small>
+                  </span>
+                  <button class="btn secondary small" type="button" data-rename-ws="${esc(w.id)}">Rename</button>
+                </div>`;
+              })
+              .join("")
+      }
+    </div>
+    <div class="workspace-add">
+      <label class="note">Create a workspace (no git repo required)</label>
+      <div class="add-repo-row">
+        <input id="wsName" type="text" placeholder="Luna Client" />
+        <button class="btn secondary" id="wsBtn" type="button">Create workspace</button>
+      </div>
+      <p class="note">Any MCP host: keep this UI running, then connect to <code>http://127.0.0.1:7843/mcp?workspace=SLUG</code> (not a bare <code>amem</code> command — GUI apps often cannot see Homebrew on PATH).</p>
+    </div>`;
+}
+
+function isPaidLicense() {
+  const tier = String(state.license?.tier || state.status?.license?.tier || "free").toLowerCase();
+  return state.license?.valid !== false && (tier === "pro" || tier === "it");
+}
+
+function licenseApplyHtml(idPrefix = "lic") {
+  return `
+    <div class="license-apply" id="${idPrefix}ApplyBox">
+      <h2>Apply license</h2>
+      <p class="note">After checkout, paste <code>amem-license.json</code> or choose the downloaded file. Memory never uploads.</p>
+      <textarea id="${idPrefix}LicenseText" rows="5" placeholder='{"kind":"signed","payload":{…},"signature":"…"}'></textarea>
+      <div class="license-apply-actions">
+        <label class="btn secondary small license-file-label">Choose file
+          <input type="file" id="${idPrefix}LicenseFile" accept="application/json,.json" hidden />
+        </label>
+        <button class="btn" type="button" id="${idPrefix}LicenseApply">Apply license</button>
+      </div>
+      <p class="note" id="${idPrefix}LicenseMsg"></p>
+    </div>`;
+}
+
+function proOnboardHtml(idPrefix = "onboard") {
+  if (!isPaidLicense()) return "";
+  const backend = state.embed?.backend || "hash";
+  const ngramOn = backend === "ngram" || backend === "external";
+  const steps = [
+    { id: "embed", done: ngramOn, label: "Pro retrieval (n-gram)" },
+    { id: "reindex", done: ngramOn, label: "Reindex embeddings" },
+    { id: "hygiene", done: false, label: "Memory Review (hygiene)" },
+    { id: "rules", done: false, label: "Sync pinned → Cursor rules" },
+  ];
+  return `
+    <div class="pro-onboard" id="${idPrefix}Onboard">
+      <h2>Turn on Pro</h2>
+      <p class="note">Paying should change defaults immediately — enable richer retrieval, then clean and sync.</p>
+      <ol class="pro-onboard-steps">
+        ${steps
+          .map(
+            (s) =>
+              `<li class="${s.done ? "done" : ""}"><span class="setup-check" aria-hidden="true">${s.done ? "✓" : "·"}</span> ${esc(s.label)}</li>`,
+          )
+          .join("")}
+      </ol>
+      <div class="actions">
+        <button class="btn" type="button" id="${idPrefix}EnablePro">Turn on Pro retrieval</button>
+        <button class="btn secondary" type="button" id="${idPrefix}OpenReview">Open Memory Review</button>
         ${
-          state.service?.supported === false
-            ? `<p class="note">Login auto-start is not supported on this OS.</p>`
-            : `<label class="autostart"><input type="checkbox" id="autostart" ${serviceOn ? "checked" : ""}/> Start amem ui when this computer logs in${
-                state.service?.servicePlatform === "linux"
-                  ? " (systemd user unit)"
-                  : state.service?.servicePlatform === "win32"
-                    ? " (Startup folder)"
-                    : ""
-              }</label>`
-        }
-        <div class="scan-head">
-          <div>
-            <strong>Git repos on this Mac</strong>
-            <div class="note" style="margin:0.25rem 0 0">${
-              state.scanLoading
-                ? "Scanning your home folder…"
-                : `${scanned.length} found · ${gitBound.length} git repo${gitBound.length === 1 ? "" : "s"} tracking${state.scan?.truncated ? " · scan capped" : ""}`
-            }</div>
-          </div>
-          <div class="scan-actions">
-            <input id="scanFilter" type="search" placeholder="Filter repos" value="${state.scanFilter.replaceAll('"', "&quot;")}" />
-            <button class="btn secondary small" id="rescanBtn" type="button">Rescan</button>
-          </div>
-        </div>
-        <div class="repo-list" id="repoList">
-          ${
-            state.scanLoading && scanned.length === 0
-              ? `<div class="note">Scanning…</div>`
-              : visible.length === 0
-                ? `<div class="note">No git repos found in your home folder.</div>`
-                : visible
-                    .map((r) => {
-                      const tracking = r.tracking || isTrackingPath(r.path);
-                      const checked = state.picked.has(r.path);
-                      return `<label class="repo-row ${tracking ? "tracking" : ""}">
-                        <input type="checkbox" data-path="${r.path.replaceAll('"', "&quot;")}" ${checked ? "checked" : ""} />
-                        <span>
-                          <b>${r.name}</b>
-                          ${tracking ? `<em>tracking</em>` : ""}
-                          <small>${r.path}</small>
-                        </span>
-                      </label>`;
-                    })
-                    .join("")
-          }
-        </div>
-        <div class="actions">
-          <button class="btn" id="trackBtn">Start tracking selected (${pickedCount || visible.filter((r) => r.tracking).length})</button>
-        </div>
-        <div class="scan-head">
-          <div>
-            <strong>Named workspaces</strong>
-            <div class="note" style="margin:0.25rem 0 0">Not git checkouts. Rename the label anytime — the MCP id and memory stay put.</div>
-          </div>
-        </div>
-        <div class="repo-list" id="workspaceList">
-          ${
-            workspaces.length === 0
-              ? `<div class="note">None yet. Create one below for Luna or any MCP host.</div>`
-              : workspaces
-                  .map((w) => {
-                    const slug = w.slug || "";
-                    const n = w.counts?.claims ?? 0;
-                    const active = focused?.id === w.id;
-                    return `<div class="repo-row workspace-row ${active ? "tracking" : ""}" data-focus-ws="${esc(w.id)}">
-                      <span>
-                        <b>${esc(w.repo_name)}</b>
-                        <em>workspace</em>
-                        <small>MCP id ${esc(slug)} · ${n} fact${n === 1 ? "" : "s"}</small>
-                      </span>
-                      <button class="btn secondary small" type="button" data-rename-ws="${esc(w.id)}">Rename</button>
-                    </div>`;
-                  })
-                  .join("")
-          }
-        </div>
-        <div class="workspace-add">
-          <label class="note">Create a workspace (no git repo required)</label>
-          <div class="add-repo-row">
-            <input id="wsName" type="text" placeholder="Luna Client" />
-            <button class="btn secondary" id="wsBtn" type="button">Create workspace</button>
-          </div>
-          <p class="note">Any MCP host: keep this UI running, then connect to <code>http://127.0.0.1:7843/mcp?workspace=SLUG</code> (not a bare <code>amem</code> command — GUI apps often cannot see Homebrew on PATH).</p>
-        </div>
-        <div class="recipe-card">
-          <div class="scan-head">
-            <div>
-              <strong>Remember contract (any MCP host)</strong>
-              <div class="note" style="margin:0.25rem 0 0">Read first, then write. Same tools for every client — not a per-app fork.</div>
-            </div>
-            <button class="btn secondary small" id="copyRecipe" type="button">Copy recipe</button>
-          </div>
-          <pre id="recipePaste">${esc(state.recipe?.paste || "amem recipe")}</pre>
-        </div>
-        ${
-          configured
-            ? `<div class="status-grid" style="margin-top:1.5rem">
-          <div class="stat-line"><span>Focused ${focusedWs ? "workspace" : "git repo"}</span><b>${esc(focused?.repo_name || s?.identity?.repoName || "—")}</b></div>
-          ${focusedWs && focusedSlug && focusedSlug !== focused?.repo_name ? `<div class="stat-line"><span>MCP id</span><b>${esc(focusedSlug)}</b></div>` : ""}
-          <div class="stat-line"><span>Claims</span><b>${s.counts?.claims ?? 0}</b></div>
-          <div class="stat-line"><span>License</span><b>${esc(s.license?.tier || state.license?.tier || "free")}</b></div>
-          <div class="stat-line"><span>Embed</span><b>${esc(s.embed?.backend || state.embed?.backend || "hash")}</b></div>
-          <div class="stat-line"><span>DB</span><b>${s.dbPath}</b></div>
-        </div>
-        ${issues.length ? `<div class="issues">${issues.map((i) => `• ${i}`).join("<br/>")}</div>` : ""}
-        <div class="bootstrap">
-          <label class="note">Bootstrap proposal (applied only to the focused ${focusedWs ? "workspace" : "repo"})</label>
-          <textarea id="proposal">${defaultProposal()}</textarea>
-          <div class="actions">
-            <button class="btn" id="applyBootstrap">Apply bootstrap</button>
-            <button class="btn secondary" id="openBrain">Open brain</button>
-          </div>
-        </div>`
-            : `<p class="note">Select repos above, then Start tracking. Cursor chats in those folders will use local amem memory.</p>`
+          state.license?.features?.includes("rules_sync") && !state.brainAll
+            ? `<button class="btn secondary" type="button" id="${idPrefix}RulesSync">Sync pinned rules</button>`
+            : ""
         }
       </div>
-    </section>`;
+      <p class="note" id="${idPrefix}OnboardMsg"></p>
+    </div>`;
+}
 
+async function applyLicenseFromUi(text, msgEl) {
+  const raw = String(text || "").trim();
+  if (!raw) {
+    if (msgEl) msgEl.textContent = "Paste license JSON or choose a file first.";
+    return false;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    if (msgEl) msgEl.textContent = "That is not valid JSON.";
+    return false;
+  }
+  try {
+    const status = await apiUnscoped("/api/license/apply", {
+      method: "POST",
+      body: JSON.stringify({ json: parsed }),
+    });
+    state.license = status;
+    try {
+      state.embed = await apiUnscoped("/api/embed");
+    } catch {
+      /* keep */
+    }
+    if (msgEl) msgEl.textContent = `Applied ${status.tier} license.`;
+    return true;
+  } catch (e) {
+    if (msgEl) msgEl.textContent = e?.message || String(e);
+    return false;
+  }
+}
+
+function wireLicenseApply(idPrefix, onApplied) {
+  const msg = $(`#${idPrefix}LicenseMsg`);
+  const area = $(`#${idPrefix}LicenseText`);
+  $(`#${idPrefix}LicenseFile`)?.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    if (area) area.value = text;
+  });
+  $(`#${idPrefix}LicenseApply`)?.addEventListener("click", async () => {
+    const ok = await applyLicenseFromUi(area?.value || "", msg);
+    if (ok && onApplied) await onApplied();
+  });
+}
+
+function wireProOnboard(idPrefix) {
+  const msg = $(`#${idPrefix}OnboardMsg`);
+  $(`#${idPrefix}EnablePro`)?.addEventListener("click", async () => {
+    try {
+      if (msg) msg.textContent = "Enabling n-gram…";
+      state.embed = await apiUnscoped("/api/embed", {
+        method: "POST",
+        body: JSON.stringify({ backend: "ngram" }),
+      });
+      if (msg) msg.textContent = "Reindexing…";
+      await apiUnscoped("/api/embed/reindex", { method: "POST", body: "{}" });
+      if (msg) msg.textContent = "Pro retrieval is on. Run a showdown in Memory anytime.";
+      if (state.tab === "welcome") renderWelcome();
+      else if (state.tab === "setup") renderSetup();
+    } catch (e) {
+      if (msg) msg.textContent = e?.message || String(e);
+    }
+  });
+  $(`#${idPrefix}OpenReview`)?.addEventListener("click", () => {
+    state.brainFilter = "review";
+    setTab("brain");
+  });
+  $(`#${idPrefix}RulesSync`)?.addEventListener("click", async () => {
+    try {
+      const result = await api("/api/rules/sync", { method: "POST", body: "{}" });
+      if (msg) msg.textContent = result?.path ? `Wrote ${result.path}` : "Rules synced.";
+    } catch (e) {
+      if (msg) msg.textContent = e?.message || String(e);
+    }
+  });
+}
+
+function shopBuyCardHtml() {
+  if (state.shop?.enabled === false) return "";
+  const shop = state.shop || {};
+  const proUrl = shop.proUrl || "https://getamem.com/buy/pro";
+  const itUrl = shop.itUrl || "https://getamem.com/buy/it";
+  const proPrice = shop.proPrice || "$12";
+  const itPrice = shop.itPrice || "$49";
+  const tier = String(state.license?.tier || state.status?.license?.tier || "free").toLowerCase();
+  const proOwned = tier === "pro" || tier === "it";
+  const itOwned = tier === "it";
+  return `
+    <div class="setup-shop">
+      <div class="setup-shop-head">
+        <div>
+          <h2>Signed license</h2>
+          <p class="note">Pay on getamem.com, then apply the file here — no CLI required. Memory never uploads.</p>
+        </div>
+        <button class="btn secondary small" id="seePlans" type="button">What's included</button>
+      </div>
+      <div class="setup-shop-grid">
+        <article class="setup-buy ${proOwned ? "current" : ""}">
+          <div class="setup-buy-top">
+            <strong>Pro</strong>
+            ${proOwned ? `<span class="pill ok">Yours</span>` : ""}
+          </div>
+          <p class="setup-buy-price">${esc(proPrice)} <span>once</span></p>
+          <p class="note">Richer embedder, hygiene, pin → Cursor rules.</p>
+          ${
+            proOwned
+              ? `<span class="btn secondary setup-buy-owned">You have Pro</span>`
+              : `<a class="btn" href="${esc(proUrl)}" target="_blank" rel="noopener">Buy Pro</a>`
+          }
+        </article>
+        <article class="setup-buy ${itOwned ? "current" : ""}">
+          <div class="setup-buy-top">
+            <strong>IT</strong>
+            ${itOwned ? `<span class="pill ok">Yours</span>` : ""}
+          </div>
+          <p class="setup-buy-price">${esc(itPrice)} <span>once</span></p>
+          <p class="note">Everything in Pro, plus local IT pack and attest.</p>
+          ${
+            itOwned
+              ? `<span class="btn secondary setup-buy-owned">You have IT</span>`
+              : `<a class="btn secondary" href="${esc(itUrl)}" target="_blank" rel="noopener">Buy IT</a>`
+          }
+        </article>
+      </div>
+      ${proOwned ? proOnboardHtml("setup") : licenseApplyHtml("setup")}
+    </div>`;
+}
+
+function recipeBlockHtml() {
+  return `
+    <div class="recipe-card">
+      <div class="scan-head">
+        <div>
+          <strong>Remember contract (any MCP host)</strong>
+          <div class="note" style="margin:0.25rem 0 0">Read first, then write. Same tools for every client — not a per-app fork.</div>
+        </div>
+        <button class="btn secondary small" id="copyRecipe" type="button">Copy recipe</button>
+      </div>
+      <pre id="recipePaste">${esc(state.recipe?.paste || "amem recipe")}</pre>
+    </div>`;
+}
+
+function connectExtrasHtml(ctx) {
+  const { s, focused, issues } = ctx;
+  const focusedWs = isWorkspace(focused);
+  const focusedSlug = focused?.slug || "";
+  return `
+    ${
+      focused
+        ? `<div class="status-grid" style="margin-top:1.5rem">
+      <div class="stat-line"><span>Focused ${focusedWs ? "workspace" : "git repo"}</span><b>${esc(focused?.repo_name || s?.identity?.repoName || "—")}</b></div>
+      ${focusedWs && focusedSlug && focusedSlug !== focused?.repo_name ? `<div class="stat-line"><span>MCP id</span><b>${esc(focusedSlug)}</b></div>` : ""}
+      <div class="stat-line"><span>Claims</span><b>${s?.counts?.claims ?? 0}</b></div>
+      <div class="stat-line"><span>License</span><b>${esc(s?.license?.tier || state.license?.tier || "free")}</b></div>
+    </div>`
+        : ""
+    }
+    ${issues.length ? `<div class="issues">${issues.map((i) => `• ${i}`).join("<br/>")}</div>` : ""}
+    ${
+      focused
+        ? `<div class="bootstrap">
+      <label class="note">Bootstrap proposal (applied only to the focused ${focusedWs ? "workspace" : "repo"})</label>
+      <textarea id="proposal">${defaultProposal()}</textarea>
+      <div class="actions">
+        <button class="btn" id="applyBootstrap">Apply bootstrap</button>
+      </div>
+    </div>`
+        : `<p class="note">Track a git repo or create a workspace first if you want to apply a bootstrap proposal.</p>`
+    }`;
+}
+
+function setupStepperHtml(current) {
+  return `<ol class="setup-steps">
+    ${SETUP_STEPS.map((step) => {
+      const cls = ["setup-step", step.id === current ? "active" : "", step.id < current ? "done" : ""]
+        .filter(Boolean)
+        .join(" ");
+      return `<li>
+        <button type="button" class="${cls}" data-setup-step="${step.id}">
+          <span class="setup-num">${step.id < current ? "✓" : step.id}</span>
+          <span>
+            <strong>${esc(step.title)}</strong>
+            <em>${esc(step.hint)}</em>
+          </span>
+        </button>
+      </li>`;
+    }).join("")}
+  </ol>`;
+}
+
+function setupDoneHtml(ctx) {
+  const { gitBound, workspaces, serviceOn } = ctx;
+  const clients = selectedClientLabels();
+  const rows = [
+    {
+      title: "Clients",
+      detail: clients.length ? clients.join(", ") : "None selected",
+    },
+    {
+      title: "Git repos",
+      detail:
+        gitBound.length === 0
+          ? "None tracking"
+          : `${gitBound.length} tracking · ${gitBound
+              .slice(0, 3)
+              .map((r) => r.repo_name)
+              .join(", ")}${gitBound.length > 3 ? "…" : ""}`,
+    },
+    {
+      title: "Workspaces",
+      detail:
+        workspaces.length === 0
+          ? "Skipped — add one anytime"
+          : `${workspaces.length} named · ${workspaces.map((w) => w.repo_name).join(", ")}`,
+    },
+    {
+      title: "Connect",
+      detail: serviceOn
+        ? "Recipe ready · UI starts at login · MCP on 127.0.0.1:7843"
+        : "Recipe ready · MCP on 127.0.0.1:7843",
+    },
+  ];
+  return `
+    <section class="hero">
+      <div class="hero-inner setup-wide">
+        <h1>You're set up</h1>
+        <p>Memory stays in ~/.amem and never leaves this machine. Every step below is done — change any of them if you need to.</p>
+        <ol class="setup-done">
+          ${rows
+            .map(
+              (row, i) => `<li>
+            <span class="setup-check" aria-hidden="true">✓</span>
+            <div>
+              <strong>${i + 1}. ${esc(row.title)}</strong>
+              <p>${esc(row.detail)}</p>
+            </div>
+          </li>`,
+            )
+            .join("")}
+        </ol>
+        <div class="actions">
+          <button class="btn" id="openBrain" type="button">Open memory</button>
+          <button class="btn secondary" id="editSetup" type="button">Change setup</button>
+        </div>
+        ${recipeBlockHtml()}
+        ${shopBuyCardHtml()}
+      </div>
+    </section>`;
+}
+
+function setupWizardHtml(ctx) {
+  const step = Math.min(4, Math.max(1, state.setupStep || 1));
+  const titles = {
+    1: { h: "Which apps?", p: "Pick every agent that should read and write local memory. You can change this later." },
+    2: { h: "Which git repos?", p: "Select folders to track. Chats in those folders will use this machine's memory." },
+    3: { h: "Named workspaces?", p: "Optional. Use these when there is no git checkout — Luna, a GUI host, or a personal space." },
+    4: { h: "Connect a host", p: "Keep this UI running. Paste the recipe into any MCP client. Then open Memory to see what's stored." },
+  };
+  const copy = titles[step];
+  const body =
+    step === 1
+      ? `${clientsBlockHtml()}${autostartBlockHtml()}`
+      : step === 2
+        ? gitScanBlockHtml(ctx)
+        : step === 3
+          ? workspaceBlockHtml(ctx)
+          : `${recipeBlockHtml()}${connectExtrasHtml(ctx)}`;
+  const back = step > 1 ? `<button class="btn secondary" id="setupBack" type="button">Back</button>` : "";
+  const next =
+    step === 4
+      ? `<button class="btn" id="openBrain" type="button">Open memory</button>`
+      : `<button class="btn${step === 1 ? "" : " secondary"}" id="setupNext" type="button">${step === 1 ? "Continue" : "Skip for now"}</button>`;
+  return `
+    <section class="hero">
+      <div class="hero-inner setup-wide">
+        <h1>Setup</h1>
+        <p>Four short steps. Memory stays in ~/.amem and never leaves localhost.</p>
+        ${setupStepperHtml(step)}
+        <div class="setup-panel">
+          <h2>${esc(copy.h)}</h2>
+          <p class="note setup-lead">${esc(copy.p)}</p>
+          ${body}
+        </div>
+        <div class="actions setup-nav">
+          ${back}
+          ${next}
+          ${setupIsComplete() ? `<button class="btn secondary" id="setupFinish" type="button">Done</button>` : ""}
+        </div>
+      </div>
+    </section>`;
+}
+
+function renderSetup() {
+  const ctx = setupContext();
+  const main = $("#main");
+  setMainMode("page");
+  const showDone = setupIsComplete() && !state.setupEdit;
+  main.innerHTML = showDone ? setupDoneHtml(ctx) : setupWizardHtml(ctx);
+  bindSetupEvents(main, ctx);
+}
+
+function goSetupStep(step) {
+  state.setupStep = Math.min(4, Math.max(1, step));
+  renderSetup();
+}
+
+function bindSetupEvents(main, ctx) {
+  const { workspaces, focused } = ctx;
+  main.querySelectorAll("[data-setup-step]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const next = Number(el.dataset.setupStep);
+      if (!Number.isFinite(next)) return;
+      if (next > (state.setupStep || 1) && !setupIsComplete()) return;
+      goSetupStep(next);
+    });
+  });
+  $("#setupNext")?.addEventListener("click", () => {
+    if (state.setupStep === 1) persistPlatforms();
+    goSetupStep((state.setupStep || 1) + 1);
+  });
+  $("#setupBack")?.addEventListener("click", () => goSetupStep((state.setupStep || 1) - 1));
+  $("#editSetup")?.addEventListener("click", () => {
+    state.setupEdit = true;
+    state.setupStep = 1;
+    renderSetup();
+  });
+  $("#setupFinish")?.addEventListener("click", () => {
+    state.setupEdit = false;
+    renderSetup();
+  });
   main.querySelectorAll("[data-platform]").forEach((el) => {
     el.addEventListener("click", () => {
       const p = el.dataset.platform;
@@ -779,6 +1385,8 @@ function renderSetup() {
       await refreshStatus();
       await loadScan({ force: true });
       alert(`Tracking ${tracked.tracked?.length ?? paths.length} repo(s).`);
+      state.setupStep = 3;
+      state.setupEdit = true;
       render();
     } catch (err) {
       alert(err.message);
@@ -808,6 +1416,8 @@ function renderSetup() {
       alert(
         `Workspace "${label}" is ready.${checks ? `\n${checks}` : ""}${slugNote}\n\nMCP URL:\n${mcpUrl}`,
       );
+      state.setupStep = 4;
+      state.setupEdit = true;
       render();
     } catch (err) {
       alert(err.message);
@@ -829,6 +1439,12 @@ function renderSetup() {
     }
   });
   $("#openBrain")?.addEventListener("click", () => setTab("brain"));
+  $("#seePlans")?.addEventListener("click", () => setTab("welcome"));
+  wireLicenseApply("setup", async () => {
+    await refreshVault();
+    renderSetup();
+  });
+  wireProOnboard("setup");
   $("#copyRecipe")?.addEventListener("click", async () => {
     const text = state.recipe?.paste || $("#recipePaste")?.textContent || "";
     try {
@@ -942,7 +1558,7 @@ function visibleClaims() {
   const q = (state.brainSearch || "").trim().toLowerCase();
   return claims.filter((c) => {
     if (q) {
-      const hay = `${c.id} ${c.kind || ""} ${c.text || ""} ${claimAnchors(c).join(" ")}`.toLowerCase();
+      const hay = `${c.id} ${c.kind || ""} ${c.text || ""} ${claimAnchors(c).join(" ")} ${memoryLabel(c.repo_id)}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     if (filter === "durable") return !isSessionClaim(c);
@@ -959,7 +1575,9 @@ function fileGroups(claims) {
   const groups = new Map();
   for (const c of claims) {
     const anchors = claimAnchors(c);
-    const keys = anchors.length ? anchors : ["(no file yet)"];
+    const keys = (anchors.length ? anchors : ["(no file yet)"]).map((file) =>
+      state.brainAll ? `${memoryLabel(c.repo_id)} · ${file}` : file,
+    );
     for (const key of keys) {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(c);
@@ -975,53 +1593,157 @@ function fileGroups(claims) {
     .sort((a, b) => Number(b.used) - Number(a.used) || b.items.length - a.items.length || a.file.localeCompare(b.file));
 }
 
+function setMainMode(mode) {
+  const main = $("#main");
+  if (!main) return;
+  main.classList.toggle("tab-brain", mode === "brain");
+}
+
+function brainErrorNote() {
+  const m = String(state.brainError || "");
+  if (!m) return "";
+  if (/unknown route|outdated/i.test(m)) {
+    return "This amem UI process is outdated. Stop the process on port 7843 and run amem ui again.";
+  }
+  if (/not initialized/i.test(m)) {
+    return "All-memory needs a current amem ui. Track a repo in Setup, or restart the UI on port 7843.";
+  }
+  return m;
+}
+
+function showdownColumnHtml(title, claims, locked, shopUrl) {
+  if (locked) {
+    return `<div class="showdown-col">
+      <h3>${esc(title)}</h3>
+      <p class="note">Pro retrieval needs a license.</p>
+      <a class="btn small" href="${esc(shopUrl || "https://getamem.com/buy/pro")}" target="_blank" rel="noopener">Buy Pro</a>
+    </div>`;
+  }
+  if (!claims?.length) {
+    return `<div class="showdown-col"><h3>${esc(title)}</h3><p class="note">No ranked hits.</p></div>`;
+  }
+  return `<div class="showdown-col">
+    <h3>${esc(title)}</h3>
+    <ol class="showdown-list">
+      ${claims
+        .map(
+          (c) =>
+            `<li><strong>${esc(c.id)}</strong> <span class="note">${esc(String(c.score))}</span>
+            <div>${esc((c.text || "").slice(0, 160))}${(c.text || "").length > 160 ? "…" : ""}</div>
+            ${c.reasons?.length ? `<div class="note">Why: ${esc(c.reasons.slice(0, 3).join(", "))}</div>` : ""}
+            </li>`,
+        )
+        .join("")}
+    </ol>
+  </div>`;
+}
+
+function paintShowdownResult(data) {
+  const el = $("#showdownResult");
+  if (!el) return;
+  if (!data) {
+    el.innerHTML = "";
+    return;
+  }
+  const shop = state.shop || {};
+  const proOnly = data.proOnlyIds?.length || 0;
+  el.innerHTML = `
+    <div class="showdown-result-bar">
+      <p class="note">Pro-only hits in top results: <b>${proOnly}</b>${
+        data.proLocked ? " · apply a Pro license to unlock the right column" : ""
+      }</p>
+      <button class="btn secondary small" type="button" id="showdownClear">Clear</button>
+    </div>
+    <div class="showdown-grid">
+      ${showdownColumnHtml("Free (hash)", data.free, false)}
+      ${showdownColumnHtml("Pro (n-gram)", data.pro, Boolean(data.proLocked), shop.proUrl)}
+    </div>`;
+  $("#showdownClear")?.addEventListener("click", () => clearRetrievalShowdown());
+}
+
+function clearRetrievalShowdown() {
+  state.showdown = null;
+  state.showdownQuery = "";
+  const input = $("#showdownQuery");
+  if (input) input.value = "";
+  paintShowdownResult(null);
+}
+
+async function runRetrievalShowdown() {
+  const input = $("#showdownQuery");
+  const q = String(input?.value || state.showdownQuery || "").trim();
+  state.showdownQuery = q;
+  const el = $("#showdownResult");
+  if (!q) {
+    clearRetrievalShowdown();
+    return;
+  }
+  if (el) el.innerHTML = `<p class="note">Running…</p>`;
+  try {
+    const data = await api("/api/retrieval/showdown", {
+      method: "POST",
+      body: JSON.stringify({ query: q, limit: 6 }),
+    });
+    state.showdown = data;
+    paintShowdownResult(data);
+  } catch (e) {
+    if (el) el.innerHTML = `<p class="note">${esc(e?.message || String(e))}</p>`;
+  }
+}
+
 function renderBrain() {
   const main = $("#main");
   state.graphTick += 1;
-  if (!state.status?.repo) {
-    main.innerHTML = `<section class="hero"><div class="hero-inner"><h1>amem</h1><p>Finish setup before viewing the brain.</p><button class="btn" id="toSetup">Go to setup</button></div></section>`;
-    $("#toSetup").onclick = () => setTab("setup");
-    return;
-  }
-  const g = state.graph || { claims: [], components: [], flows: [], recentEvents: [], recentClaimIds: [], drafts: [] };
+  setMainMode("brain");
+  const g = state.graph || emptyGraph(state.brainAll ? "all" : "current");
   const events = g.recentEvents || [];
   const hits = events.filter((e) => eventKindOf(e) === "local_hit").length;
-  const trips = events.filter((e) => eventKindOf(e) === "server_trip").length;
   const files = new Set((g.claims || []).flatMap(claimAnchors)).size;
-  const used = (g.recentClaimIds || []).length;
   const drafts = (g.drafts || []).filter((d) => d.status === "pending");
+  const autoOn = Boolean(state.prefs?.autoApplyAll);
+  const drawerOpen = Boolean(state.selectedNode);
+  const showdownOpen = Boolean(state.showdownOpen);
 
   main.innerHTML = `
-    <div class="brain-v2">
+    <div class="brain-v2 ${drawerOpen ? "has-drawer" : "no-drawer"}">
       <div class="brain-toolbar">
-        <div>
-          <h1>What amem knows</h1>
-          <p>The map is coverage: each tile is a file, sized by how many facts. Teal was used in a recent query. Click a tile or a recent use to see what was injected. Edit, pin, or delete facts in the drawer.</p>
-          <div class="brain-vault">${vaultChipHtml()}</div>
+        <div class="brain-title">
+          <h1>${state.brainAll ? "All memory" : "Memory"}</h1>
+          ${state.brainError ? `<p class="note">${esc(brainErrorNote())}</p>` : ""}
         </div>
         <div class="brain-kpis">
           <span><b>${g.claims?.length ?? 0}</b> facts</span>
           <span><b>${drafts.length}</b> drafts</span>
           <span><b>${files}</b> files</span>
-          <span><b>${used}</b> used recently</span>
-          <span><b>${hits}</b> local hits</span>
-          <span><b>${trips}</b> misses</span>
+          <span><b>${hits}</b> hits</span>
+          <label class="autostart brain-auto"><input type="checkbox" id="autoApplyAll" ${autoOn ? "checked" : ""}/> Auto-approve</label>
+          ${state.license?.features?.includes("rules_sync") && !state.brainAll ? `<button class="btn secondary small" type="button" id="rulesSyncBtn">Sync rules</button>` : ""}
         </div>
       </div>
-      <div class="brain-tools">
-        <input id="brainSearch" type="search" placeholder="Search facts…" value="${esc(state.brainSearch || "")}" />
+      <div class="brain-chrome">
+        <input id="brainSearch" type="search" placeholder="Filter facts…" value="${esc(state.brainSearch || "")}" />
+        <div class="brain-filters" id="brainFilters">
+          <button type="button" data-filter="files" class="${state.brainFilter === "files" ? "active" : ""}">By file</button>
+          <button type="button" data-filter="drafts" class="${state.brainFilter === "drafts" ? "active" : ""}">Drafts${drafts.length ? ` (${drafts.length})` : ""}</button>
+          <button type="button" data-filter="chats" class="${state.brainFilter === "chats" ? "active" : ""}">Chats</button>
+          <button type="button" data-filter="used" class="${state.brainFilter === "used" ? "active" : ""}">Used</button>
+          <button type="button" data-filter="pinned" class="${state.brainFilter === "pinned" ? "active" : ""}">Pinned</button>
+          <button type="button" data-filter="review" class="${state.brainFilter === "review" ? "active" : ""}">Review</button>
+        </div>
+        <button class="btn secondary small" type="button" id="showdownToggle">${showdownOpen ? "Hide compare" : "Compare retrieval"}</button>
       </div>
-      <div class="brain-filters" id="brainFilters">
-        <button type="button" data-filter="files" class="${state.brainFilter === "files" ? "active" : ""}">By file</button>
-        <button type="button" data-filter="drafts" class="${state.brainFilter === "drafts" ? "active" : ""}">Drafts${drafts.length ? ` (${drafts.length})` : ""}</button>
-        <button type="button" data-filter="chats" class="${state.brainFilter === "chats" ? "active" : ""}">Recent chats</button>
-        <button type="button" data-filter="used" class="${state.brainFilter === "used" ? "active" : ""}">Used recently</button>
-        <button type="button" data-filter="pinned" class="${state.brainFilter === "pinned" ? "active" : ""}">Pinned</button>
+      <div class="showdown-panel ${showdownOpen ? "open" : "closed"}" id="showdownPanel">
+        <div class="showdown-run">
+          <input id="showdownQuery" type="search" placeholder="Same query · free hash vs Pro n-gram…" value="${esc(state.showdownQuery || "")}" />
+          <button class="btn secondary small" type="button" id="showdownBtn">Run</button>
+          <button class="btn secondary small ${state.showdown ? "" : "hidden"}" type="button" id="showdownClearTop">Clear</button>
+        </div>
+        <div id="showdownResult" class="showdown-result"></div>
       </div>
       <div class="brain-body">
         <aside class="brain-feed" id="brainFeed"></aside>
         <section class="brain-map" id="brainMap"></section>
-        <aside class="drawer" id="drawer"></aside>
+        <aside class="drawer ${drawerOpen ? "" : "hidden"}" id="drawer"></aside>
       </div>
     </div>`;
 
@@ -1029,6 +1751,21 @@ function renderBrain() {
     state.brainSearch = e.target.value;
     paintBrain();
   });
+  $("#showdownToggle")?.addEventListener("click", () => {
+    state.showdownOpen = !state.showdownOpen;
+    if (!state.showdownOpen) clearRetrievalShowdown();
+    renderBrain();
+  });
+  $("#showdownBtn")?.addEventListener("click", () => runRetrievalShowdown());
+  $("#showdownClearTop")?.addEventListener("click", () => clearRetrievalShowdown());
+  $("#showdownQuery")?.addEventListener("input", (e) => {
+    if (!String(e.target.value || "").trim() && state.showdown) clearRetrievalShowdown();
+  });
+  $("#showdownQuery")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") runRetrievalShowdown();
+    if (e.key === "Escape") clearRetrievalShowdown();
+  });
+  if (state.showdown) paintShowdownResult(state.showdown);
   $("#brainFilters")?.querySelectorAll("button").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.brainFilter = btn.dataset.filter;
@@ -1037,7 +1774,35 @@ function renderBrain() {
       renderBrain();
     });
   });
-  paintBrain();
+  $("#autoApplyAll")?.addEventListener("change", async (e) => {
+    const on = Boolean(e.target.checked);
+    try {
+      const result = await apiUnscoped("/api/prefs", {
+        method: "POST",
+        body: JSON.stringify({ autoApplyAll: on }),
+      });
+      state.prefs = { autoApplyAll: result.autoApplyAll };
+      await refreshGraph();
+      renderBrain();
+    } catch (err) {
+      e.target.checked = !on;
+      alert(err.message);
+    }
+  });
+  $("#rulesSyncBtn")?.addEventListener("click", async () => {
+    try {
+      const result = await api("/api/rules/sync", { method: "POST", body: "{}" });
+      alert(`Wrote ${result.pinned} pinned facts to ${result.path}`);
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+  try {
+    paintBrain();
+  } catch (e) {
+    const map = $("#brainMap");
+    if (map) map.innerHTML = `<p class="note">${esc(e.message || e)}</p>`;
+  }
 }
 
 function paintBrain() {
@@ -1062,7 +1827,7 @@ function renderBrainFeed() {
             return `<button type="button" class="feed-item draft ${active ? "active" : ""}" data-draft="${esc(d.id)}">
               <div class="feed-top"><span>${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))}</span><span class="pill ${d.quality?.label === "high" ? "" : "warn"}">${esc(d.quality?.label || "approve?")}${d.conflicts?.length ? " · conflict" : ""}</span></div>
               <div class="feed-q">${esc(d.title || d.id)}</div>
-              <div class="feed-meta">${d.quality ? `Confidence ${d.quality.score}` : "Session capture"} — apply to store, or dismiss</div>
+              <div class="feed-meta">${state.brainAll ? `${esc(memoryLabel(d.repo_id))} · ` : ""}${d.quality ? `Confidence ${d.quality.score}` : "Session capture"} — apply to store, or dismiss</div>
             </button>`;
           })
           .join("")}`;
@@ -1216,7 +1981,7 @@ function renderCoverageMap() {
   }));
 
   const tiles = rects
-    .map((r) => {
+    .map((r, i) => {
       const match = matching.has(r.file);
       const selected = selectedFile === r.file;
       const fromEvent = eventHotFiles.has(r.file);
@@ -1232,9 +1997,12 @@ function renderCoverageMap() {
       const showLabel = r.w > 72 && r.h > 32;
       const showCount = r.w > 72 && r.h > 48;
       const label = fileLabel(r.file);
+      const clipId = `cov-clip-${i}`;
       return `<g class="${classes}" data-file="${esc(r.file)}" role="button" tabindex="0">
         <title>${esc(r.file)} · ${r.count} fact${r.count === 1 ? "" : "s"}${r.used ? " · used recently" : ""}</title>
+        <clipPath id="${clipId}"><rect x="${r.x.toFixed(1)}" y="${r.y.toFixed(1)}" width="${r.w.toFixed(1)}" height="${r.h.toFixed(1)}" rx="7"/></clipPath>
         <rect x="${r.x.toFixed(1)}" y="${r.y.toFixed(1)}" width="${r.w.toFixed(1)}" height="${r.h.toFixed(1)}" rx="7"/>
+        <g clip-path="url(#${clipId})">
         ${
           showLabel
             ? `<text class="cov-name" x="${(r.x + 8).toFixed(1)}" y="${(r.y + 18).toFixed(1)}">${esc(label)}</text>`
@@ -1245,6 +2013,7 @@ function renderCoverageMap() {
             ? `<text class="cov-count" x="${(r.x + 8).toFixed(1)}" y="${(r.y + 34).toFixed(1)}">${r.count} fact${r.count === 1 ? "" : "s"}</text>`
             : ""
         }
+        </g>
       </g>`;
     })
     .join("");
@@ -1281,6 +2050,69 @@ function renderBrainMap() {
   const el = $("#brainMap");
   if (!el) return;
 
+  if (state.brainFilter === "review") {
+    el.innerHTML = `<div class="brain-empty">Loading review inbox…</div>`;
+    api("/api/hygiene")
+      .then((h) => {
+        const stale = h.stale || [];
+        const dups = h.duplicates || [];
+        if (!stale.length && !dups.length) {
+          el.innerHTML = `<div class="brain-empty">Nothing to review. Unused facts (90 days) and near-duplicates show up here on Pro/IT.</div>`;
+          return;
+        }
+        el.innerHTML = `
+          <div class="draft-toolbar">
+            <button class="btn secondary small" type="button" id="decayStale">Decay ${stale.length} unused</button>
+          </div>
+          ${
+            dups.length
+              ? `<h2>Near-duplicates</h2>${dups
+                  .map(
+                    (d) =>
+                      `<div class="draft-card"><strong>${esc(d.keepId)}</strong> vs ${esc(d.dropId)} · ${Math.round((d.similarity || 0) * 100)}%<div class="drawer-actions"><button class="btn secondary small" type="button" data-merge-keep="${esc(d.keepId)}" data-merge-drop="${esc(d.dropId)}">Merge into keep</button></div></div>`,
+                  )
+                  .join("")}`
+              : ""
+          }
+          ${
+            stale.length
+              ? `<h2>Unused ${stale.length}</h2>${stale
+                  .slice(0, 24)
+                  .map((c) => `<div class="draft-card"><strong>${esc(c.id)}</strong><span class="meta">${esc((c.text || "").slice(0, 160))}</span></div>`)
+                  .join("")}`
+              : ""
+          }`;
+        $("#decayStale")?.addEventListener("click", async () => {
+          try {
+            const result = await api("/api/hygiene/decay", { method: "POST", body: "{}" });
+            await refreshGraph();
+            renderBrain();
+            alert(`Decayed ${result.decayed?.length || 0} facts.`);
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+        el.querySelectorAll("[data-merge-keep]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            try {
+              await api("/api/hygiene/merge", {
+                method: "POST",
+                body: JSON.stringify({ keepId: btn.dataset.mergeKeep, dropId: btn.dataset.mergeDrop }),
+              });
+              await refreshGraph();
+              renderBrain();
+            } catch (err) {
+              alert(err.message);
+            }
+          });
+        });
+      })
+      .catch((err) => {
+        el.innerHTML = `<div class="brain-empty">${esc(err.message)}</div>`;
+      });
+    return;
+  }
+
   if (state.brainFilter === "drafts") {
     const drafts = (state.graph?.drafts || []).filter((d) => d.status === "pending");
     const selectedId = state.selectedNode?.type === "draft" ? state.selectedNode.id : null;
@@ -1305,7 +2137,10 @@ function renderBrainMap() {
     });
     $("#rejectNoisy")?.addEventListener("click", async () => {
       try {
-        const result = await api("/api/drafts/reject-noisy", { method: "POST", body: "{}" });
+        const result = await api("/api/drafts/reject-noisy", {
+          method: "POST",
+          body: JSON.stringify({ scope: state.brainAll ? "all" : undefined }),
+        });
         await refreshGraph();
         renderBrain();
         if (result.count) alert(`Dismissed ${result.count} low-quality draft${result.count === 1 ? "" : "s"}.`);
@@ -1341,9 +2176,9 @@ function renderBrainMap() {
             : state.brainFilter === "chats"
               ? "No session takeaways yet. Approve a draft or keep chatting."
               : state.brainFilter === "pinned"
-                ? "No pinned facts yet. Open a claim in the drawer and pin it."
+                ? "No pinned facts yet. Click a fact below, then Pin in the side panel — or use the pin control on each row."
                 : state.brainSearch
-                  ? "No facts match that search."
+                  ? "No facts match that filter. Clear the search box to see everything again."
                   : "No facts yet. Apply a bootstrap on Setup, or keep working in this repo."
         }</div>`
       : shown
@@ -1358,19 +2193,21 @@ function renderBrainMap() {
           ${group.items
             .map((c) => {
               const rel = relatedForClaim(c.id);
+              const isPinned = Number(c.pinned || 0) > 0;
               const tags = [
-                Number(c.pinned || 0) > 0 ? "pinned" : null,
+                isPinned ? "pinned" : null,
                 c.kind,
                 ...rel.flows.map((f) => f.name),
                 ...rel.components.map((x) => x.name),
               ]
                 .filter(Boolean)
                 .slice(0, 4);
-              return `<li>
+              return `<li class="claim-li">
                 <button type="button" class="claim-row ${hot.has(c.id) ? "hot" : ""} ${selectedId === c.id ? "selected" : ""}" data-claim="${esc(c.id)}">
                   <span class="claim-text">${esc(claimPreview(c))}</span>
                   <span class="claim-tags">${tags.map((t) => `<em>${esc(t)}</em>`).join("")}</span>
                 </button>
+                <button type="button" class="claim-pin ${isPinned ? "on" : ""}" data-pin="${esc(c.id)}" data-repo="${esc(c.repo_id || "")}" title="${isPinned ? "Unpin" : "Pin"}" aria-label="${isPinned ? "Unpin fact" : "Pin fact"}">${isPinned ? "★" : "☆"}</button>
               </li>`;
             })
             .join("")}
@@ -1395,7 +2232,27 @@ function renderBrainMap() {
       const anchors = claimAnchors(claim);
       if (anchors[0]) state.selectedFile = anchors[0];
       state.selectedNode = { type: "claim", id: claim.id, detail: claim };
-      paintBrain();
+      renderBrain();
+    });
+  });
+  el.querySelectorAll("[data-pin]").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.pin;
+      const claim = (state.graph.claims || []).find((c) => c.id === id);
+      if (!claim) return;
+      const pinned = !(Number(claim.pinned || 0) > 0);
+      try {
+        await api("/api/claims/pin", {
+          method: "POST",
+          repoId: claim.repo_id || btn.dataset.repo,
+          body: JSON.stringify({ id, pinned }),
+        });
+        await refreshGraph();
+        paintBrain();
+      } catch (err) {
+        alert(err.message);
+      }
     });
   });
 }
@@ -1467,7 +2324,7 @@ function showBrainDetail(node) {
     const quality = d.quality;
     drawer.innerHTML = `
       <h2>Pending draft</h2>
-      <div class="meta">${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))} · ${esc(d.source || "session-end")}${quality ? ` · ${esc(quality.label)} ${quality.score}` : ""}</div>
+      <div class="meta">${esc(memoryLabel(d.repo_id))} · ${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))} · ${esc(d.source || "session-end")}${quality ? ` · ${esc(quality.label)} ${quality.score}` : ""}</div>
       <p>${esc(d.title || d.id)}</p>
       ${quality?.reasons?.length ? `<p class="note">${quality.reasons.map((r) => esc(r)).join(" · ")}</p>` : ""}
       ${
@@ -1499,7 +2356,8 @@ function showBrainDetail(node) {
       try {
         await api("/api/drafts/apply", {
           method: "POST",
-          body: JSON.stringify({ id: d.id, resolve }),
+          repoId: d.repo_id,
+          body: JSON.stringify({ id: d.id, resolve, scope: state.brainAll ? "all" : undefined }),
         });
         state.selectedNode = null;
         await refreshGraph();
@@ -1512,7 +2370,11 @@ function showBrainDetail(node) {
     $("#draftSupersede")?.addEventListener("click", () => applyDraft("supersede"));
     $("#draftDismiss")?.addEventListener("click", async () => {
       try {
-        await api("/api/drafts/dismiss", { method: "POST", body: JSON.stringify({ id: d.id }) });
+        await api("/api/drafts/dismiss", {
+          method: "POST",
+          repoId: d.repo_id,
+          body: JSON.stringify({ id: d.id, scope: state.brainAll ? "all" : undefined }),
+        });
         state.selectedNode = null;
         await refreshGraph();
         renderBrain();
@@ -1528,7 +2390,7 @@ function showBrainDetail(node) {
     const pinned = Number(d.pinned || 0) > 0;
     drawer.innerHTML = `
       <h2>${esc(d.kind || "fact")}${pinned ? " · pinned" : ""}</h2>
-      <div class="meta">${esc(d.id)}</div>
+      <div class="meta">${esc(memoryLabel(d.repo_id))} · ${esc(d.id)}</div>
       <label class="drawer-label">Text</label>
       <textarea id="claimText" rows="6">${esc(d.text || "")}</textarea>
       <label class="drawer-label">Kind</label>
@@ -1537,12 +2399,13 @@ function showBrainDetail(node) {
       <input id="claimAnchors" type="text" value="${esc(anchors.join(", "))}" />
       <div class="drawer-actions">
         <button class="btn" type="button" id="claimSave">Save</button>
-        <button class="btn secondary" type="button" id="claimPin">${pinned ? "Unpin" : "Pin"}</button>
+        <button class="btn secondary" type="button" id="claimPin">${pinned ? "Unpin ★" : "Pin ☆"}</button>
+        <button class="btn secondary" type="button" id="claimClose">Close</button>
         <button class="btn secondary danger" type="button" id="claimDelete">Delete</button>
       </div>
       ${rel.flows.length ? `<div class="meta">Flows: ${rel.flows.map((f) => esc(f.name)).join(", ")}</div>` : ""}
       ${rel.components.length ? `<div class="meta">Components: ${rel.components.map((c) => esc(c.name)).join(", ")}</div>` : ""}
-      <p class="note" style="margin:0">Pinned facts rank higher in <code>amem context</code>. Delete removes the claim from local memory only.</p>`;
+      <p class="note" style="margin:0">Pin with ★ on a fact row or here — pinned facts rank higher in <code>amem context</code> and fill the Pinned filter.</p>`;
     $("#claimSave")?.addEventListener("click", async () => {
       try {
         const text = $("#claimText")?.value ?? "";
@@ -1554,6 +2417,7 @@ function showBrainDetail(node) {
           .filter(Boolean);
         const result = await api("/api/claims", {
           method: "PATCH",
+          repoId: d.repo_id,
           body: JSON.stringify({ id: d.id, text, kind, code_anchors }),
         });
         state.selectedNode = { type: "claim", id: d.id, detail: result.claim };
@@ -1567,6 +2431,7 @@ function showBrainDetail(node) {
       try {
         const result = await api("/api/claims/pin", {
           method: "POST",
+          repoId: d.repo_id,
           body: JSON.stringify({ id: d.id, pinned: !pinned }),
         });
         state.selectedNode = { type: "claim", id: d.id, detail: result.claim };
@@ -1576,10 +2441,14 @@ function showBrainDetail(node) {
         alert(err.message);
       }
     });
+    $("#claimClose")?.addEventListener("click", () => {
+      state.selectedNode = null;
+      renderBrain();
+    });
     $("#claimDelete")?.addEventListener("click", async () => {
       if (!confirm(`Delete ${d.id} from local memory?`)) return;
       try {
-        await api(`/api/claims?id=${encodeURIComponent(d.id)}`, { method: "DELETE" });
+        await api(`/api/claims?id=${encodeURIComponent(d.id)}`, { method: "DELETE", repoId: d.repo_id });
         state.selectedNode = null;
         await refreshGraph();
         renderBrain();
@@ -1625,23 +2494,20 @@ function formatChartDay(iso) {
 
 function renderStats() {
   const main = $("#main");
-  if (!state.status?.repo) {
-    main.innerHTML = `<section class="hero"><div class="hero-inner"><h1>amem</h1><p>Finish setup to see savings stats.</p></div></section>`;
+  setMainMode("page");
+  if (!state.brainAll && !state.status?.repo) {
+    main.innerHTML = `<section class="hero"><div class="hero-inner"><h1>Stats</h1><p>Pick <strong>All memory</strong> in the header, or a tracked repo, to see savings.</p></div></section>`;
     return;
   }
   const agg = state.usage?.aggregate;
-  const currentScope = state.usage?.scope === "all" ? "all" : "current";
-  const currentDays = String(state.usage?.days ?? 30);
+  const currentDays = String(state.usage?.days ?? state.statsDays ?? 30);
+  const focus = statsFocusLabel();
   main.innerHTML = `
     <section class="stats-page">
       <h1>Token, time &amp; money savings</h1>
-      <p class="sub">Local lookup time is measured. Time and money are proxies (avoided file reads / input tokens) — not your Cursor or model bill. Showing ${currentScope === "all" ? "all bound repos" : state.status.repo.repo_name}.</p>
+      <p class="sub">Local lookup time is measured. Time and money are proxies (avoided file reads / input tokens) — not your Cursor or model bill. Showing <strong>${esc(focus)}</strong>${state.brainAll ? " — every tracked repo and workspace on this machine" : ""}.</p>
       <div class="filters">
-        <select id="scope">
-          <option value="current" ${currentScope === "current" ? "selected" : ""}>This repo</option>
-          <option value="all" ${currentScope === "all" ? "selected" : ""}>All local repos</option>
-        </select>
-        <select id="days">
+        <select id="days" aria-label="Stats time range">
           <option value="7" ${currentDays === "7" ? "selected" : ""}>7 days</option>
           <option value="30" ${currentDays === "30" ? "selected" : ""}>30 days</option>
           <option value="90" ${currentDays === "90" ? "selected" : ""}>90 days</option>
@@ -1697,12 +2563,8 @@ function renderStats() {
 
   drawChart(agg?.byDay || []);
 
-  $("#scope").addEventListener("change", async (e) => {
-    await refreshUsage(e.target.value, Number($("#days").value));
-    renderStats();
-  });
   $("#days").addEventListener("change", async (e) => {
-    await refreshUsage($("#scope").value, Number(e.target.value));
+    await refreshUsage(statsScope(), Number(e.target.value));
     renderStats();
   });
   main.querySelectorAll("[data-export]").forEach((btn) => {
@@ -1711,7 +2573,7 @@ function renderStats() {
 }
 
 async function downloadSavings(format) {
-  const scope = $("#scope")?.value || "current";
+  const scope = statsScope();
   const days = $("#days")?.value || "30";
   try {
     const data = await api(`/api/usage/export?format=${encodeURIComponent(format)}&scope=${encodeURIComponent(scope)}&days=${encodeURIComponent(days)}`);
@@ -1829,33 +2691,55 @@ function drawChart(days) {
   };
 }
 
+let renderSeq = 0;
+
 async function render() {
+  const seq = ++renderSeq;
+  const stale = () => seq !== renderSeq;
   fillRepoSelect();
   paintVault();
   try {
     await refreshStatus();
   } catch (e) {
+    if (stale()) return;
     await refreshVault();
     if (/encrypted|unlock|Passphrase/i.test(String(e.message))) {
-      $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>Locked</h1><p>Unlock from the header to open Brain and Stats. Memory never left this machine.</p></div></section>`;
+      setMainMode("page");
+      $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>Locked</h1><p>Unlock from the header to open Memory and Stats. Memory never left this machine.</p></div></section>`;
       return;
     }
     throw e;
   }
+  if (stale()) return;
   fillRepoSelect();
-  if (state.tab === "setup") {
+  if (state.tab === "welcome") {
+    renderWelcome();
+  } else if (state.tab === "setup") {
     try {
       await loadScan();
     } catch (e) {
-      alert(e.message);
+      if (!stale()) alert(e.message);
     }
+    if (stale()) return;
     fillRepoSelect();
     renderSetup();
   } else if (state.tab === "brain") {
     await refreshGraph();
-    renderBrain();
+    if (stale()) return;
+    try {
+      renderBrain();
+    } catch (e) {
+      setMainMode("page");
+      $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>Memory</h1><p>${esc(e.message || e)}</p><button class="btn" id="retryBrain" type="button">Try again</button></div></section>`;
+      $("#retryBrain")?.addEventListener("click", () => setTab("brain"));
+    }
   } else {
-    await refreshUsage("current", 30);
+    try {
+      await refreshUsage(statsScope(), state.statsDays || 30);
+    } catch {
+      state.usage = null;
+    }
+    if (stale()) return;
     renderStats();
   }
 }
@@ -1863,6 +2747,7 @@ async function render() {
 document.querySelectorAll(".tabs button").forEach((b) => {
   b.addEventListener("click", () => setTab(b.dataset.tab));
 });
+$("#brandBtn")?.addEventListener("click", () => setTab("welcome"));
 
 $("#repoSelect")?.addEventListener("change", async (e) => {
   const value = e.target.value;
@@ -1871,11 +2756,22 @@ $("#repoSelect")?.addEventListener("change", async (e) => {
     setAddPanel(true);
     return;
   }
+  if (value === "__all__") {
+    state.brainAll = true;
+    persistBrainAll(true);
+    writeUrlState();
+    await render();
+    return;
+  }
   if (value.startsWith("repo:")) {
+    state.brainAll = false;
+    persistBrainAll(false);
     await focusRepo({ repoId: value.slice(5), tab: state.tab === "setup" ? "setup" : state.tab });
     return;
   }
   if (value.startsWith("path:")) {
+    state.brainAll = false;
+    persistBrainAll(false);
     await focusRepo({ path: value.slice(5), tab: "setup" });
   }
 });
@@ -1893,6 +2789,14 @@ $("#vaultScheduleBtn")?.addEventListener("click", () => {
   vaultAction("/api/vault/backup/schedule", { hour: Number.isFinite(hour) ? hour : 3 });
 });
 $("#vaultUnscheduleBtn")?.addEventListener("click", () => vaultAction("/api/vault/backup/unschedule"));
+$("#vaultRestoreBtn")?.addEventListener("click", () => {
+  const file = $("#vaultRestorePath")?.value?.trim();
+  if (!file) {
+    alert("Path to a local backup .db or .db.enc is required");
+    return;
+  }
+  vaultAction("/api/vault/restore", { file });
+});
 $("#renameWsBtn")?.addEventListener("click", () => {
   renameWorkspaceUi(matchBoundRepo() || state.status?.repo);
 });

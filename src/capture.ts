@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import {
   insertProposalDraft,
   listProposalDrafts,
+  listProposalDraftsAll,
   listUsageEvents,
   setProposalDraftStatus,
   type ProposalDraftRow,
@@ -14,6 +15,8 @@ import { compactClaimText, compactFromNotes, inferClaimKind, isDurableCapture } 
 import { loadPolicy } from "./policy.js";
 import { applyProposal, type Proposal } from "./proposal.js";
 import { scoreProposal } from "./draft-quality.js";
+import { tokenJaccard } from "./search.js";
+import { isAutoApplyAll } from "./prefs.js";
 
 const TRIVIAL = /^(ok|okay|yes|yep|no|nah|thanks|thank you|continue|go ahead|sure|please)\.?$/i;
 const SECRET = /password|api[_-]?key|secret|token\s*[:=]|begin (rsa |openssh )?private/i;
@@ -79,23 +82,69 @@ function buildClaimDraft(input: {
   };
 }
 
+const AUTO_APPLY_SCORE = 60;
+const DURABLE_AUTO_KINDS = new Set(["constraint", "gotcha", "structure", "howto", "owner"]);
+
+/** High-quality durable facts apply without waiting for amem_remember. */
+export function shouldAutoApplyProposal(proposal: Proposal): boolean {
+  const quality = scoreProposal(proposal);
+  if (quality.reject || quality.score < AUTO_APPLY_SCORE) return false;
+  const claim = proposal.claims?.[0];
+  if (!claim) return false;
+  if (!DURABLE_AUTO_KINDS.has((claim.kind || "").toLowerCase())) return false;
+  const anchors = (claim.code_anchors ?? []).filter((a) => a && a !== "README.md");
+  return anchors.length > 0;
+}
+
 function maybeAutoApplyDraft(
   repoId: string,
   draft: ProposalDraftRow,
   proposal: Proposal,
 ): ProposalDraftRow {
   const kinds = loadPolicy().policy.auto_apply_kinds ?? [];
-  if (kinds.length === 0) return draft;
   const claimKind = proposal.claims?.[0]?.kind;
-  if (!claimKind || !kinds.map((k) => k.toLowerCase()).includes(claimKind.toLowerCase())) {
-    return draft;
-  }
+  const policyHit =
+    Boolean(claimKind) &&
+    kinds.length > 0 &&
+    kinds.map((k) => k.toLowerCase()).includes(claimKind!.toLowerCase());
+  if (!isAutoApplyAll() && !policyHit && !shouldAutoApplyProposal(proposal)) return draft;
   try {
     applyProposal(repoId, proposal, loadPolicy().policy);
     return setProposalDraftStatus(draft.id, "applied") ?? draft;
   } catch {
     return draft;
   }
+}
+
+/** Apply pending drafts (skips quality.reject). Used when auto-approve is turned on. */
+export function applyPendingDrafts(repoId?: string): { applied: string[]; skipped: number } {
+  const pending = repoId
+    ? listProposalDrafts(repoId, { status: "pending", limit: 200 })
+    : listProposalDraftsAll({ status: "pending", limit: 200 });
+  const applied: string[] = [];
+  let skipped = 0;
+  const policy = loadPolicy().policy;
+  for (const draft of pending) {
+    let proposal: Proposal;
+    try {
+      proposal = JSON.parse(draft.proposal_json) as Proposal;
+    } catch {
+      skipped += 1;
+      continue;
+    }
+    if (scoreProposal(proposal).reject) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      applyProposal(draft.repo_id, proposal, policy);
+      setProposalDraftStatus(draft.id, "applied");
+      applied.push(draft.id);
+    } catch {
+      skipped += 1;
+    }
+  }
+  return { applied, skipped };
 }
 
 function storeDraft(input: {
@@ -145,7 +194,7 @@ export function captureSessionDraft(input: {
   if (!built) return null;
   if (scoreProposal(built.proposal).reject) return null;
 
-  return storeDraft({
+  const first = storeDraft({
     repo: input.repo,
     platform: input.platform,
     sessionId: input.sessionId,
@@ -153,6 +202,48 @@ export function captureSessionDraft(input: {
     source: `session-end:${built.id}`,
     built,
   });
+  for (const extra of extraSessionFacts(input, built.id)) {
+    storeDraft({
+      repo: input.repo,
+      platform: input.platform,
+      sessionId: input.sessionId,
+      title: extra.proposal.claims?.[0]?.text?.slice(0, 96) || extra.id,
+      source: `session-end:${extra.id}`,
+      built: extra,
+    });
+  }
+  return first;
+}
+
+function extraSessionFacts(
+  input: {
+    repo: RepoRow;
+    prompt: string;
+    answer?: string;
+  },
+  skipId: string,
+): Array<{ proposal: Proposal; kind: string; anchors: string[]; id: string }> {
+  const answer = input.answer ?? "";
+  const sentences = answer
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.replace(/\s+/g, " ").trim())
+    .filter((s) => s.length >= 48 && [...s.matchAll(PATH_RE)].length > 0);
+  const out: Array<{ proposal: Proposal; kind: string; anchors: string[]; id: string }> = [];
+  for (const sentence of sentences.slice(0, 3)) {
+    const built = buildClaimDraft({
+      prompt: sentence,
+      answer: sentence,
+      repoRoot: input.repo.root_path,
+      idPrefix: "claim.auto",
+      sourceRef: "session-auto-capture",
+    });
+    if (!built || built.id === skipId) continue;
+    if (scoreProposal(built.proposal).reject) continue;
+    if (tokenJaccard(sentence, input.answer || input.prompt) > 0.72) continue;
+    out.push(built);
+    if (out.length >= 2) break;
+  }
+  return out;
 }
 
 export function findRecentContextMisses(

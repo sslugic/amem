@@ -39,15 +39,17 @@ export type LicenseStatus = {
 
 export const FEATURE_LOCAL_EMBED = "local_embed_model";
 export const FEATURE_ATTEST_SKU = "attest_sku";
+export const FEATURE_HYGIENE = "hygiene";
+export const FEATURE_RULES_SYNC = "rules_sync";
 
 /** Vendor verify key (SPKI DER hex). Issue signed files with AMEM_LICENSE_PRIVKEY. */
 export const DEFAULT_LICENSE_PUBKEY_HEX =
-  "302a300506032b6570032100c88636f267711a6baae44a23f4c0353c0cc0166a534fbfc055a6f6e64d9673a3";
+  "302a300506032b6570032100b1e01cdb2d1ec60b372bb4307fa48ed743caba09a67633e4689aaa22221080fa";
 
 const TIER_FEATURES: Record<LicenseTier, string[]> = {
   free: [],
-  pro: [FEATURE_LOCAL_EMBED],
-  it: [FEATURE_LOCAL_EMBED, FEATURE_ATTEST_SKU],
+  pro: [FEATURE_LOCAL_EMBED, FEATURE_HYGIENE, FEATURE_RULES_SYNC],
+  it: [FEATURE_LOCAL_EMBED, FEATURE_HYGIENE, FEATURE_RULES_SYNC, FEATURE_ATTEST_SKU],
 };
 
 export function licensePath(): string {
@@ -217,14 +219,22 @@ export function writeLicense(file: LicenseFile, path = licensePath()): string {
   return path;
 }
 
-export function applyLicenseFile(sourcePath: string): LicenseStatus {
-  const file = parseLicenseFile(JSON.parse(readFileSync(sourcePath, "utf8")));
+export function applyLicenseJson(raw: unknown): LicenseStatus {
+  const parsed =
+    typeof raw === "string"
+      ? (JSON.parse(raw) as unknown)
+      : raw;
+  const file = parseLicenseFile(parsed);
   if (file.kind === "signed") {
     const bad = verifySignedLicense(file);
     if (bad.length) throw new Error(bad.join("; "));
   }
   writeLicense(file);
   return licenseStatus();
+}
+
+export function applyLicenseFile(sourcePath: string): LicenseStatus {
+  return applyLicenseJson(JSON.parse(readFileSync(sourcePath, "utf8")));
 }
 
 export function activateDevLicense(tier: "pro" | "it"): LicenseStatus {

@@ -152,3 +152,37 @@ export function createBackup(opts: {
   copyFileSync(source, out);
   return { path: out, encrypted: false };
 }
+
+/** Replace graph.db from a local backup (plaintext .db or AMEM1 .enc). Caller must closeDb(). */
+export function restoreBackup(opts: {
+  file: string;
+  passphrase?: string;
+}): { dbPath: string; from: string; safetyCopy: string | null; encrypted: boolean } {
+  const from = opts.file;
+  if (!existsSync(from)) throw new Error(`Backup not found: ${from}`);
+  const blob = readFileSync(from);
+  const looksEnc = blob.subarray(0, 5).toString() === "AMEM1" || from.endsWith(ENC_SUFFIX);
+  let plain: Buffer;
+  if (looksEnc) {
+    const passphrase = opts.passphrase || process.env.AMEM_PASSPHRASE || "";
+    if (!passphrase.trim()) {
+      throw new Error("Encrypted backup — pass --passphrase or set AMEM_PASSPHRASE");
+    }
+    plain = decryptBytes(blob, passphrase);
+  } else {
+    plain = blob;
+  }
+  if (plain.length < 16) throw new Error("Backup file is empty or not a database");
+
+  const target = dbPath();
+  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+  let safetyCopy: string | null = null;
+  if (existsSync(target)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    safetyCopy = join(defaultBackupDir(), `pre-restore-${stamp}.db`);
+    mkdirSync(defaultBackupDir(), { recursive: true, mode: 0o700 });
+    copyFileSync(target, safetyCopy);
+  }
+  writeFileSync(target, plain, { mode: 0o600 });
+  return { dbPath: target, from, safetyCopy, encrypted: looksEnc };
+}

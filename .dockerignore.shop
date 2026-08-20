@@ -1,0 +1,17 @@
+# Used when building: docker build -f shop/Dockerfile .
+node_modules
+shop/node_modules
+shop/.data
+shop/.env
+.git
+dist/**/*
+!dist/license.js
+!dist/paths.js
+**/*.test.mjs
+test
+ui-static
+docs
+templates
+skills
+canvases
+*.md

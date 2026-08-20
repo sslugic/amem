@@ -11,13 +11,19 @@ import {
   getSetupState,
   insertUsageEvent,
   listClaims,
+  listClaimsAll,
   listComponents,
+  listComponentsAll,
   listEdges,
+  listEdgesAll,
   listFlows,
+  listFlowsAll,
   listRepos,
   listSessions,
+  listSessionsAll,
   listUsageEvents,
   listProposalDrafts,
+  listProposalDraftsAll,
   getProposalDraft,
   setProposalDraftStatus,
   updateClaim,
@@ -33,7 +39,7 @@ import {
   type RepoRow,
   type UsageEventRow,
 } from "../db.js";
-import { buildContext, decorateUsageEvents, renderContextMarkdown } from "../context.js";
+import { buildContext, buildRetrievalShowdown, decorateUsageEvents, renderContextMarkdown } from "../context.js";
 import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
 import { hostInstallHealth, installHost } from "../install/hosts.js";
@@ -72,13 +78,19 @@ import {
 import { searchClaimsFts, tokenize } from "../search.js";
 import { rememberContract } from "../remember-contract.js";
 import { vaultStatus } from "../vault.js";
-import { licenseStatus } from "../license.js";
+import { shopStatus } from "../shop.js";
+import { prefsStatus, setAutoApplyAll } from "../prefs.js";
+import { applyPendingDrafts } from "../capture.js";
+import { applyLicenseJson, licenseStatus } from "../license.js";
 import { embedStatus, reindexAllEmbeds, setEmbedBackend, type EmbedBackend } from "../embed.js";
 import {
   createBackup,
   lockDatabase,
+  restoreBackup,
   unlockDatabase,
 } from "../crypto.js";
+import { decayStaleClaims, hygieneReport, mergeDuplicate } from "../hygiene.js";
+import { syncPinnedRules } from "../rules-sync.js";
 import {
   installBackupSchedule,
   uninstallBackupSchedule,
@@ -92,6 +104,24 @@ export type ApiRequest = {
   body: unknown;
   cwd: string;
 };
+
+export const API_FEATURES = ["vault", "license", "embed", "recipe", "backup", "shop"] as const;
+
+export function normalizeApiPath(pathname: string): string {
+  const cut = (pathname.split("?")[0] || pathname).trim();
+  let path = cut.startsWith("/") ? cut : `/${cut}`;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // keep raw path
+  }
+  if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+  return path;
+}
+
+export function apiHealth(): { ok: true; version: string; features: string[] } {
+  return { ok: true, version: "0.1.0", features: [...API_FEATURES] };
+}
 
 export type ApiResponse = {
   status: number;
@@ -190,6 +220,7 @@ function statusPayload(identity: RepoIdentity, repo: RepoRow | null) {
     doctor: [amemHomeWriteIssue(), ...doctorIssues(repo, identity.rootPath)].filter(
       (issue): issue is string => Boolean(issue),
     ),
+    prefs: prefsStatus(),
     counts: repo
       ? {
           claims: listClaims(repo.id).length,
@@ -570,6 +601,22 @@ function runVaultBackup(body: unknown): ApiResponse {
   }
 }
 
+function runVaultRestore(body: unknown): ApiResponse {
+  const file = bodyField(body, "file") || bodyField(body, "path");
+  if (!file) return err(400, "file required");
+  try {
+    closeDb();
+    const result = restoreBackup({
+      file,
+      passphrase: bodyField(body, "passphrase"),
+    });
+    openDb();
+    return ok({ ...result, vault: vaultStatus() });
+  } catch (error) {
+    return err(400, error instanceof Error ? error.message : String(error));
+  }
+}
+
 function runVaultSchedule(body: unknown): ApiResponse {
   try {
     const hour = bodyNumber(body, "hour");
@@ -584,10 +631,50 @@ function runVaultSchedule(body: unknown): ApiResponse {
 }
 
 export function handleApi(req: ApiRequest): ApiResponse {
-  const { method, pathname, searchParams, body, cwd } = req;
+  const method = (req.method || "GET").toUpperCase();
+  const pathname = normalizeApiPath(req.pathname);
+  const { searchParams, body, cwd } = req;
+
+  if (method === "GET" && pathname === "/api/health") {
+    return ok(apiHealth());
+  }
 
   if (method === "GET" && pathname === "/api/license") {
     return ok(licenseStatus());
+  }
+
+  if (method === "POST" && pathname === "/api/license/apply") {
+    try {
+      const raw =
+        (body as { json?: unknown; text?: unknown } | null)?.json ??
+        (body as { text?: unknown } | null)?.text ??
+        body;
+      if (raw == null || (typeof raw === "object" && raw !== null && !("kind" in (raw as object)) && Object.keys(raw as object).length === 0)) {
+        return err(400, "Provide license JSON in body.json or body.text");
+      }
+      if (typeof raw === "string" && !raw.trim()) {
+        return err(400, "Provide license JSON in body.json or body.text");
+      }
+      return ok(applyLicenseJson(raw));
+    } catch (error) {
+      return err(400, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "GET" && pathname === "/api/shop") {
+    return ok(shopStatus());
+  }
+
+  if (method === "GET" && pathname === "/api/prefs") {
+    return ok(prefsStatus());
+  }
+
+  if (method === "POST" && pathname === "/api/prefs") {
+    const raw = (body as { autoApplyAll?: unknown } | null)?.autoApplyAll;
+    if (typeof raw !== "boolean") return err(400, "autoApplyAll must be a boolean");
+    setAutoApplyAll(raw);
+    const flushed = raw ? applyPendingDrafts() : { applied: [], skipped: 0 };
+    return ok({ ...prefsStatus(), flushed });
   }
 
   if (method === "GET" && pathname === "/api/embed") {
@@ -596,9 +683,19 @@ export function handleApi(req: ApiRequest): ApiResponse {
 
   if (method === "POST" && pathname === "/api/embed") {
     const backend = bodyField(body, "backend");
-    if (backend !== "hash" && backend !== "ngram") return err(400, "backend must be hash or ngram");
+    if (backend !== "hash" && backend !== "ngram" && backend !== "external") {
+      return err(400, "backend must be hash, ngram, or external");
+    }
     try {
-      return ok(setEmbedBackend(backend as EmbedBackend));
+      const argsRaw = (body as { args?: unknown } | null)?.args;
+      const args = Array.isArray(argsRaw) ? argsRaw.filter((a): a is string => typeof a === "string") : undefined;
+      return ok(
+        setEmbedBackend(backend as EmbedBackend, {
+          command: bodyField(body, "command") || bodyField(body, "cmd"),
+          args,
+          dim: bodyNumber(body, "dim"),
+        }),
+      );
     } catch (error) {
       return err(403, error instanceof Error ? error.message : String(error));
     }
@@ -626,6 +723,10 @@ export function handleApi(req: ApiRequest): ApiResponse {
 
   if (method === "POST" && pathname === "/api/vault/backup") {
     return runVaultBackup(body);
+  }
+
+  if (method === "POST" && pathname === "/api/vault/restore") {
+    return runVaultRestore(body);
   }
 
   if (method === "POST" && pathname === "/api/vault/backup/schedule") {
@@ -801,6 +902,24 @@ export function handleApi(req: ApiRequest): ApiResponse {
     return runContext(repo, body, searchParams);
   }
 
+  if (method === "POST" && pathname === "/api/retrieval/showdown") {
+    if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
+    const query =
+      bodyField(body, "query") ||
+      bodyField(body, "q") ||
+      searchParams.get("q") ||
+      searchParams.get("query") ||
+      "";
+    if (!query.trim()) return err(400, "query is required");
+    const limit = bodyNumber(body, "limit") ?? Number(searchParams.get("limit") ?? "8");
+    return ok(
+      buildRetrievalShowdown(repo.id, query.trim(), {
+        limit: Number.isFinite(limit) ? Math.min(20, Math.max(1, limit)) : 8,
+        rootPath: identity.rootPath,
+      }),
+    );
+  }
+
   if (method === "POST" && pathname === "/api/remember") {
     if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
     return runRemember(repo, body);
@@ -835,10 +954,53 @@ export function handleApi(req: ApiRequest): ApiResponse {
     return ok({ applied });
   }
 
-  if (method === "GET" && pathname === "/api/graph") {
+  if (method === "GET" && pathname === "/api/hygiene") {
     if (!repo) return err(400, "Repo not initialized");
+    try {
+      const days = Number(searchParams.get("days") ?? "90");
+      return ok(hygieneReport(repo.id, Number.isFinite(days) ? days : 90));
+    } catch (error) {
+      return err(403, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/hygiene/decay") {
+    if (!repo) return err(400, "Repo not initialized");
+    try {
+      const days = bodyNumber(body, "days") ?? 90;
+      return ok(decayStaleClaims(repo.id, days));
+    } catch (error) {
+      return err(403, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/hygiene/merge") {
+    if (!repo) return err(400, "Repo not initialized");
+    const keepId = bodyField(body, "keepId");
+    const dropId = bodyField(body, "dropId");
+    if (!keepId || !dropId) return err(400, "keepId and dropId required");
+    try {
+      return ok(mergeDuplicate(repo.id, keepId, dropId));
+    } catch (error) {
+      return err(400, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/rules/sync") {
+    if (!repo) return err(400, "Repo not initialized");
+    try {
+      return ok(syncPinnedRules(repo));
+    } catch (error) {
+      return err(403, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "GET" && pathname === "/api/graph") {
+    const all = searchParams.get("scope") === "all";
+    if (!all && !repo) return err(400, "Repo not initialized");
     const days = Number(searchParams.get("days") ?? "30");
-    const events = decorateUsageEvents(listUsageEvents({ repoId: repo.id, days }));
+    const repoId = all ? undefined : repo!.id;
+    const events = decorateUsageEvents(listUsageEvents({ repoId: repoId ?? null, days }));
     const recentClaimIds = new Set<string>();
     for (const e of events.slice(0, 20)) {
       try {
@@ -848,40 +1010,61 @@ export function handleApi(req: ApiRequest): ApiResponse {
       }
     }
     return ok({
-      components: listComponents(repo.id),
-      flows: listFlows(repo.id),
-      claims: listClaims(repo.id),
-      edges: listEdges(repo.id),
-      drafts: decorateDrafts(listProposalDrafts(repo.id, { status: "pending", limit: 30 })),
+      scope: all ? "all" : "current",
+      components: all ? listComponentsAll() : listComponents(repo!.id),
+      flows: all ? listFlowsAll() : listFlows(repo!.id),
+      claims: all ? listClaimsAll() : listClaims(repo!.id),
+      edges: all ? listEdgesAll() : listEdges(repo!.id),
+      drafts: decorateDrafts(
+        all
+          ? listProposalDraftsAll({ status: "pending", limit: 80 })
+          : listProposalDrafts(repo!.id, { status: "pending", limit: 30 }),
+      ),
       recentClaimIds: [...recentClaimIds],
       recentEvents: events.slice(0, 30),
       activity: buildActivityGraph({
         events,
-        sessions: listSessions(repo.id),
+        sessions: all ? listSessionsAll() : listSessions(repo!.id),
       }),
     });
   }
 
   if (method === "GET" && pathname === "/api/drafts") {
-    if (!repo) return err(400, "Repo not initialized");
+    const all = searchParams.get("scope") === "all";
+    if (!all && !repo) return err(400, "Repo not initialized");
     const status = searchParams.get("status") ?? "pending";
-    return ok({ drafts: decorateDrafts(listProposalDrafts(repo.id, { status, limit: 50 })) });
+    return ok({
+      drafts: decorateDrafts(
+        all
+          ? listProposalDraftsAll({ status, limit: 80 })
+          : listProposalDrafts(repo!.id, { status, limit: 50 }),
+      ),
+    });
   }
 
   if (method === "POST" && pathname === "/api/drafts/reject-noisy") {
-    if (!repo) return err(400, "Repo not initialized");
-    const pending = decorateDrafts(listProposalDrafts(repo.id, { status: "pending", limit: 80 }));
+    const all = searchParams.get("scope") === "all" || bodyField(body, "scope") === "all";
+    if (!all && !repo) return err(400, "Repo not initialized");
+    const pending = decorateDrafts(
+      all
+        ? listProposalDraftsAll({ status: "pending", limit: 80 })
+        : listProposalDrafts(repo!.id, { status: "pending", limit: 80 }),
+    );
     const noisy = pending.filter((d) => d.quality.reject);
     for (const d of noisy) setProposalDraftStatus(d.id, "dismissed");
     return ok({ dismissed: noisy.map((d) => d.id), count: noisy.length });
   }
 
   if (method === "POST" && pathname === "/api/drafts/apply") {
-    if (!repo) return err(400, "Repo not initialized");
     const draftId = bodyField(body, "id");
     if (!draftId) return err(400, "id required");
     const draft = getProposalDraft(draftId);
-    if (!draft || draft.repo_id !== repo.id) return err(404, "Draft not found");
+    if (!draft) return err(404, "Draft not found");
+    const target = getRepoById(draft.repo_id);
+    if (!target) return err(404, "Draft not found");
+    if (repo && repo.id !== draft.repo_id && searchParams.get("scope") !== "all" && bodyField(body, "scope") !== "all") {
+      return err(404, "Draft not found");
+    }
     if (draft.status !== "pending") return err(400, `Draft is ${draft.status}`);
     let proposal;
     try {
@@ -910,17 +1093,19 @@ export function handleApi(req: ApiRequest): ApiResponse {
       );
     }
     const policy = loadPolicy().policy;
-    const applied = applyProposal(repo.id, proposal, policy);
+    const applied = applyProposal(target.id, proposal, policy);
     setProposalDraftStatus(draftId, "applied");
     return ok({ applied, draft: getProposalDraft(draftId), resolve: resolve ?? "keep" });
   }
 
   if (method === "POST" && pathname === "/api/drafts/dismiss") {
-    if (!repo) return err(400, "Repo not initialized");
     const draftId = bodyField(body, "id");
     if (!draftId) return err(400, "id required");
     const draft = getProposalDraft(draftId);
-    if (!draft || draft.repo_id !== repo.id) return err(404, "Draft not found");
+    if (!draft) return err(404, "Draft not found");
+    if (repo && repo.id !== draft.repo_id && bodyField(body, "scope") !== "all") {
+      return err(404, "Draft not found");
+    }
     setProposalDraftStatus(draftId, "dismissed");
     return ok({ draft: getProposalDraft(draftId) });
   }

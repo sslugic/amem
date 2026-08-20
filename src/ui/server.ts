@@ -138,6 +138,7 @@ export function buildUiLandingUrl(port: number, cwd: string): string {
   const identity = detectRepoIdentity(cwd);
   const q = new URLSearchParams();
   q.set("tab", "setup");
+  q.set("scope", "all");
   q.set("path", identity.rootPath);
   return `http://127.0.0.1:${port}/?${q.toString()}`;
 }
@@ -161,18 +162,46 @@ export function isAddrInUse(error: unknown): boolean {
   );
 }
 
+export async function probeUiHealth(
+  port: number,
+  host = "127.0.0.1",
+): Promise<{ reachable: boolean; hasVault: boolean; features: string[] }> {
+  try {
+    const res = await fetch(`http://${host}:${port}/api/health`, {
+      signal: AbortSignal.timeout(1000),
+    });
+    if (res.ok) {
+      const body = (await res.json()) as { features?: unknown };
+      const features = Array.isArray(body.features)
+        ? body.features.filter((f): f is string => typeof f === "string")
+        : [];
+      return { reachable: true, hasVault: features.includes("vault"), features };
+    }
+  } catch {
+    // older builds have no /api/health
+  }
+  try {
+    const res = await fetch(`http://${host}:${port}/api/vault`, {
+      signal: AbortSignal.timeout(1000),
+    });
+    return { reachable: true, hasVault: res.ok, features: res.ok ? ["vault"] : [] };
+  } catch {
+    return { reachable: false, hasVault: false, features: [] };
+  }
+}
+
 export async function startUiServer(options: UiServerOptions = {}): Promise<{
   port: number;
   url: string;
   close: () => Promise<void>;
 }> {
-  const port = options.port ?? 7843;
+  const requestedPort = options.port ?? 7843;
   const cwd = options.cwd ?? process.cwd();
   const listenHost = resolveLoopbackHost(options.host);
 
   const server = createServer(async (req, res) => {
     try {
-      const host = req.headers.host ?? `${listenHost}:${port}`;
+      const host = req.headers.host ?? `${listenHost}:${requestedPort}`;
       const url = new URL(req.url ?? "/", `http://${host}`);
       if (req.method === "OPTIONS") {
         res.writeHead(204, MCP_CORS);
@@ -196,24 +225,6 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<{
         res.end();
         return;
       }
-      if (req.method === "POST") {
-        const body = await readBody(req);
-        if (mcpPath || isJsonRpcMessage(body)) {
-          sendMcp(res, req, body, workspaceFromMcpReq(req, url));
-          return;
-        }
-        if (url.pathname.startsWith("/api/")) {
-          const result = handleApi({
-            method: req.method,
-            pathname: url.pathname,
-            searchParams: url.searchParams,
-            body,
-            cwd,
-          });
-          sendJson(res, result.status, result.body);
-          return;
-        }
-      }
       if (url.pathname.startsWith("/api/")) {
         const body = req.method === "GET" || req.method === "HEAD" ? null : await readBody(req);
         const result = handleApi({
@@ -226,6 +237,17 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<{
         sendJson(res, result.status, result.body);
         return;
       }
+      if (mcpPath && req.method === "POST") {
+        sendMcp(res, req, await readBody(req), workspaceFromMcpReq(req, url));
+        return;
+      }
+      if (req.method === "POST") {
+        const body = await readBody(req);
+        if (isJsonRpcMessage(body)) {
+          sendMcp(res, req, body, workspaceFromMcpReq(req, url));
+          return;
+        }
+      }
       serveStatic(res, url.pathname);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -235,9 +257,11 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<{
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, listenHost, () => resolve());
+    server.listen(requestedPort, listenHost, () => resolve());
   });
 
+  const addr = server.address();
+  const port = typeof addr === "object" && addr ? addr.port : requestedPort;
   const url = options.landingUrl ?? `http://${listenHost}:${port}`;
   if (options.openBrowser !== false) {
     openUiInBrowser(url);

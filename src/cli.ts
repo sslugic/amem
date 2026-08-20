@@ -42,7 +42,13 @@ import {
   validateProposal,
 } from "./proposal.js";
 import { detectRepoIdentity, parseWorkspaceSlug, workspaceIdentity } from "./repo-identity.js";
-import { startUiServer, buildUiLandingUrl, openUiInBrowser, isAddrInUse } from "./ui/server.js";
+import {
+  startUiServer,
+  buildUiLandingUrl,
+  openUiInBrowser,
+  isAddrInUse,
+  probeUiHealth,
+} from "./ui/server.js";
 import { installLoginService, isServiceInstalled, isServiceSupported, uninstallLoginService } from "./service.js";
 import { mcpClientConfig, runMcpServer } from "./mcp.js";
 import { provisionWorkspace } from "./workspace-setup.js";
@@ -55,6 +61,7 @@ import {
   isDbEncryptedAtRest,
   lockDatabase,
   resolvePassphrase,
+  restoreBackup,
   unlockDatabase,
 } from "./crypto.js";
 import {
@@ -70,6 +77,7 @@ import {
   activateDevLicense,
   applyLicenseFile,
   clearLicense,
+  generateLicenseKeys,
   licenseStatus,
   signLicense,
 } from "./license.js";
@@ -78,6 +86,9 @@ import {
   reindexAllEmbeds,
   setEmbedBackend,
 } from "./embed.js";
+import { decayStaleClaims, hygieneReport, mergeDuplicate } from "./hygiene.js";
+import { syncPinnedRules } from "./rules-sync.js";
+import { buildSbom, writeItPack } from "./it-pack.js";
 
 function usage(): never {
   console.log(`amem — local personal agent memory
@@ -104,6 +115,11 @@ Usage:
   amem backup [--out <dir>] [--passphrase <secret>] [--label <name>]
   amem backup schedule [--out <dir>] [--hour <0-23>]
   amem backup unschedule
+  amem restore --file <backup.db|backup.db.enc> [--passphrase <secret>]
+  amem hygiene [--days 90] [--decay] [--merge <keepId> <dropId>]
+  amem rules sync
+  amem it-pack [--out <dir>]
+  amem doctor [--attest] [--sbom] [--json]
   amem session touch --platform cursor|claude [--session-id <id>]
   amem hook
   amem usage report --saved <n> [--platform cursor|claude] [--event-id <id>]
@@ -111,8 +127,8 @@ Usage:
   amem ui [--port 7843] [--no-open]
   amem service install|uninstall|status
   amem mcp [--print-config] [--workspace <name>]
-  amem license status|apply|activate|clear|issue
-  amem embed status|use hash|use ngram|reindex
+  amem license status|apply|activate|clear|issue|keys
+  amem embed status|use hash|use ngram|use external|reindex
 
 Install (npx-ready once published):
   npx amem setup
@@ -365,6 +381,18 @@ async function main(): Promise<void> {
         break;
       }
       case "doctor": {
+        if (flags.get("sbom")) {
+          const sbom = buildSbom();
+          const out = flagString(flags, "out");
+          const json = `${JSON.stringify(sbom, null, 2)}\n`;
+          if (out) {
+            writeFileSync(resolve(out), json, "utf8");
+            console.log(`Wrote SBOM to ${resolve(out)}`);
+          } else {
+            process.stdout.write(json);
+          }
+          break;
+        }
         if (flags.get("attest")) {
           const report = buildAttestReport();
           if (flags.get("json")) {
@@ -595,6 +623,66 @@ async function main(): Promise<void> {
         console.log(`Encrypted: ${result.encrypted ? "yes" : "no (pass --passphrase to encrypt)"}`);
         break;
       }
+      case "restore": {
+        const file = flagString(flags, "file") || positional[1];
+        if (!file) throw new Error("Usage: amem restore --file <backup.db|backup.db.enc>");
+        closeDb();
+        let passphrase: string | undefined;
+        try {
+          passphrase = resolvePassphrase(flagString(flags, "passphrase"));
+        } catch {
+          passphrase = undefined;
+        }
+        const result = restoreBackup({ file: resolve(file), passphrase });
+        openDb();
+        console.log(`Restored ${result.dbPath} from ${result.from}`);
+        if (result.safetyCopy) console.log(`Previous DB saved at ${result.safetyCopy}`);
+        break;
+      }
+      case "hygiene": {
+        const repo = resolveBinding(flags);
+        const days = Number(flagString(flags, "days") ?? "90");
+        const keep = flagString(flags, "merge");
+        if (keep) {
+          const drop = positional[2] || positional[1];
+          if (!drop) throw new Error("Usage: amem hygiene --merge <keepId> <dropId>");
+          const merged = mergeDuplicate(repo.id, keep, drop);
+          console.log(`Merged ${merged.dropId} into ${merged.keepId}`);
+          break;
+        }
+        const report = hygieneReport(repo.id, Number.isFinite(days) ? days : 90);
+        if (flags.get("decay")) {
+          const result = decayStaleClaims(repo.id, Number.isFinite(days) ? days : 90);
+          console.log(`Decayed ${result.decayed.length} unused facts`);
+          break;
+        }
+        if (flags.get("json")) console.log(JSON.stringify(report, null, 2));
+        else {
+          console.log(`active: ${report.active}`);
+          console.log(`stale (unused ${Number.isFinite(days) ? days : 90}d): ${report.stale.length}`);
+          console.log(`duplicates: ${report.duplicates.length}`);
+          console.log(`pending drafts: ${report.pendingDrafts}`);
+          for (const d of report.duplicates.slice(0, 8)) {
+            console.log(`  merge ${d.dropId} → ${d.keepId} (${Math.round(d.similarity * 100)}%)`);
+          }
+        }
+        break;
+      }
+      case "rules": {
+        if (positional[1] !== "sync") throw new Error("Usage: amem rules sync");
+        const repo = resolveBinding(flags);
+        const result = syncPinnedRules(repo);
+        console.log(`Wrote ${result.pinned} pinned facts → ${result.path}`);
+        console.log("Keep this file out of shared git if it contains personal notes.");
+        break;
+      }
+      case "it-pack": {
+        const out = resolve(flagString(flags, "out") || join(amemHome(), "it-pack"));
+        const result = writeItPack(out);
+        console.log(`IT pack written to ${result.dir}`);
+        for (const f of result.files) console.log(`  ${f}`);
+        break;
+      }
       case "wipe": {
         if (!flags.get("yes")) {
           throw new Error("Refusing to wipe without --yes");
@@ -729,6 +817,15 @@ async function main(): Promise<void> {
           });
         } catch (error) {
           if (!isAddrInUse(error)) throw error;
+          const probe = await probeUiHealth(port);
+          if (!probe.hasVault) {
+            console.error(`Port ${port} is already serving an older amem without lock/backup APIs.`);
+            console.error("Stop that process, then run amem ui again:");
+            console.error(`  lsof -nP -iTCP:${port} -sTCP:LISTEN`);
+            closeDb();
+            process.exitCode = 1;
+            break;
+          }
           if (openBrowser) openUiInBrowser(landing);
           console.log(`amem ui already running — opened setup:`);
           console.log(landing);
@@ -819,7 +916,23 @@ async function main(): Promise<void> {
           console.log(`Wrote signed license to ${out}`);
           break;
         }
-        throw new Error("Usage: amem license status|apply|activate|clear|issue");
+        if (sub === "keys") {
+          const keys = generateLicenseKeys();
+          const dir = flagString(flags, "out-dir");
+          if (dir) {
+            mkdirSync(dir, { recursive: true, mode: 0o700 });
+            writeFileSync(join(dir, "license.pub"), `${keys.publicKeyHex}\n`, { mode: 0o644 });
+            writeFileSync(join(dir, "license.priv"), `${keys.privateKeyHex}\n`, { mode: 0o600 });
+            console.log(`Wrote shop/.data-style keys under ${dir}`);
+            console.log(`public: ${keys.publicKeyHex}`);
+            console.log("Put that public hex in src/license.ts DEFAULT_LICENSE_PUBKEY_HEX if it differs.");
+            break;
+          }
+          console.log(`public: ${keys.publicKeyHex}`);
+          console.log(`private: ${keys.privateKeyHex}`);
+          break;
+        }
+        throw new Error("Usage: amem license status|apply|activate|clear|issue|keys");
       }
       case "embed": {
         const sub = positional[1];
@@ -835,11 +948,18 @@ async function main(): Promise<void> {
         }
         if (sub === "use") {
           const backend = positional[2];
-          if (backend !== "hash" && backend !== "ngram") {
-            throw new Error("Usage: amem embed use hash|ngram");
+          if (backend !== "hash" && backend !== "ngram" && backend !== "external") {
+            throw new Error("Usage: amem embed use hash|ngram|external --cmd <bin>");
           }
-          const status = setEmbedBackend(backend);
+          const cmd = flagString(flags, "cmd") || flagString(flags, "command");
+          const dimRaw = flagString(flags, "dim");
+          const status = setEmbedBackend(backend, {
+            command: cmd,
+            args: flagString(flags, "args")?.split(/\s+/).filter(Boolean),
+            dim: dimRaw ? Number(dimRaw) : undefined,
+          });
           console.log(`Embed backend ${status.backend} dim=${status.dim}`);
+          if (status.command) console.log(`command: ${status.command} ${status.args.join(" ")}`);
           console.log("Reindex with: amem embed reindex");
           break;
         }

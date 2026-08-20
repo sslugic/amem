@@ -15,24 +15,26 @@
   <body>
     <div class="app">
       <header class="top">
-        <div class="brand-block">
-          <div class="brand">amem</div>
-          <div class="repo-switcher">
-            <select id="repoSelect" aria-label="Git repo or workspace"></select>
-            <button class="btn secondary small hidden" id="renameWsBtn" type="button">Rename</button>
-            <button class="btn secondary small" id="personalBtn" type="button">Personal</button>
-            <button class="btn secondary small" id="addRepoBtn" type="button">Add repo</button>
+        <div class="top-main">
+          <div class="brand-block">
+            <button class="brand" id="brandBtn" type="button">amem</button>
+            <div class="repo-switcher">
+              <select id="repoSelect" aria-label="Git repo or workspace"></select>
+              <button class="btn secondary small hidden" id="renameWsBtn" type="button">Rename</button>
+              <button class="btn secondary small" id="personalBtn" type="button">Personal</button>
+              <button class="btn secondary small" id="addRepoBtn" type="button">Add repo</button>
+            </div>
           </div>
+          <nav class="tabs" id="tabs">
+            <button data-tab="welcome" class="active">Plans</button>
+            <button data-tab="setup">Setup</button>
+            <button data-tab="brain">Memory</button>
+            <button data-tab="stats">Stats</button>
+          </nav>
         </div>
-        <nav class="tabs" id="tabs">
-          <button data-tab="setup" class="active">Setup</button>
-          <button data-tab="brain">Brain</button>
-          <button data-tab="stats">Stats</button>
-        </nav>
-        <div class="privacy" id="vaultBar">
-          <div class="vault-chips" id="vaultChips"></div>
+        <div class="top-meta" id="vaultBar">
+          <p class="vault-summary" id="vaultChips"></p>
           <button class="btn secondary small" id="vaultToggle" type="button">Lock / backup</button>
-          <div class="privacy-label">Local only · 127.0.0.1</div>
         </div>
       </header>
       <div id="vaultPanel" class="vault-panel hidden">
@@ -52,6 +54,15 @@
             <input id="vaultHour" type="number" min="0" max="23" value="3" />
             <button class="btn secondary" id="vaultScheduleBtn" type="button">Schedule daily</button>
             <button class="btn secondary" id="vaultUnscheduleBtn" type="button">Unschedule</button>
+          </div>
+          <div class="add-repo-row">
+            <input id="vaultRestorePath" type="text" placeholder="Path to backup .db or .db.enc on this machine" />
+            <button class="btn secondary" id="vaultRestoreBtn" type="button">Restore</button>
+          </div>
+          <div class="add-repo-row" id="shopRow">
+            <a class="btn" id="buyPro" href="https://getamem.com/buy/pro" target="_blank" rel="noopener">Buy Pro · $12</a>
+            <a class="btn secondary" id="buyIt" href="https://getamem.com/buy/it" target="_blank" rel="noopener">Buy IT · $49</a>
+            <span class="note">After pay, download <code>amem-license.json</code> on the thank-you page, then <code>amem license apply --file</code>. Mailtrap testing also keeps a copy in the sandbox inbox.</span>
           </div>
           <p class="note" id="vaultDetail"></p>
         </div>

@@ -2,6 +2,7 @@
  * On-device embeddings. Default is feature hashing (no download).
  * Pro can switch to a local n-gram encoder (still no cloud, no model fetch).
  */
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
@@ -15,7 +16,7 @@ export const NGRAM_DIM = 256;
 /** @deprecated use HASH_DIM — kept so older tests keep compiling */
 export const EMBED_DIM = HASH_DIM;
 
-export type EmbedBackend = "hash" | "ngram";
+export type EmbedBackend = "hash" | "ngram" | "external";
 
 export type EmbedStatus = {
   backend: EmbedBackend;
@@ -23,56 +24,128 @@ export type EmbedStatus = {
   dim: number;
   licensed: boolean;
   path: string;
+  command?: string;
+  args: string[];
 };
 
 function embedSettingsPath(): string {
   return join(amemHome(), "embed.json");
 }
 
+type EmbedSettings = {
+  backend?: string;
+  command?: string;
+  args?: string[];
+  dim?: number;
+};
+
+function readEmbedSettings(): EmbedSettings {
+  const path = embedSettingsPath();
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as EmbedSettings;
+  } catch {
+    return {};
+  }
+}
+
 export function requestedEmbedBackend(): EmbedBackend {
   const env = (process.env.AMEM_EMBED_BACKEND || "").trim().toLowerCase();
-  if (env === "hash" || env === "ngram") return env;
-  const path = embedSettingsPath();
-  if (!existsSync(path)) return "hash";
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as { backend?: string };
-    return raw.backend === "ngram" ? "ngram" : "hash";
-  } catch {
-    return "hash";
-  }
+  if (env === "hash" || env === "ngram" || env === "external") return env;
+  const raw = readEmbedSettings().backend;
+  if (raw === "ngram" || raw === "external") return raw;
+  return "hash";
 }
 
 export function activeEmbedBackend(): EmbedBackend {
   const requested = requestedEmbedBackend();
-  if (requested === "ngram" && hasFeature(FEATURE_LOCAL_EMBED)) return "ngram";
+  if ((requested === "ngram" || requested === "external") && hasFeature(FEATURE_LOCAL_EMBED)) {
+    return requested;
+  }
   return "hash";
 }
 
 export function embedDim(backend: EmbedBackend = activeEmbedBackend()): number {
-  return backend === "ngram" ? NGRAM_DIM : HASH_DIM;
+  if (backend === "ngram") return NGRAM_DIM;
+  if (backend === "external") {
+    const n = Number(process.env.AMEM_EMBED_DIM || readEmbedSettings().dim || 0);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : HASH_DIM;
+  }
+  return HASH_DIM;
+}
+
+export function embedCommand(): { command?: string; args: string[] } {
+  const settings = readEmbedSettings();
+  const command = (process.env.AMEM_EMBED_CMD || settings.command || "").trim() || undefined;
+  const args = Array.isArray(settings.args) ? settings.args.filter((a) => typeof a === "string") : [];
+  return { command, args };
 }
 
 export function embedStatus(): EmbedStatus {
   const requested = requestedEmbedBackend();
   const backend = activeEmbedBackend();
+  const { command, args } = embedCommand();
   return {
     backend,
     requested,
     dim: embedDim(backend),
     licensed: hasFeature(FEATURE_LOCAL_EMBED),
     path: embedSettingsPath(),
+    command,
+    args,
   };
 }
 
-export function setEmbedBackend(backend: EmbedBackend): EmbedStatus {
-  if (backend === "ngram" && !hasFeature(FEATURE_LOCAL_EMBED)) {
+export function setEmbedBackend(
+  backend: EmbedBackend,
+  extra: { command?: string; args?: string[]; dim?: number } = {},
+): EmbedStatus {
+  if ((backend === "ngram" || backend === "external") && !hasFeature(FEATURE_LOCAL_EMBED)) {
     throw new Error(
-      "Local n-gram embeddings need an amem Pro or IT license. Run: amem license activate --dev --tier pro",
+      "Local embeddings need an amem Pro or IT license. Run: amem license activate --dev --tier pro",
     );
   }
+  if (backend === "external" && !(extra.command || process.env.AMEM_EMBED_CMD || readEmbedSettings().command)) {
+    throw new Error("external embedder needs --cmd (stdin text → stdout JSON { vector: number[] })");
+  }
   mkdirSync(amemHome(), { recursive: true, mode: 0o700 });
-  writeFileSync(embedSettingsPath(), `${JSON.stringify({ backend }, null, 2)}\n`, { mode: 0o600 });
+  const prev = readEmbedSettings();
+  const next: EmbedSettings = {
+    backend,
+    command: extra.command ?? prev.command,
+    args: extra.args ?? prev.args,
+    dim: extra.dim ?? prev.dim,
+  };
+  writeFileSync(embedSettingsPath(), `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
   return embedStatus();
+}
+
+function parseExternalVector(raw: string): Float32Array {
+  const trimmed = raw.trim();
+  let values: number[] = [];
+  try {
+    const parsed = JSON.parse(trimmed) as { vector?: unknown } | unknown;
+    const list = Array.isArray(parsed) ? parsed : (parsed as { vector?: unknown }).vector;
+    if (Array.isArray(list)) values = list.map((n) => Number(n));
+  } catch {
+    values = trimmed.split(/[\s,]+/).map((n) => Number(n));
+  }
+  const clean = values.filter((n) => Number.isFinite(n));
+  if (clean.length < 4) throw new Error("external embedder returned no usable vector");
+  return normalize(Float32Array.from(clean));
+}
+
+export function embedExternal(text: string): Float32Array {
+  const { command, args } = embedCommand();
+  if (!command) throw new Error("No AMEM_EMBED_CMD / embed.json command configured");
+  const out = execFileSync(command, args, {
+    input: text,
+    encoding: "utf8",
+    timeout: 8000,
+    maxBuffer: 2_000_000,
+    windowsHide: true,
+  });
+  return parseExternalVector(out);
 }
 
 function hashToken(token: string, dim: number): number {
@@ -122,7 +195,15 @@ export function embedNgram(text: string): Float32Array {
 }
 
 export function embedText(text: string, backend: EmbedBackend = activeEmbedBackend()): Float32Array {
-  return backend === "ngram" ? embedNgram(text) : embedHash(text);
+  if (backend === "ngram") return embedNgram(text);
+  if (backend === "external") {
+    try {
+      return embedExternal(text);
+    } catch {
+      return embedHash(text);
+    }
+  }
+  return embedHash(text);
 }
 
 export function cosine(a: Float32Array, b: Float32Array): number {
@@ -212,8 +293,40 @@ export function searchClaimsEmbed(
   query: string,
   limit = 24,
 ): EmbedHit[] {
+  return searchClaimsEmbedBackend(db, repoId, query, activeEmbedBackend(), limit);
+}
+
+/**
+ * Live embed ranking for a forced backend (hash vs ngram showdown).
+ * Scores active claim texts against the query without requiring stored rows for that backend.
+ */
+export function searchClaimsEmbedLive(
+  claims: ClaimRow[],
+  query: string,
+  backend: EmbedBackend,
+  limit = 24,
+): EmbedHit[] {
+  if (tokenize(query).length === 0) return [];
+  const qv = embedText(query, backend);
+  const scored = claims
+    .map((c) => {
+      const text = `${c.id} ${c.kind} ${c.text} ${c.code_anchors}`;
+      return { id: c.id, score: cosine(qv, embedText(text, backend)) };
+    })
+    .filter((r) => r.score > 0.05)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+  return scored;
+}
+
+function searchClaimsEmbedBackend(
+  db: Database.Database,
+  repoId: string,
+  query: string,
+  backend: EmbedBackend,
+  limit = 24,
+): EmbedHit[] {
   ensureClaimsEmbed(db);
-  const backend = activeEmbedBackend();
   const qv = embedText(query, backend);
   if (tokenize(query).length === 0) return [];
   const rows = db

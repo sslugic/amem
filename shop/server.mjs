@@ -1,0 +1,578 @@
+#!/usr/bin/env node
+/**
+ * Seller webhook + Checkout. Not part of the published `amem` CLI.
+ * Memory never leaves the buyer’s machine — this process only emails a signed JSON file.
+ */
+import { createServer } from "node:http";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { applyShopEnv, loadShopEnvFromText, parseDotEnv, pickShopEnv } from "./env.mjs";
+import {
+  buyerEmail,
+  issuedLicensePath,
+  licenseEmailCopy,
+  licensePayload,
+  normalizeTier,
+  readIssuedLicense,
+  rememberFulfilled,
+  sessionIdOk,
+  sessionPaid,
+  TIERS,
+  writeIssuedLicense,
+} from "./fulfill.mjs";
+import { sendLicenseMail } from "./mail.mjs";
+
+const ROOT = dirname(fileURLToPath(import.meta.url));
+const REPO = join(ROOT, "..");
+const DATA = join(ROOT, ".data");
+const FULFILLED = join(DATA, "fulfilled.json");
+const LICENSES = join(DATA, "licenses");
+const PRIV_FILE = join(DATA, "license.priv");
+const SHOP_DOTENV = join(ROOT, ".env");
+
+hydrateEnv();
+
+const PORT = Number(process.env.AMEM_SHOP_PORT || 8788);
+/** Loopback for local seller process; App Runner / containers use 0.0.0.0 */
+const HOST = process.env.AMEM_SHOP_HOST || "127.0.0.1";
+const PUBLIC_URL = (process.env.AMEM_SHOP_URL || `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
+const CANONICAL_HOST = (process.env.AMEM_SHOP_CANONICAL_HOST || "").toLowerCase().replace(/:\d+$/, "");
+
+function hydrateEnv() {
+  if (existsSync(SHOP_DOTENV)) {
+    loadShopEnvFromText(readFileSync(SHOP_DOTENV, "utf8"), process.env, { overwrite: false });
+  }
+  const external = process.env.AMEM_SHOP_ENV;
+  if (external && existsSync(external)) {
+    applyShopEnv(pickShopEnv(parseDotEnv(readFileSync(external, "utf8"))), process.env, {
+      overwrite: false,
+    });
+  }
+}
+
+function decodeMaybeB64Pem(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  if (s.includes("BEGIN")) return s;
+  // App Runner rejects multiline env values — store PEM as base64 in Secrets Manager.
+  try {
+    const decoded = Buffer.from(s.replace(/\s+/g, ""), "base64").toString("utf8").trim();
+    if (decoded.includes("BEGIN")) return decoded;
+  } catch {
+    /* keep raw */
+  }
+  return s;
+}
+
+function licensePrivKey() {
+  if (process.env.AMEM_LICENSE_PRIVKEY) return decodeMaybeB64Pem(process.env.AMEM_LICENSE_PRIVKEY);
+  if (existsSync(PRIV_FILE)) return readFileSync(PRIV_FILE, "utf8").trim();
+  return "";
+}
+
+async function licenseFns() {
+  return import(join(REPO, "dist", "license.js"));
+}
+
+function htmlPage(title, body) {
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>${title}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+:root{
+  --bg0:#0f1418;--bg1:#172028;--ink:#e8eef2;--muted:#8fa3b0;
+  --accent:#2ec4b6;--accent-dim:#1a7a72;--line:rgba(232,238,242,.1);
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;color:var(--ink);
+  font:16px/1.5 "IBM Plex Sans",system-ui,sans-serif;
+  background:
+    radial-gradient(1200px 600px at 10% -10%,rgba(46,196,182,.12),transparent 55%),
+    radial-gradient(900px 500px at 90% 0%,rgba(126,184,255,.08),transparent 50%),
+    var(--bg0)}
+.wrap{max-width:920px;margin:0 auto;padding:2.5rem 1.25rem 3.5rem}
+.brand{display:flex;align-items:center;gap:1rem;margin:0 0 .75rem}
+.logo{width:4.25rem;height:4.25rem;border-radius:1.25rem;display:grid;place-items:center;
+  background:linear-gradient(160deg,var(--accent),var(--accent-dim));color:#062925;
+  font-family:Fraunces,Georgia,serif;font-size:2.35rem;font-weight:700;letter-spacing:-.06em;
+  box-shadow:0 12px 40px rgba(46,196,182,.18)}
+h1{margin:0;font-family:Fraunces,Georgia,serif;font-size:2.1rem;font-weight:700;letter-spacing:-.03em}
+.lead{margin:0 0 1.5rem;max-width:40rem;color:var(--muted);font-size:1.05rem}
+.plan-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.85rem;margin:0 0 1rem}
+.plan-card{display:flex;flex-direction:column;gap:.65rem;padding:1.15rem 1.15rem 1.2rem;
+  border:1px solid var(--line);border-radius:16px;background:var(--bg1);min-width:0}
+.plan-card.featured{border-color:rgba(46,196,182,.45)}
+.plan-card h2{margin:0;font-size:1.05rem}
+.plan-price{margin:0;font-family:Fraunces,Georgia,serif;font-size:1.85rem;letter-spacing:-.03em}
+.plan-price span{font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:.8rem;color:var(--muted);font-weight:500}
+.plan-card ul{margin:0 0 .4rem;padding:0 0 0 1.1rem;color:var(--muted);font-size:.88rem;line-height:1.45;flex:1}
+.plan-card li+li{margin-top:.35rem}
+a.btn,button.btn{appearance:none;display:block;width:100%;text-align:center;text-decoration:none;border:0;cursor:pointer;
+  background:var(--accent);color:#062925;font:inherit;font-weight:600;padding:.85rem 1.2rem;border-radius:999px}
+a.btn.secondary,button.btn.secondary{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button.btn.compact{width:auto;padding:.55rem .95rem;font-size:.85rem;flex-shrink:0}
+.note{margin:0;color:var(--muted);font-size:.88rem}
+.fine{margin:0 0 2rem;color:var(--muted);font-size:.82rem}
+.start{margin:2rem 0 0;scroll-margin-top:1.5rem}
+.start-head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.75rem 1rem;align-items:end;margin:0 0 1rem}
+.start-head h2{margin:0;font-family:Fraunces,Georgia,serif;font-size:1.55rem;letter-spacing:-.02em}
+.start-head p{margin:0;color:var(--muted);font-size:.92rem;max-width:28rem}
+.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;margin:0 0 1rem}
+.step{padding:1rem 1.05rem;border:1px solid var(--line);border-radius:16px;background:var(--bg1);min-width:0}
+.step-num{display:inline-grid;place-items:center;width:1.6rem;height:1.6rem;border-radius:999px;
+  background:rgba(46,196,182,.16);color:var(--accent);font-size:.78rem;font-weight:600;margin-bottom:.55rem}
+.step h3{margin:0 0 .3rem;font-size:.95rem}
+.step p{margin:0;color:var(--muted);font-size:.84rem;line-height:1.45}
+.cmd-box{border:1px solid var(--line);border-radius:18px;background:var(--bg1);overflow:hidden}
+.cmd-tabs{display:flex;gap:.35rem;padding:.55rem .65rem;border-bottom:1px solid var(--line);background:rgba(15,20,24,.45)}
+.cmd-tab{appearance:none;border:1px solid transparent;background:transparent;color:var(--muted);
+  font:inherit;font-size:.82rem;font-weight:500;padding:.4rem .75rem;border-radius:999px;cursor:pointer}
+.cmd-tab.active{color:var(--ink);border-color:var(--line);background:var(--bg0)}
+.cmd-row{display:flex;align-items:center;gap:.75rem;padding:.85rem 1rem}
+.cmd-row code{flex:1;min-width:0;font-size:.95rem;letter-spacing:.01em;overflow:auto;white-space:nowrap}
+.cmd-panel{display:none}
+.cmd-panel.active{display:block}
+.cmd-hint{margin:.7rem 0 0;color:var(--muted);font-size:.82rem}
+.copied{color:#062925 !important;background:var(--accent) !important;border-color:transparent !important}
+code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em}
+code{background:transparent;padding:0}
+pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;overflow:auto;color:var(--ink)}
+.page h1{margin:0 0 .75rem}
+.page p{color:var(--muted);max-width:36rem}
+.page .actions{display:flex;flex-wrap:wrap;gap:.6rem;margin:1.25rem 0}
+.page a.btn{width:auto;display:inline-block}
+@media(max-width:800px){
+  .plan-grid,.steps{grid-template-columns:1fr}
+  .logo{width:3.5rem;height:3.5rem;font-size:1.9rem}
+  .cmd-row{flex-wrap:wrap}
+}
+</style></head><body><div class="wrap">${body}</div></body></html>`;
+}
+
+function dollars(cents) {
+  return `$${(Number(cents) / 100).toFixed(0)}`;
+}
+
+function landing() {
+  const pro = dollars(TIERS.pro.amountCents);
+  const it = dollars(TIERS.it.amountCents);
+  return htmlPage(
+    "amem — plans",
+    `<div class="brand">
+  <div class="logo" aria-hidden="true">a</div>
+  <h1>amem</h1>
+</div>
+<p class="lead">Local agent memory for Cursor and any MCP host. Facts stay in <code>~/.amem</code> on your machine. Pay only if you want extras — free already remembers, retrieves, and backs up.</p>
+<div class="plan-grid">
+  <article class="plan-card">
+    <h2>Free</h2>
+    <p class="plan-price">$0</p>
+    <ul>
+      <li>Memory, MCP, and Stats</li>
+      <li>Lock and local backup</li>
+      <li>Hashing embedder — no download</li>
+    </ul>
+    <a class="btn secondary" href="#install">Get started</a>
+  </article>
+  <article class="plan-card featured">
+    <h2>Pro</h2>
+    <p class="plan-price">${pro} <span>once</span></p>
+    <ul>
+      <li>Everything in Free</li>
+      <li>Local n-gram or external embedder</li>
+      <li>Hygiene inbox — decay and merge</li>
+      <li>Pin facts → Cursor rules</li>
+    </ul>
+    <a class="btn" href="/buy/pro">Buy Pro</a>
+  </article>
+  <article class="plan-card">
+    <h2>IT</h2>
+    <p class="plan-price">${it} <span>once</span></p>
+    <ul>
+      <li>Everything in Pro</li>
+      <li>Richer <code>amem doctor --attest</code></li>
+      <li><code>amem it-pack</code> for local rollout</li>
+    </ul>
+    <a class="btn secondary" href="/buy/it">Buy IT</a>
+  </article>
+</div>
+<p class="fine">After pay, apply <code>amem-license.json</code> in <code>amem ui</code>. Memory never uploads.</p>
+
+<section class="start" id="install">
+  <div class="start-head">
+    <div>
+      <h2>Start free</h2>
+      <p>Node 20+. One command on your machine — not an app dependency.</p>
+    </div>
+  </div>
+  <div class="steps">
+    <article class="step">
+      <div class="step-num">1</div>
+      <h3>Install</h3>
+      <p>Copy a command below. Needs network once for npm.</p>
+    </article>
+    <article class="step">
+      <div class="step-num">2</div>
+      <h3>Open the UI</h3>
+      <p>Run <code>amem ui</code> for Plans, Memory, and Setup.</p>
+    </article>
+    <article class="step">
+      <div class="step-num">3</div>
+      <h3>Wire a host</h3>
+      <p>In a repo: <code>amem init --platform cursor</code></p>
+    </article>
+  </div>
+  <div class="cmd-box">
+    <div class="cmd-tabs" role="tablist">
+      <button type="button" class="cmd-tab active" data-cmd="npx" role="tab" aria-selected="true">Quick (npx)</button>
+      <button type="button" class="cmd-tab" data-cmd="global" role="tab" aria-selected="false">Global CLI</button>
+    </div>
+    <div class="cmd-panel active" data-panel="npx">
+      <div class="cmd-row">
+        <code id="cmd-npx">npx amem setup</code>
+        <button type="button" class="btn compact" data-copy="cmd-npx">Copy</button>
+      </div>
+    </div>
+    <div class="cmd-panel" data-panel="global">
+      <div class="cmd-row">
+        <code id="cmd-global">npm i -g amem &amp;&amp; amem setup</code>
+        <button type="button" class="btn compact" data-copy="cmd-global">Copy</button>
+      </div>
+    </div>
+  </div>
+  <p class="cmd-hint">Live after the first npm publish. Until then, clone from <a href="https://github.com/sslugic/amem" style="color:var(--accent)">GitHub</a>.</p>
+</section>
+<script>
+(() => {
+  const tabs = [...document.querySelectorAll(".cmd-tab")];
+  const panels = [...document.querySelectorAll(".cmd-panel")];
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const id = tab.dataset.cmd;
+      tabs.forEach((t) => {
+        const on = t === tab;
+        t.classList.toggle("active", on);
+        t.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      panels.forEach((p) => p.classList.toggle("active", p.dataset.panel === id));
+    });
+  });
+  document.querySelectorAll("[data-copy]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const el = document.getElementById(btn.dataset.copy);
+      const text = (el?.textContent || "").trim();
+      try {
+        await navigator.clipboard.writeText(text);
+        const prev = btn.textContent;
+        btn.textContent = "Copied";
+        btn.classList.add("copied");
+        setTimeout(() => {
+          btn.textContent = prev;
+          btn.classList.remove("copied");
+        }, 1400);
+      } catch {
+        btn.textContent = "Select & copy";
+      }
+    });
+  });
+})();
+</script>`,
+  );
+}
+
+function successPage(result) {
+  if (!result) {
+    return htmlPage(
+      "amem · thanks",
+      `<div class="page"><h1>Payment received</h1>
+<p>If the license did not appear, reopen this page from Stripe’s success redirect (it includes a session id).</p>
+<p class="actions"><a class="btn secondary" href="/">Back to plans</a></p></div>`,
+    );
+  }
+  if (result.pending) {
+    return htmlPage(
+      "amem · pending",
+      `<div class="page"><h1>Payment not finished</h1><p>${escapeHtml(result.reason || "Not paid yet.")}</p>
+<p class="actions"><a class="btn secondary" href="/">Back to plans</a></p></div>`,
+    );
+  }
+  if (!result.ok) {
+    return htmlPage(
+      "amem · issue",
+      `<div class="page"><h1>Paid, license not issued</h1>
+<p>${escapeHtml(result.reason || "unknown")}</p>
+<p>Keep this tab and retry, or open the Mailtrap inbox. Do not pay again.</p>
+<p class="actions"><a class="btn secondary" href="/">Back to plans</a></p></div>`,
+    );
+  }
+  const mailNote = result.emailed
+    ? result.mode === "testing"
+      ? `<p>A copy is in the <strong>Mailtrap sandbox inbox</strong> (testing mode), not a real mailbox.</p>`
+      : `<p>A copy was emailed to <code>${escapeHtml(result.email)}</code>.</p>`
+    : `<p>Email did not send (${escapeHtml(result.mailReason || "skipped")}). Use the download.</p>`;
+  return htmlPage(
+    "amem · thanks",
+    `<div class="page"><div class="brand"><div class="logo" aria-hidden="true">a</div><h1>Your ${escapeHtml(result.tier === "it" ? "amem IT" : "amem Pro")} license</h1></div>
+<p>Download the file, then open <code>amem ui</code> → Plans/Setup → <strong>Apply license</strong> (paste or choose file). Or from a terminal:</p>
+<p class="actions"><a class="btn" href="/license/${encodeURIComponent(result.sessionId)}" download="amem-license.json">Download amem-license.json</a></p>
+<pre>amem license apply --file ~/Downloads/amem-license.json
+amem license status</pre>
+<p class="note">Then use <strong>Turn on Pro retrieval</strong> in the UI to enable n-gram + reindex.</p>
+${mailNote}
+<p class="actions"><a class="btn secondary" href="/">Back to plans</a></p></div>`,
+  );
+}
+
+function cancelPage() {
+  return htmlPage(
+    "amem · cancelled",
+    `<div class="page"><h1>Checkout cancelled</h1><p>No charge.</p>
+<p class="actions"><a class="btn" href="/">Back to plans</a></p></div>`,
+  );
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+async function stripeClient() {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error("STRIPE_SECRET_KEY is missing (whitelist it from AMEM_SHOP_ENV or shop/.env)");
+  const { default: Stripe } = await import("stripe");
+  return new Stripe(key);
+}
+
+function amountFor(tier) {
+  if (tier === "it") return Number(process.env.STRIPE_AMOUNT_IT_CENTS || TIERS.it.amountCents);
+  return Number(process.env.STRIPE_AMOUNT_PRO_CENTS || TIERS.pro.amountCents);
+}
+
+async function createCheckout(tier) {
+  const stripe = await stripeClient();
+  const priceId = tier === "it" ? process.env.STRIPE_PRICE_IT : process.env.STRIPE_PRICE_PRO;
+  const lineItems = priceId
+    ? [{ price: priceId, quantity: 1 }]
+    : [
+        {
+          price_data: {
+            currency: "usd",
+            unit_amount: amountFor(tier),
+            product_data: { name: TIERS[tier].label, description: "Signed local-only amem license file" },
+          },
+          quantity: 1,
+        },
+      ];
+  return stripe.checkout.sessions.create({
+    mode: "payment",
+    line_items: lineItems,
+    success_url: `${PUBLIC_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${PUBLIC_URL}/cancel`,
+    allow_promotion_codes: true,
+    customer_creation: "if_required",
+    metadata: { product: "amem", tier },
+  });
+}
+
+async function fulfillSession(session) {
+  if (!sessionPaid(session)) return { ok: false, pending: true, reason: "not_paid" };
+  const tier = normalizeTier(session.metadata?.tier);
+  const email = buyerEmail(session);
+  const sessionId = session.id;
+  if (!tier) return { ok: false, reason: "missing_tier" };
+  if (!email) return { ok: false, reason: "missing_email" };
+  if (!sessionIdOk(sessionId)) return { ok: false, reason: "invalid_session" };
+
+  const existing = readIssuedLicense(LICENSES, sessionId);
+  if (existing) {
+    return { ok: true, duplicate: true, email, tier, sessionId, path: issuedLicensePath(LICENSES, sessionId) };
+  }
+
+  const priv = licensePrivKey();
+  if (!priv) return { ok: false, reason: "missing_privkey" };
+  const { signLicense, featuresForTier } = await licenseFns();
+  const payload = licensePayload({ tier, email, features: featuresForTier(tier) });
+  const file = signLicense(priv, payload);
+  const jsonText = `${JSON.stringify(file, null, 2)}\n`;
+  const path = writeIssuedLicense(LICENSES, sessionId, jsonText);
+  rememberFulfilled(FULFILLED, sessionId, { email, tier, at: new Date().toISOString(), path });
+
+  const copy = licenseEmailCopy({ tier, jsonText });
+  const mailed = await sendLicenseMail({ to: email, ...copy, jsonText });
+  return {
+    ok: true,
+    email,
+    tier,
+    sessionId,
+    path,
+    emailed: Boolean(mailed.ok),
+    mode: mailed.mode,
+    mailReason: mailed.ok ? undefined : mailed.reason || mailed.error || "mail_failed",
+  };
+}
+
+async function handleWebhook(req, res) {
+  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!secret) {
+    json(res, 503, {
+      error: "STRIPE_WEBHOOK_SECRET missing — run stripe listen --live --forward-to localhost:8788/webhook",
+    });
+    return;
+  }
+  const raw = await readRaw(req);
+  const stripe = await stripeClient();
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(raw, req.headers["stripe-signature"], secret);
+  } catch (error) {
+    json(res, 400, { error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
+  if (event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded") {
+    const result = await fulfillSession(event.data.object);
+    if (!result.ok && !result.pending) {
+      console.error("[shop] fulfill failed", result);
+      json(res, 500, result);
+      return;
+    }
+    console.log("[shop] fulfilled", { id: event.data.object.id, emailed: result.emailed, tier: result.tier });
+    json(res, 200, { ok: true, emailed: result.emailed, duplicate: result.duplicate });
+    return;
+  }
+  json(res, 200, { ignored: event.type });
+}
+
+function json(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body));
+}
+
+function html(res, status, body) {
+  res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(body);
+}
+
+function readRaw(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+async function onRequest(req, res) {
+  const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);
+  try {
+    if (CANONICAL_HOST) {
+      const host = String(req.headers.host || "")
+        .toLowerCase()
+        .replace(/:\d+$/, "");
+      const alias =
+        host === "tryamem.com" ||
+        host === "www.tryamem.com" ||
+        host === `www.${CANONICAL_HOST}`;
+      // Never redirect App Runner health checks (Host is the *.awsapprunner.com name).
+      if (alias && url.pathname !== "/health") {
+        const loc = `https://${CANONICAL_HOST}${url.pathname}${url.search}`;
+        res.writeHead(301, { Location: loc });
+        res.end();
+        return;
+      }
+    }
+    if (req.method === "GET" && url.pathname === "/health") {
+      json(res, 200, {
+        ok: true,
+        stripe: Boolean(process.env.STRIPE_SECRET_KEY),
+        mail: Boolean(process.env.MAILTRAP_TOKEN),
+        webhook: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
+        license: Boolean(licensePrivKey()),
+        testing: String(process.env.MAILTRAP_USE_TESTING || "").toLowerCase() === "true",
+        prices: { pro: dollars(amountFor("pro")), it: dollars(amountFor("it")) },
+      });
+      return;
+    }
+    if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+      html(res, 200, landing());
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/success") {
+      const sessionId = url.searchParams.get("session_id") || "";
+      if (!sessionIdOk(sessionId)) {
+        html(res, 200, successPage(null));
+        return;
+      }
+      const stripe = await stripeClient();
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      const result = await fulfillSession(session);
+      html(res, result.ok ? 200 : result.pending ? 202 : 500, successPage(result));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/cancel") {
+      html(res, 200, cancelPage());
+      return;
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/license/")) {
+      const sessionId = decodeURIComponent(url.pathname.slice("/license/".length));
+      const body = sessionIdOk(sessionId) ? readIssuedLicense(LICENSES, sessionId) : null;
+      if (!body) {
+        json(res, 404, { error: "license not issued yet" });
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="amem-license.json"',
+      });
+      res.end(body);
+      return;
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/buy/")) {
+      const tier = normalizeTier(url.pathname.slice("/buy/".length));
+      if (!tier) {
+        html(res, 404, htmlPage("amem", "<p>Unknown tier.</p>"));
+        return;
+      }
+      const session = await createCheckout(tier);
+      res.writeHead(303, { Location: session.url });
+      res.end();
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/webhook") {
+      await handleWebhook(req, res);
+      return;
+    }
+    json(res, 404, { error: "not found" });
+  } catch (error) {
+    console.error("[shop]", error);
+    json(res, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+if (!licensePrivKey()) {
+  console.warn("[shop] No AMEM_LICENSE_PRIVKEY or shop/.data/license.priv — run: amem license keys --out-dir shop/.data");
+}
+
+const server = createServer((req, res) => {
+  onRequest(req, res);
+});
+
+server.listen(PORT, HOST, () => {
+  console.log(`[shop] listening ${HOST}:${PORT} → ${PUBLIC_URL}`);
+  if (HOST === "127.0.0.1") {
+    console.log("[shop] webhook: stripe listen --live --forward-to localhost:8788/webhook");
+  }
+  if (!process.env.STRIPE_SECRET_KEY) console.warn("[shop] STRIPE_SECRET_KEY missing");
+  if (!process.env.MAILTRAP_TOKEN) console.warn("[shop] MAILTRAP_TOKEN missing");
+  if (!process.env.STRIPE_WEBHOOK_SECRET) {
+    console.warn("[shop] STRIPE_WEBHOOK_SECRET missing — set a live Stripe webhook for /webhook");
+  }
+});

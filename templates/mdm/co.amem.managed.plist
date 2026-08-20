@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>PayloadDisplayName</key>
+  <string>amem local memory (IT)</string>
+  <key>PayloadIdentifier</key>
+  <string>co.amem.managed</string>
+  <key>PayloadType</key>
+  <string>Configuration</string>
+  <key>PayloadUUID</key>
+  <string>a1e00000-0000-4000-8000-000000000001</string>
+  <key>PayloadVersion</key>
+  <integer>1</integer>
+  <key>PayloadOrganization</key>
+  <string>Your org — wrap this in MDM; amem never phones home</string>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key>
+      <string>com.apple.ManagedClient.preferences</string>
+      <key>PayloadIdentifier</key>
+      <string>co.amem.managed.policy</string>
+      <key>PayloadUUID</key>
+      <string>a1e00000-0000-4000-8000-000000000002</string>
+      <key>PayloadEnabled</key>
+      <true/>
+      <key>PayloadDisplayName</key>
+      <string>Deploy /etc/amem/policy.toml via your MDM file payload</string>
+    </dict>
+  </array>
+</dict>
+</plist>

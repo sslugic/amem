@@ -1,0 +1,16 @@
+{
+  "name": "amem-shop",
+  "private": true,
+  "type": "module",
+  "description": "Local seller process: Stripe Checkout + Mailtrap license delivery. Not published with amem.",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "mailtrap": "^3.4.0",
+    "stripe": "^18.5.0"
+  }
+}

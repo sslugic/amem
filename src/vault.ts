@@ -28,6 +28,7 @@ export type VaultStatus = {
     scheduled: boolean;
     schedulePath: string;
     last: BackupEntry | null;
+    recent: BackupEntry[];
     count: number;
   };
 };
@@ -64,6 +65,7 @@ export function vaultStatus(): VaultStatus {
       scheduled: isBackupScheduleInstalled(),
       schedulePath: isBackupScheduleInstalled() ? backupSchedulePath() : "",
       last: backups[0] ?? null,
+      recent: backups.slice(0, 8),
       count: backups.length,
     },
   };
