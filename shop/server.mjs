@@ -248,7 +248,7 @@ function installCommands() {
     </div>
   </div>
 </div>
-<p class="cmd-hint">Node 20+. Then <code>amem ui</code> — upgrade to Pro there when you want it. Until npm is live, clone from <a href="https://github.com/sslugic/amem">GitHub</a>.</p>`;
+<p class="cmd-hint">Node 20+. Then run <code>amem ui</code> — upgrade to Pro there when you want it. Source on <a href="https://github.com/sslugic/amem">GitHub</a>.</p>`;
 }
 
 function dollars(cents) {

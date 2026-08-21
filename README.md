@@ -68,7 +68,7 @@ Guarantees:
 ## Install the tool
 
 ```bash
-npx amem setup            # after the first npm publish (Node 20+)
+npx amem setup            # Node 20+
 # or from a clone while developing:
 git clone <this-repo-url> amem
 cd amem
@@ -78,7 +78,7 @@ amem setup
 amem status
 ```
 
-`npx amem setup` and `npm i -g amem` are the supported install once a version is on npm. CI runs `npm test` and `npm run pack:check`; tagging `v*` publishes if `NPM_TOKEN` is set. See [docs/npm-release.md](docs/npm-release.md). `better-sqlite3` uses its own prebuilds — no extra native step on common macOS/Linux + Node 20/22.
+`npx amem setup` and `npm i -g amem` are the supported install. CI runs `npm test` and `npm run pack:check`; tagging `v*` publishes if `NPM_TOKEN` is set. See [docs/npm-release.md](docs/npm-release.md). `better-sqlite3` uses its own prebuilds — no extra native step on common macOS/Linux + Node 20/22.
 
 ### Quick paths
 
