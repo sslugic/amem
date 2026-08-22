@@ -65,6 +65,11 @@ const RULES: RememberRule[] = [
     text: "Store repo or workspace facts with file anchors — not proprietary prompting strategy.",
   },
   {
+    id: "durable-kinds",
+    must: true,
+    text: "Prefer kinds constraint, gotcha, structure, howto, or owner. Use kind=session only for short-lived chat takeaways — session spam drowns retrieval.",
+  },
+  {
     id: "workspace",
     must: true,
     text: "Named workspaces are not git repos. Always pass the workspace slug on context and remember.",

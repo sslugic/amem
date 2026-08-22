@@ -1,7 +1,11 @@
+import { createOrbitViz } from "./orbit.js";
+
 const PLATFORM_STORAGE = "amem.selectedPlatforms";
 const WELCOME_STORAGE = "amem.welcome.dismissed";
 const BRAIN_SCOPE_STORAGE = "amem.brain.scope";
-const TABS = ["welcome", "setup", "brain", "stats"];
+const MEMORY_VIZ_STORAGE = "amem.memory.viz";
+const TABS = ["welcome", "setup", "dashboard", "brain", "analytics", "stats"];
+const VIZ_MODES = ["map", "blocks", "orbit"];
 const FALLBACK_CLIENTS = [
   { id: "cursor", label: "Cursor", hint: "Rules, skills, hooks" },
   { id: "claude", label: "Claude Code", hint: "Skills and settings hooks" },
@@ -79,9 +83,34 @@ function dismissWelcome() {
 
 function initialTab() {
   const fromUrl = initialUrl.get("tab");
-  if (!welcomeDismissed() && fromUrl !== "brain" && fromUrl !== "stats") return "welcome";
+  // Paid users: never force the sell card on every launch.
+  if (isPaidLicenseCached()) {
+    if (fromUrl === "stats") return "analytics";
+    if (TABS.includes(fromUrl)) return fromUrl;
+    return "dashboard";
+  }
+  if (!welcomeDismissed() && fromUrl !== "brain" && fromUrl !== "stats" && fromUrl !== "analytics" && fromUrl !== "dashboard") return "welcome";
+  if (fromUrl === "stats") return "analytics";
   if (TABS.includes(fromUrl)) return fromUrl;
   return "setup";
+}
+
+/** Best-effort sync read of last known license for first paint / initialTab (may be stale). */
+function isPaidLicenseCached() {
+  try {
+    const raw = localStorage.getItem("amem.license.tier");
+    return raw === "pro" || raw === "it";
+  } catch {
+    return false;
+  }
+}
+
+function persistLicenseTier(tier) {
+  try {
+    if (tier) localStorage.setItem("amem.license.tier", String(tier).toLowerCase());
+  } catch {
+    /* ignore */
+  }
 }
 
 function loadBrainAll() {
@@ -104,8 +133,76 @@ function persistBrainAll(all) {
   }
 }
 
+function loadMemoryViz() {
+  try {
+    const v = localStorage.getItem(MEMORY_VIZ_STORAGE);
+    if (v === "neural") return "orbit";
+    if (VIZ_MODES.includes(v)) return v;
+  } catch {
+    /* ignore */
+  }
+  return "map";
+}
+
+function persistMemoryViz(mode) {
+  try {
+    localStorage.setItem(MEMORY_VIZ_STORAGE, VIZ_MODES.includes(mode) ? mode : "map");
+  } catch {
+    /* ignore */
+  }
+}
+
+let orbitViz = null;
+
+function stopOrbitViz() {
+  if (orbitViz) {
+    orbitViz.stop();
+    orbitViz = null;
+  }
+}
+
+function stopAllViz() {
+  stopOrbitViz();
+}
+
+function setMemoryViz(mode) {
+  const next = VIZ_MODES.includes(mode) ? mode : "map";
+  state.memoryViz = next;
+  persistMemoryViz(next);
+  if (next !== "orbit") stopOrbitViz();
+  if (next !== "map" && (state.brainFilter === "drafts" || state.brainFilter === "review")) {
+    state.brainFilter = "files";
+    state.selectedNode = null;
+  }
+}
+
+function vizToggleHtml() {
+  const mode = state.memoryViz || "map";
+  return `<div class="viz-toggle" role="group" aria-label="Memory visualization">
+    <button type="button" data-viz="map" class="${mode === "map" ? "active" : ""}" title="Plain list of facts by file">Files</button>
+    <button type="button" data-viz="blocks" class="${mode === "blocks" ? "active" : ""}" title="Treemap: each block is a file, sized by facts">Blocks</button>
+    <button type="button" data-viz="orbit" class="${mode === "orbit" ? "active" : ""}" title="Hub and spoke by memory">Orbit</button>
+  </div>`;
+}
+
+function bindVizToggle(root = document) {
+  root.querySelectorAll(".viz-toggle [data-viz]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const mode = btn.dataset.viz;
+      if (!VIZ_MODES.includes(mode)) return;
+      setMemoryViz(mode);
+      renderBrain();
+    });
+  });
+}
+
 const state = {
-  tab: initialTab(),
+  tab: (() => {
+    const t = initialTab();
+    return t === "stats" ? "analytics" : t;
+  })(),
   repoId: initialUrl.get("repo") || null,
   path: initialUrl.get("path") || null,
   status: null,
@@ -121,8 +218,10 @@ const state = {
   selectedNode: null,
   activeEventId: null,
   brainFilter: "files",
+  draftSelected: {},
   selectedFile: null,
   brainSearch: "",
+  memoryViz: loadMemoryViz(),
   anim: 0,
   graphTick: 0,
   vault: null,
@@ -220,10 +319,16 @@ function writeUrlState() {
 }
 
 function setTab(tab) {
+  if (tab === "stats") tab = "analytics";
+  // Paid licenses: Plans is a sell page — don't open it; Setup still has Apply license.
+  if (tab === "welcome" && isPaidLicense()) tab = "dashboard";
   if (tab === "brain") {
     state.brainAll = true;
     persistBrainAll(true);
     state.brainError = null;
+    resetBrainView();
+  } else {
+    stopAllViz();
   }
   state.tab = tab;
   document.querySelectorAll("#tabs button[data-tab]").forEach((b) => {
@@ -231,6 +336,18 @@ function setTab(tab) {
   });
   writeUrlState();
   render();
+}
+
+// Memory is scoped by a sticky file/search/selection. Carrying those across a tab
+// switch makes Memory look like it only loaded part of the store.
+function resetBrainView() {
+  state.selectedFile = null;
+  state.selectedNode = null;
+  state.activeEventId = null;
+  state.draftSelected = {};
+  state.brainSearch = "";
+  const search = $("#brainSearch");
+  if (search) search.value = "";
 }
 
 function syncFocusFromStatus() {
@@ -290,11 +407,13 @@ async function refreshVault() {
   } catch {
     state.license = state.status?.license || null;
   }
+  paintPlansNavVisibility(isPaidLicense());
   try {
     state.embed = await apiUnscoped("/api/embed");
   } catch {
     state.embed = state.status?.embed || null;
   }
+  paintEmbedIndexBanner();
   try {
     state.shop = await apiUnscoped("/api/shop");
   } catch {
@@ -396,6 +515,7 @@ function emptyGraph(scope = "all") {
     flows: [],
     edges: [],
     drafts: [],
+    pendingDraftTotal: 0,
     recentClaimIds: [],
     recentEvents: [],
     activity: null,
@@ -693,6 +813,11 @@ function renderWelcome() {
   const main = $("#main");
   setMainMode("page");
   renderPageInsight();
+  if (isPaidLicense()) {
+    dismissWelcome();
+    setTab("dashboard");
+    return;
+  }
   const shop = state.shop || {};
   const proUrl = shop.proUrl || "https://getamem.com/buy/pro";
   const itUrl = shop.itUrl || "https://getamem.com/buy/it";
@@ -708,7 +833,7 @@ function renderWelcome() {
           <div class="welcome-logo" aria-hidden="true">a</div>
           <h1>amem</h1>
         </div>
-        <p>Local agent memory for Cursor and any MCP host. Facts stay in <code>~/.amem</code> on this machine. Pay only if you want extras — free already remembers, retrieves, and backs up.</p>
+        <p>Local agent memory for Cursor and any MCP host. Facts stay in <code>~/.amem</code> on this machine. Free already remembers; Pro = better local ranking + cleanup + rules sync. IT = richer attest for security/DevEx — not more memory.</p>
         <div class="plan-grid">
           <article class="plan-card ${tier === "free" ? "current" : ""}">
             <h2>Free</h2>
@@ -740,8 +865,8 @@ function renderWelcome() {
             <p class="plan-price">${esc(itPrice)} <span>once</span></p>
             <ul>
               <li>Everything in Pro</li>
-              <li>Richer <code>amem doctor --attest</code></li>
-              <li><code>amem it-pack</code> for local rollout</li>
+              <li>Richer <code>amem doctor --attest</code> (the exclusive)</li>
+              <li>Solo agents usually stop at Pro</li>
             </ul>
             ${
               shopOn
@@ -750,7 +875,7 @@ function renderWelcome() {
             }
           </article>
         </div>
-        ${isPaidLicense() ? proOnboardHtml("welcome") : licenseApplyHtml("welcome")}
+        ${licenseApplyHtml("welcome")}
         <p class="note welcome-note">After pay, apply <code>amem-license.json</code> above (or in Setup). Memory never uploads.</p>
       </div>
     </section>`;
@@ -761,9 +886,13 @@ function renderWelcome() {
   });
   wireLicenseApply("welcome", async () => {
     await refreshVault();
+    if (isPaidLicense()) {
+      dismissWelcome();
+      setTab("setup");
+      return;
+    }
     renderWelcome();
   });
-  wireProOnboard("welcome");
 }
 
 const SETUP_STEPS = [
@@ -923,7 +1052,17 @@ function workspaceBlockHtml(ctx) {
 
 function isPaidLicense() {
   const tier = String(state.license?.tier || state.status?.license?.tier || "free").toLowerCase();
-  return state.license?.valid !== false && (tier === "pro" || tier === "it");
+  const paid = state.license?.valid !== false && (tier === "pro" || tier === "it");
+  if (paid) persistLicenseTier(tier);
+  paintPlansNavVisibility(paid);
+  return paid;
+}
+
+/** Paid users don't need the Plans sell tab in the sidebar (Setup still has Apply license). */
+function paintPlansNavVisibility(paid) {
+  const btn = document.querySelector('#tabs button[data-tab="welcome"]');
+  if (!btn) return;
+  btn.classList.toggle("hidden", Boolean(paid));
 }
 
 function licenseApplyHtml(idPrefix = "lic") {
@@ -946,16 +1085,24 @@ function proOnboardHtml(idPrefix = "onboard") {
   if (!isPaidLicense()) return "";
   const backend = state.embed?.backend || "hash";
   const ngramOn = backend === "ngram" || backend === "external";
+  const done = loadProOnboardDone();
+  const hygieneDone = Boolean(done.hygiene) || Boolean(state.hygieneSchedule?.installed);
+  const rulesDone = Boolean(done.rules);
   const steps = [
-    { id: "embed", done: ngramOn, label: "Pro retrieval (n-gram)" },
-    { id: "reindex", done: ngramOn, label: "Reindex embeddings" },
-    { id: "hygiene", done: false, label: "Weekly hygiene schedule" },
-    { id: "rules", done: false, label: "Sync pinned → Cursor rules" },
+    { id: "embed", done: ngramOn || Boolean(done.embed), label: "Pro retrieval (n-gram)" },
+    { id: "reindex", done: ngramOn || Boolean(done.reindex), label: "Reindex embeddings" },
+    { id: "hygiene", done: hygieneDone, label: "Weekly hygiene schedule" },
+    { id: "rules", done: rulesDone, label: "Sync pinned → Cursor rules" },
   ];
+  const allDone = steps.every((s) => s.done);
   return `
     <div class="pro-onboard" id="${idPrefix}Onboard">
-      <h2>Turn on Pro</h2>
-      <p class="note">Paying should change defaults immediately — enable richer retrieval, then clean and sync.</p>
+      <h2>${allDone ? "Pro is on" : "Turn on Pro"}</h2>
+      <p class="note">${
+        allDone
+          ? "Checklist complete on this machine. Open Memory anytime for Compare retrieval or Cleanup."
+          : "Paying should change defaults immediately — enable richer retrieval, then clean and sync."
+      }</p>
       <ol class="pro-onboard-steps">
         ${steps
           .map(
@@ -964,20 +1111,44 @@ function proOnboardHtml(idPrefix = "onboard") {
           )
           .join("")}
       </ol>
-      <label class="autostart brain-auto" style="margin:0.5rem 0 0.75rem;display:flex">
+      ${
+        allDone
+          ? ""
+          : `<label class="autostart brain-auto" style="margin:0.5rem 0 0.75rem;display:flex">
         <input type="checkbox" id="${idPrefix}HygieneSched" checked /> Also schedule weekly hygiene (Sunday)
       </label>
       <div class="actions">
         <button class="btn" type="button" id="${idPrefix}EnablePro">Turn on Pro retrieval</button>
-        <button class="btn secondary" type="button" id="${idPrefix}OpenReview">Open Memory Review</button>
+        <button class="btn secondary" type="button" id="${idPrefix}OpenReview">Open Cleanup</button>
         ${
           state.license?.features?.includes("rules_sync") && !state.brainAll
             ? `<button class="btn secondary" type="button" id="${idPrefix}RulesSync">Sync pinned rules</button>`
             : ""
         }
-      </div>
+      </div>`
+      }
       <p class="note" id="${idPrefix}OnboardMsg"></p>
     </div>`;
+}
+
+const PRO_ONBOARD_STORAGE = "amem.proOnboard.done";
+
+function loadProOnboardDone() {
+  try {
+    return JSON.parse(localStorage.getItem(PRO_ONBOARD_STORAGE) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function markProOnboardDone(keys) {
+  const cur = loadProOnboardDone();
+  for (const k of keys) cur[k] = true;
+  try {
+    localStorage.setItem(PRO_ONBOARD_STORAGE, JSON.stringify(cur));
+  } catch {
+    /* ignore */
+  }
 }
 
 async function applyLicenseFromUi(text, msgEl) {
@@ -1038,6 +1209,7 @@ function wireProOnboard(idPrefix) {
       });
       if (msg) msg.textContent = "Reindexing…";
       await apiUnscoped("/api/embed/reindex", { method: "POST", body: "{}" });
+      markProOnboardDone(["embed", "reindex"]);
       const schedOn = Boolean($(`#${idPrefix}HygieneSched`)?.checked);
       if (schedOn) {
         if (msg) msg.textContent = "Scheduling weekly hygiene…";
@@ -1046,6 +1218,7 @@ function wireProOnboard(idPrefix) {
             method: "POST",
             body: JSON.stringify({ hour: 4 }),
           });
+          markProOnboardDone(["hygiene"]);
         } catch (schedErr) {
           if (msg) msg.textContent = `Pro retrieval is on. Hygiene schedule failed: ${schedErr?.message || schedErr}`;
           if (state.tab === "welcome") renderWelcome();
@@ -1071,7 +1244,9 @@ function wireProOnboard(idPrefix) {
   $(`#${idPrefix}RulesSync`)?.addEventListener("click", async () => {
     try {
       const result = await api("/api/rules/sync", { method: "POST", body: "{}" });
+      markProOnboardDone(["rules"]);
       if (msg) msg.textContent = result?.path ? `Wrote ${result.path}` : "Rules synced.";
+      if (state.tab === "setup") renderSetup();
     } catch (e) {
       if (msg) msg.textContent = e?.message || String(e);
     }
@@ -1088,44 +1263,67 @@ function shopBuyCardHtml() {
   const tier = String(state.license?.tier || state.status?.license?.tier || "free").toLowerCase();
   const proOwned = tier === "pro" || tier === "it";
   const itOwned = tier === "it";
+  if (proOwned) {
+    return `
+    <div class="setup-shop">
+      <div class="setup-shop-head">
+        <div>
+          <h2>${itOwned ? "IT license" : "Pro license"}</h2>
+          <p class="note">Extras unlocked on this machine. ${
+            itOwned
+              ? "IT exclusive: richer doctor --attest."
+              : "Upgrade to IT only if you need richer host attestation."
+          }</p>
+        </div>
+        ${itOwned ? "" : `<a class="btn secondary small" href="${esc(itUrl)}" target="_blank" rel="noopener">IT · ${esc(itPrice)}</a>`}
+      </div>
+      ${proOnboardHtml("setup")}
+      ${itPackCardHtml()}
+    </div>`;
+  }
   return `
     <div class="setup-shop">
       <div class="setup-shop-head">
         <div>
           <h2>Signed license</h2>
-          <p class="note">Pay on getamem.com, then apply the file here — no CLI required. Memory never uploads.</p>
+          <p class="note">Pay on getamem.com, then apply the file here — no CLI required. Memory never uploads. <a href="https://getamem.com/pricing" target="_blank" rel="noopener">Full matrix</a></p>
         </div>
         <button class="btn secondary small" id="seePlans" type="button">What's included</button>
       </div>
       <div class="setup-shop-grid">
-        <article class="setup-buy ${proOwned ? "current" : ""}">
-          <div class="setup-buy-top">
-            <strong>Pro</strong>
-            ${proOwned ? `<span class="pill ok">Yours</span>` : ""}
-          </div>
+        <article class="setup-buy">
+          <div class="setup-buy-top"><strong>Pro</strong></div>
           <p class="setup-buy-price">${esc(proPrice)} <span>once</span></p>
-          <p class="note">Richer embedder, hygiene, pin → Cursor rules.</p>
-          ${
-            proOwned
-              ? `<span class="btn secondary setup-buy-owned">You have Pro</span>`
-              : `<a class="btn" href="${esc(proUrl)}" target="_blank" rel="noopener">Buy Pro</a>`
-          }
+          <p class="note">Better local ranking + cleanup + rules sync.</p>
+          <a class="btn" href="${esc(proUrl)}" target="_blank" rel="noopener">Buy Pro</a>
         </article>
-        <article class="setup-buy ${itOwned ? "current" : ""}">
-          <div class="setup-buy-top">
-            <strong>IT</strong>
-            ${itOwned ? `<span class="pill ok">Yours</span>` : ""}
-          </div>
+        <article class="setup-buy">
+          <div class="setup-buy-top"><strong>IT</strong></div>
           <p class="setup-buy-price">${esc(itPrice)} <span>once</span></p>
-          <p class="note">Everything in Pro, plus local IT pack and attest.</p>
-          ${
-            itOwned
-              ? `<span class="btn secondary setup-buy-owned">You have IT</span>`
-              : `<a class="btn secondary" href="${esc(itUrl)}" target="_blank" rel="noopener">Buy IT</a>`
-          }
+          <p class="note">Pro + richer attest packet for security tickets.</p>
+          <a class="btn secondary" href="${esc(itUrl)}" target="_blank" rel="noopener">Buy IT</a>
         </article>
       </div>
-      ${proOwned ? proOnboardHtml("setup") : licenseApplyHtml("setup")}
+      ${licenseApplyHtml("setup")}
+      ${itPackCardHtml()}
+    </div>`;
+}
+
+function itPackCardHtml() {
+  const itOwned = String(state.license?.tier || "").toLowerCase() === "it";
+  return `
+    <div class="it-pack-card" id="itPackCard">
+      <h2>Security pack (local)</h2>
+      <p class="note">Writes policy, MDM plist, SBOM, and offboard script under <code>~/.amem/it-pack</code>. Available on Free — ${
+        itOwned
+          ? "your IT license stamps richer attest when you run doctor."
+          : "IT’s exclusive is the richer <code>amem doctor --attest</code> packet, not this folder."
+      }</p>
+      <div class="actions">
+        <button class="btn secondary" type="button" id="genItPack">Generate security pack</button>
+        ${itOwned ? `<button class="btn secondary" type="button" id="runAttest">Show attest summary</button>` : ""}
+      </div>
+      <pre class="it-pack-out hidden" id="itPackOut"></pre>
     </div>`;
 }
 
@@ -1192,8 +1390,11 @@ function setupStepperHtml(current) {
 }
 
 function setupDoneHtml(ctx) {
-  const { gitBound, workspaces, serviceOn } = ctx;
+  const { gitBound, workspaces, serviceOn, focused } = ctx;
   const clients = selectedClientLabels();
+  const mcpHint = focused?.slug
+    ? `http://127.0.0.1:7843/mcp?workspace=${focused.slug}`
+    : "http://127.0.0.1:7843/mcp?workspace=personal";
   const rows = [
     {
       title: "Clients",
@@ -1241,6 +1442,15 @@ function setupDoneHtml(ctx) {
             )
             .join("")}
         </ol>
+        <div class="setup-verify" id="setupVerify">
+          <strong>Verify MCP context</strong>
+          <p class="note">Green when a sample query returns at least one claim from this machine.</p>
+          <div class="add-repo-row">
+            <button class="btn secondary small" type="button" id="probeContext">Test amem_context</button>
+            <code class="mcp-url-chip">${esc(mcpHint)}</code>
+          </div>
+          <p class="note" id="probeContextMsg">Not tested yet.</p>
+        </div>
         <div class="actions">
           <button class="btn" id="openBrain" type="button">Open memory</button>
           <button class="btn secondary" id="editSetup" type="button">Change setup</button>
@@ -1469,6 +1679,8 @@ function bindSetupEvents(main, ctx) {
     renderSetup();
   });
   wireProOnboard("setup");
+  wireItPackCard();
+  $("#probeContext")?.addEventListener("click", () => probeSetupContext());
   $("#copyRecipe")?.addEventListener("click", async () => {
     const text = state.recipe?.paste || $("#recipePaste")?.textContent || "";
     try {
@@ -1492,6 +1704,72 @@ function bindSetupEvents(main, ctx) {
       const id = el.dataset.focusWs;
       if (id && id !== focused?.id) focusRepo({ repoId: id, tab: "setup" });
     });
+  });
+}
+
+async function probeSetupContext() {
+  const msg = $("#probeContextMsg");
+  const box = $("#setupVerify");
+  if (msg) msg.textContent = "Calling /api/context…";
+  try {
+    const packet = await api("/api/context", {
+      method: "POST",
+      body: JSON.stringify({ query: "what should I know about this project" }),
+    });
+    const n = Array.isArray(packet?.claims) ? packet.claims.length : 0;
+    if (n > 0) {
+      if (box) box.classList.add("ok");
+      if (msg) {
+        msg.textContent = `OK — ${n} claim${n === 1 ? "" : "s"} returned. Paste the MCP URL into your host and call amem_context the same way.`;
+      }
+      noteContextHit();
+    } else {
+      if (box) box.classList.remove("ok");
+      if (msg) {
+        msg.textContent =
+          "Reachable, but no claims yet. Add a fact in Memory or run bootstrap, then retry.";
+      }
+    }
+  } catch (e) {
+    if (box) box.classList.remove("ok");
+    if (msg) msg.textContent = e?.message || String(e);
+  }
+}
+
+function wireItPackCard() {
+  $("#genItPack")?.addEventListener("click", async () => {
+    const out = $("#itPackOut");
+    try {
+      const result = await apiUnscoped("/api/it-pack", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (out) {
+        out.classList.remove("hidden");
+        out.textContent = `Wrote ${result.files?.length || 0} files → ${result.dir}\n\nChecklist:\n1. Deploy policy.toml as /etc/amem/policy.toml\n2. Attach sbom.json + amem doctor --attest --json\n3. Offboard with mdm-offboard.sh when needed`;
+      }
+    } catch (e) {
+      if (out) {
+        out.classList.remove("hidden");
+        out.textContent = e?.message || String(e);
+      }
+    }
+  });
+  $("#runAttest")?.addEventListener("click", async () => {
+    const out = $("#itPackOut");
+    try {
+      const report = await apiUnscoped("/api/attest");
+      if (out) {
+        out.classList.remove("hidden");
+        const sku = report.sku ? JSON.stringify(report.sku, null, 2) : "(no IT sku — Pro/Free)";
+        out.textContent = `license: ${report.license?.tier || "?"}\nissues: ${(report.issues || []).length}\n\nsku:\n${sku}`;
+      }
+    } catch (e) {
+      if (out) {
+        out.classList.remove("hidden");
+        out.textContent = e?.message || String(e);
+      }
+    }
   });
 }
 
@@ -1586,7 +1864,7 @@ function visibleClaims() {
       if (!hay.includes(q)) return false;
     }
     if (filter === "durable") return !isSessionClaim(c);
-    if (filter === "files") return !isSessionClaim(c);
+    if (filter === "files") return true;
     if (filter === "chats") return isSessionClaim(c);
     if (filter === "used") return hot.has(c.id);
     if (filter === "pinned") return Number(c.pinned || 0) > 0;
@@ -1595,13 +1873,17 @@ function visibleClaims() {
   });
 }
 
+// Across all memories the same path exists in several repos, so the group key
+// carries the memory. Anything that selects a file must build the key this way.
+function fileGroupKey(claim, file) {
+  return state.brainAll ? `${memoryLabel(claim.repo_id)} · ${file}` : file;
+}
+
 function fileGroups(claims) {
   const groups = new Map();
   for (const c of claims) {
     const anchors = claimAnchors(c);
-    const keys = (anchors.length ? anchors : ["(no file yet)"]).map((file) =>
-      state.brainAll ? `${memoryLabel(c.repo_id)} · ${file}` : file,
-    );
+    const keys = (anchors.length ? anchors : ["(no file yet)"]).map((file) => fileGroupKey(c, file));
     for (const key of keys) {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(c);
@@ -1680,15 +1962,18 @@ function renderBrainRight() {
   const hits = events.filter((e) => eventKindOf(e) === "local_hit").length;
   const files = new Set((g.claims || []).flatMap(claimAnchors)).size;
   const drafts = (g.drafts || []).filter((d) => d.status === "pending");
+  const pendingTotal = Number(g.pendingDraftTotal ?? drafts.length);
+  const pinned = (g.claims || []).filter((c) => Number(c.pinned || 0) > 0).length;
   const drawerOpen = Boolean(state.selectedNode);
   el.innerHTML = `
-    <h2>Fact panels</h2>
+    <h2>What amem knows</h2>
     <div class="fact-kpis">
       <div class="fact-kpi"><b>${g.claims?.length ?? 0}</b><span>Facts</span></div>
-      <div class="fact-kpi"><b>${drafts.length}</b><span>Drafts</span></div>
-      <div class="fact-kpi"><b>${files}</b><span>Files</span></div>
+      <div class="fact-kpi"><b>${pendingTotal}</b><span>Waiting</span></div>
+      <div class="fact-kpi"><b>${pinned}</b><span>Pinned</span></div>
       <div class="fact-kpi"><b>${hits}</b><span>Hits</span></div>
     </div>
+    <p class="note brain-guide"><b>Pin:</b> Memory → <b>Files</b> → click <em>☆ Pin</em> on a fact row (or in this panel after clicking a file). Pinned facts rank higher.</p>
     ${state.brainError ? `<p class="note">${esc(brainErrorNote())}</p>` : ""}
     <div class="right-section">
       <aside class="brain-feed" id="brainFeed"></aside>
@@ -1824,17 +2109,23 @@ async function loadSoftPaywall() {
       return;
     }
     const noise = (preview.staleCount || 0) + (preview.duplicateCount || 0);
+    const sessions = Number(preview.sessionCount || 0);
+    const ratio = Number(preview.sessionRatio || 0);
+    const sessionHeavy = sessions >= 25 && ratio >= 0.55;
     const shop = state.shop || {};
     const proUrl = shop.proUrl || "https://getamem.com/buy/pro";
     el.classList.remove("hidden");
+    const why = sessionHeavy
+      ? `${preview.active} facts · <b>${Math.round(ratio * 100)}%</b> are short-lived <code>session</code> kinds (~${sessions}). Free preview → Pro applies Cleanup to archive unused sessions.`
+      : `${preview.active} facts · ~${noise} unused/duplicates → about <b>${preview.afterCleanup}</b> after cleanup. Free still works — this is optional.`;
     el.innerHTML = `
       <div class="soft-paywall-inner">
         <div>
-          <strong>Pro can clean this</strong>
-          <p class="note" style="margin:0.25rem 0 0">${preview.active} facts · ~${noise} unused/duplicates → about <b>${preview.afterCleanup}</b> after cleanup. Free still works — this is optional.</p>
+          <strong>${sessionHeavy ? "Session noise is crowding retrieval" : "Pro can clean this"}</strong>
+          <p class="note" style="margin:0.25rem 0 0">${why}</p>
         </div>
         <div class="soft-paywall-actions">
-          <a class="btn small" href="${esc(proUrl)}" target="_blank" rel="noopener">Buy Pro</a>
+          <a class="btn small" href="${esc(proUrl)}" target="_blank" rel="noopener">Buy Pro · Apply cleanup</a>
           <button class="btn secondary small" type="button" id="softPaywallShowdown">Compare retrieval</button>
           <button class="btn secondary small" type="button" id="softPaywallDismiss">Dismiss</button>
         </div>
@@ -1844,9 +2135,78 @@ async function loadSoftPaywall() {
       state.showdownOpen = true;
       renderBrain();
     });
+    maybeNudgeShowdown();
   } catch {
     el.classList.add("hidden");
   }
+}
+
+function maybeNudgeShowdown() {
+  if (isPaidLicense() || state.showdownOpen) return;
+  try {
+    if (sessionStorage.getItem("amem.showdown.nudged") === "1") return;
+    const hits = Number(sessionStorage.getItem("amem.context.hits") || "0");
+    if (hits < 3) return;
+    sessionStorage.setItem("amem.showdown.nudged", "1");
+    state.showdownOpen = true;
+  } catch {
+    /* ignore */
+  }
+}
+
+function noteContextHit() {
+  try {
+    const n = Number(sessionStorage.getItem("amem.context.hits") || "0") + 1;
+    sessionStorage.setItem("amem.context.hits", String(n));
+    if (n === 3 || n === 10) maybeNudgeShowdown();
+  } catch {
+    /* ignore */
+  }
+}
+
+function paintEmbedIndexBanner() {
+  const el = $("#embedIndexBanner");
+  if (!el) return;
+  const health = state.embed?.index;
+  const stale = Number(health?.stale || 0);
+  if (!health || stale <= 0) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  const from = (health.strandedBy || [])
+    .map((s) => `${s.backend}/${s.dim}`)
+    .join(", ");
+  el.classList.remove("hidden");
+  el.innerHTML = `
+    <div class="embed-index-banner-inner">
+      <div>
+        <strong>Embeddings need a reindex</strong>
+        <p class="note" style="margin:0.25rem 0 0">${stale} of ${health.total} facts are indexed as ${esc(from || "another backend")} but active retrieval is <b>${esc(health.active)}/${health.dim}</b>. Semantic search skips them until you reindex.</p>
+      </div>
+      <div class="embed-index-banner-actions">
+        <button class="btn small" type="button" id="embedIndexReindex">Reindex now</button>
+      </div>
+    </div>`;
+  $("#embedIndexReindex")?.addEventListener("click", async () => {
+    const btn = $("#embedIndexReindex");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Reindexing…";
+    }
+    try {
+      await apiUnscoped("/api/embed/reindex", { method: "POST", body: "{}" });
+      state.embed = await apiUnscoped("/api/embed");
+      paintEmbedIndexBanner();
+    } catch (e) {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Reindex now";
+      }
+      el.querySelector(".note") &&
+        (el.querySelector(".note").textContent = e?.message || String(e));
+    }
+  });
 }
 
 function renderBrain() {
@@ -1854,20 +2214,32 @@ function renderBrain() {
   state.graphTick += 1;
   setMainMode("brain");
   const drafts = (state.graph?.drafts || []).filter((d) => d.status === "pending");
+  const pendingTotal = Number(state.graph?.pendingDraftTotal ?? drafts.length);
+  const totalClaims = (state.graph?.claims || []).length;
   const showdownOpen = Boolean(state.showdownOpen);
+  const filterHelp = {
+    files: "Everything stored, grouped by file — what amem can inject instead of searching.",
+    drafts: "Session captures waiting for you. Approve good ones; dismiss junk in bulk.",
+    chats: "Takeaways from chats (session facts).",
+    used: "Facts that were actually injected into a recent Cursor/Claude query.",
+    pinned: "Pinned facts rank higher in retrieval and can sync to Cursor rules (Pro).",
+    review: "Pro cleanup: unused facts and near-duplicates.",
+  }[state.brainFilter] || "";
 
   main.innerHTML = `
     <div class="brain-v2">
       <div class="brain-chrome">
-        <div class="brain-filters" id="brainFilters">
-          <button type="button" data-filter="files" class="${state.brainFilter === "files" ? "active" : ""}">By file</button>
-          <button type="button" data-filter="drafts" class="${state.brainFilter === "drafts" ? "active" : ""}">Drafts${drafts.length ? ` (${drafts.length})` : ""}</button>
-          <button type="button" data-filter="chats" class="${state.brainFilter === "chats" ? "active" : ""}">Chats</button>
-          <button type="button" data-filter="used" class="${state.brainFilter === "used" ? "active" : ""}">Used</button>
-          <button type="button" data-filter="pinned" class="${state.brainFilter === "pinned" ? "active" : ""}">Pinned</button>
-          <button type="button" data-filter="review" class="${state.brainFilter === "review" ? "active" : ""}">Review</button>
+        <div class="brain-filters" id="brainFilters" role="tablist" aria-label="Memory views">
+          <button type="button" data-filter="files" class="${state.brainFilter === "files" ? "active" : ""}" title="Every stored fact, grouped by file">Files${totalClaims ? ` (${totalClaims})` : ""}</button>
+          <button type="button" data-filter="drafts" class="${state.brainFilter === "drafts" ? "active" : ""}" title="Approve session captures">Approve${pendingTotal ? ` (${pendingTotal})` : ""}</button>
+          <button type="button" data-filter="chats" class="${state.brainFilter === "chats" ? "active" : ""}" title="Chat takeaways">Chats</button>
+          <button type="button" data-filter="used" class="${state.brainFilter === "used" ? "active" : ""}" title="Recently injected">Injected</button>
+          <button type="button" data-filter="pinned" class="${state.brainFilter === "pinned" ? "active" : ""}" title="Pinned / boosted facts">Pinned</button>
+          <button type="button" data-filter="review" class="${state.brainFilter === "review" ? "active" : ""}" title="Unused & duplicates">Cleanup</button>
         </div>
+        ${vizToggleHtml()}
       </div>
+      <p class="brain-filter-help">${esc(filterHelp)}</p>
       <div id="softPaywall" class="soft-paywall hidden"></div>
       <div class="showdown-panel ${showdownOpen ? "open" : "closed"}" id="showdownPanel">
         <div class="showdown-run">
@@ -1900,9 +2272,11 @@ function renderBrain() {
       state.brainFilter = btn.dataset.filter;
       state.selectedNode = null;
       state.selectedFile = null;
+      if (state.brainFilter !== "drafts") state.draftSelected = {};
       renderBrain();
     });
   });
+  bindVizToggle(main);
   try {
     paintBrain();
   } catch (e) {
@@ -1926,13 +2300,13 @@ function renderBrainFeed() {
   const draftBlock =
     drafts.length === 0
       ? ""
-      : `<h2>Pending drafts</h2>${drafts
+      : `<h2>Waiting for approval</h2>${drafts
           .map((d) => {
             const active = state.selectedNode?.type === "draft" && state.selectedNode.id === d.id;
             return `<button type="button" class="feed-item draft ${active ? "active" : ""}" data-draft="${esc(d.id)}">
               <div class="feed-top"><span>${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))}</span><span class="pill ${d.quality?.label === "high" ? "" : "warn"}">${esc(d.quality?.label || "approve?")}${d.conflicts?.length ? " · conflict" : ""}</span></div>
               <div class="feed-q">${esc(d.title || d.id)}</div>
-              <div class="feed-meta">${state.brainAll ? `${esc(memoryLabel(d.repo_id))} · ` : ""}${d.quality ? `Confidence ${d.quality.score}` : "Session capture"} — apply to store, or dismiss</div>
+              <div class="feed-meta">${state.brainAll ? `${esc(memoryLabel(d.repo_id))} · ` : ""}${d.quality ? `Confidence ${d.quality.score}` : "Session capture"} — open Approve tab for bulk actions</div>
             </button>`;
           })
           .join("")}`;
@@ -1994,6 +2368,38 @@ function coverageGroups() {
   return fileGroups(state.graph?.claims || []);
 }
 
+function orbitMemoryLabel(repoId) {
+  const r = listedRepos().find((x) => x.id === repoId);
+  if (!r) return "unknown";
+  if (isPersonal(r)) return "Personal";
+  return isWorkspace(r) ? `${r.repo_name} (ws)` : r.repo_name;
+}
+
+// Across all memories the ring must be one node per memory: every repo anchors most
+// of its facts to README.md, so grouping on the raw path merges five repos into one
+// node and hides the smaller ones entirely.
+function orbitClaims() {
+  const base = visibleClaims().length ? visibleClaims() : state.graph?.claims || [];
+  return base.map((c) => {
+    const file = claimAnchors(c)[0] || "(no file yet)";
+    return state.brainAll
+      ? {
+          ...c,
+          _group: c.repo_id,
+          _groupLabel: orbitMemoryLabel(c.repo_id),
+          _sub: fileGroupKey(c, file),
+          _subLabel: fileLabel(file),
+        }
+      : { ...c, _group: file, _sub: null };
+  });
+}
+
+function orbitFocusMemory() {
+  if (state.selectedNode?.type === "memory") return state.selectedNode.id;
+  if (state.selectedNode?.type === "claim") return state.selectedNode.detail?.repo_id || null;
+  return null;
+}
+
 function matchingFiles() {
   return new Set(fileGroups(visibleClaims()).map((g) => g.file));
 }
@@ -2050,8 +2456,10 @@ function renderCoverageMap() {
   if (!host) return;
   const legendH = 28;
   const pad = 2;
-  const w = Math.max(160, Math.floor(host.clientWidth));
-  const h = Math.max(140, Math.floor(host.clientHeight - legendH));
+  // Clamp: an unbounded host makes the treemap taller than the viewport, so only
+  // the single largest tile is ever on screen.
+  const w = Math.min(2400, Math.max(160, Math.floor(host.clientWidth)));
+  const h = Math.min(1400, Math.max(140, Math.floor(host.clientHeight - legendH)));
   const groups = coverageGroups();
   const matching = matchingFiles();
   const hot = new Set(state.graph?.recentClaimIds || []);
@@ -2155,14 +2563,18 @@ function renderBrainMap() {
   const el = $("#brainMap");
   if (!el) return;
 
+  if (state.brainFilter === "review" || state.brainFilter === "drafts") {
+    stopAllViz();
+  }
+
   if (state.brainFilter === "review") {
-    el.innerHTML = `<div class="brain-empty">Loading review inbox…</div>`;
+    el.innerHTML = `<div class="brain-empty">Loading cleanup inbox…</div>`;
     api("/api/hygiene")
       .then((h) => {
         const stale = h.stale || [];
         const dups = h.duplicates || [];
         if (!stale.length && !dups.length) {
-          el.innerHTML = `<div class="brain-empty">Nothing to review. Unused facts (90 days) and near-duplicates show up here on Pro/IT.${
+          el.innerHTML = `<div class="brain-empty">Nothing to clean up. Unused facts (90 days) and near-duplicates show up here on Pro/IT.${
             h.schedule?.installed ? " Weekly hygiene is scheduled." : ""
           }</div>`;
           return;
@@ -2259,38 +2671,129 @@ function renderBrainMap() {
 
   if (state.brainFilter === "drafts") {
     const drafts = (state.graph?.drafts || []).filter((d) => d.status === "pending");
+    const pendingTotal = Number(state.graph?.pendingDraftTotal ?? drafts.length);
     const selectedId = state.selectedNode?.type === "draft" ? state.selectedNode.id : null;
-    el.innerHTML =
-      drafts.length === 0
-        ? `<div class="brain-empty">No pending drafts. When a Cursor session ends, amem will queue a capture here for you to approve.</div>`
-        : `<div class="draft-toolbar"><button class="btn secondary small" type="button" id="rejectNoisy">Reject noisy drafts</button></div><div class="draft-grid">${drafts
-            .map((d) => {
-              return `<button type="button" class="draft-card ${selectedId === d.id ? "selected" : ""}" data-draft-map="${esc(d.id)}">
+    const selectedIds = Object.keys(state.draftSelected || {}).filter((id) => state.draftSelected[id]);
+    const counts = { high: 0, medium: 0, low: 0, reject: 0 };
+    for (const d of drafts) {
+      const label = d.quality?.label || "medium";
+      if (counts[label] != null) counts[label] += 1;
+    }
+    const highN = counts.high;
+    const junkN = counts.low + counts.reject;
+
+    if (drafts.length === 0) {
+      el.innerHTML = `<div class="brain-empty">
+        <strong>Nothing waiting</strong>
+        <p>When a Cursor session ends, amem queues a short capture here. Approve to store it as a fact, or dismiss.</p>
+        <p class="note">Tip: turn on <b>Auto-approve</b> in the top bar if you trust most captures.</p>
+      </div>`;
+      return;
+    }
+
+    el.innerHTML = `
+      <div class="draft-inbox">
+        <div class="draft-inbox-head">
+          <div>
+            <h2>Approve captures <span>${pendingTotal} waiting${pendingTotal > drafts.length ? ` · showing ${drafts.length}` : ""}</span></h2>
+            <p class="note">These are proposed facts from sessions — not stored until you approve. Use bulk actions so you don’t open 400 one-by-one.</p>
+          </div>
+          <div class="draft-quality-pills">
+            <span class="pill ok">${highN} high</span>
+            <span class="pill">${counts.medium} medium</span>
+            <span class="pill warn">${junkN} low/junk</span>
+          </div>
+        </div>
+        <div class="draft-toolbar">
+          <button class="btn small" type="button" id="approveHigh" ${highN ? "" : "disabled"}>Approve all high (${highN})</button>
+          <button class="btn secondary small" type="button" id="dismissJunk" ${junkN ? "" : "disabled"}>Dismiss junk (${junkN})</button>
+          <button class="btn secondary small" type="button" id="dismissAllDrafts">Dismiss all ${pendingTotal}</button>
+          <span class="draft-sel-meta">${selectedIds.length ? `${selectedIds.length} selected` : "or select rows"}</span>
+          <button class="btn secondary small" type="button" id="applySelected" ${selectedIds.length ? "" : "disabled"}>Approve selected</button>
+          <button class="btn secondary small" type="button" id="dismissSelected" ${selectedIds.length ? "" : "disabled"}>Dismiss selected</button>
+          <button class="btn secondary small" type="button" id="selectAllDrafts">Select all shown</button>
+          <button class="btn secondary small" type="button" id="clearDraftSel" ${selectedIds.length ? "" : "disabled"}>Clear</button>
+        </div>
+        <div class="draft-grid">${drafts
+          .map((d) => {
+            const checked = Boolean(state.draftSelected?.[d.id]);
+            const q = d.quality?.label || "unscored";
+            return `<div class="draft-card ${selectedId === d.id ? "selected" : ""}" data-draft-map="${esc(d.id)}">
+              <label class="draft-check" title="Select for bulk">
+                <input type="checkbox" data-draft-check="${esc(d.id)}" ${checked ? "checked" : ""} />
+              </label>
+              <button type="button" class="draft-card-main" data-draft-open="${esc(d.id)}">
                 <strong>${esc(d.title || d.id)}</strong>
-                <span class="meta">${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))} · ${esc(d.quality?.label || "unscored")}${d.quality ? ` ${d.quality.score}` : ""}${d.conflicts?.length ? " · conflict" : ""}</span>
-              </button>`;
-            })
-            .join("")}</div>`;
-    el.querySelectorAll("[data-draft-map]").forEach((btn) => {
+                <span class="meta">${esc(d.platform || "agent")} · ${esc(formatWhen(d.created_at))} · <em class="q-${esc(q)}">${esc(q)}${d.quality ? ` ${d.quality.score}` : ""}</em>${d.conflicts?.length ? " · conflict" : ""}</span>
+              </button>
+            </div>`;
+          })
+          .join("")}</div>
+      </div>`;
+
+    const runBulk = async (action, extra = {}) => {
+      try {
+        const result = await api("/api/drafts/bulk", {
+          method: "POST",
+          body: JSON.stringify({
+            action,
+            scope: state.brainAll ? "all" : undefined,
+            ...extra,
+          }),
+        });
+        state.draftSelected = {};
+        state.selectedNode = null;
+        await refreshGraph();
+        renderBrain();
+        const parts = [];
+        if (result.appliedCount) parts.push(`approved ${result.appliedCount}`);
+        if (result.dismissedCount) parts.push(`dismissed ${result.dismissedCount}`);
+        if (result.skipped?.length) parts.push(`skipped ${result.skipped.length}`);
+        if (parts.length) alert(parts.join(" · "));
+      } catch (err) {
+        alert(err.message);
+      }
+    };
+
+    $("#approveHigh")?.addEventListener("click", () => runBulk("approve_high"));
+    $("#dismissJunk")?.addEventListener("click", () => runBulk("dismiss_junk"));
+    $("#dismissAllDrafts")?.addEventListener("click", () => {
+      if (!confirm(`Dismiss all ${pendingTotal} waiting captures? This cannot be undone.`)) return;
+      runBulk("dismiss_all", { confirm: true });
+    });
+    $("#applySelected")?.addEventListener("click", () => {
+      const ids = Object.keys(state.draftSelected || {}).filter((id) => state.draftSelected[id]);
+      if (!ids.length) return;
+      runBulk("apply_ids", { ids, resolve: "keep" });
+    });
+    $("#dismissSelected")?.addEventListener("click", () => {
+      const ids = Object.keys(state.draftSelected || {}).filter((id) => state.draftSelected[id]);
+      if (!ids.length) return;
+      runBulk("dismiss_ids", { ids });
+    });
+    $("#selectAllDrafts")?.addEventListener("click", () => {
+      state.draftSelected = Object.fromEntries(drafts.map((d) => [d.id, true]));
+      renderBrain();
+    });
+    $("#clearDraftSel")?.addEventListener("click", () => {
+      state.draftSelected = {};
+      renderBrain();
+    });
+    el.querySelectorAll("[data-draft-check]").forEach((box) => {
+      box.addEventListener("click", (e) => e.stopPropagation());
+      box.addEventListener("change", () => {
+        const id = box.dataset.draftCheck;
+        state.draftSelected = { ...(state.draftSelected || {}), [id]: box.checked };
+        renderBrain();
+      });
+    });
+    el.querySelectorAll("[data-draft-open]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const draft = (state.graph.drafts || []).find((x) => x.id === btn.dataset.draftMap);
+        const draft = (state.graph.drafts || []).find((x) => x.id === btn.dataset.draftOpen);
         if (!draft) return;
         state.selectedNode = { type: "draft", id: draft.id, detail: draft };
         paintBrain();
       });
-    });
-    $("#rejectNoisy")?.addEventListener("click", async () => {
-      try {
-        const result = await api("/api/drafts/reject-noisy", {
-          method: "POST",
-          body: JSON.stringify({ scope: state.brainAll ? "all" : undefined }),
-        });
-        await refreshGraph();
-        renderBrain();
-        if (result.count) alert(`Dismissed ${result.count} low-quality draft${result.count === 1 ? "" : "s"}.`);
-      } catch (err) {
-        alert(err.message);
-      }
     });
     return;
   }
@@ -2305,22 +2808,22 @@ function renderBrainMap() {
   const selectedId = state.selectedNode?.type === "claim" ? state.selectedNode.id : null;
   const filterHint =
     state.brainFilter === "used"
-      ? "Highlighting files that were injected in a recent query."
+      ? "Only facts injected in a recent query."
       : state.brainFilter === "chats"
-        ? "Highlighting chat takeaways. Other files stay on the map, dimmed."
+        ? "Chat takeaways. Other files stay on the map, dimmed."
         : state.brainFilter === "pinned"
-          ? "Only pinned facts — these rank higher in retrieval."
-          : "Every tile is a file amem can inject instead of a repo search.";
+          ? "Pinned facts only — click Pin on any row to boost retrieval."
+          : "Each tile is a file amem can inject. Use ★ Pin on a row to boost it.";
 
   const list =
     shown.length === 0
       ? `<div class="brain-empty">${
           state.brainFilter === "used"
-            ? "Nothing in this repo has been used in a context query yet — the map still shows what is stored."
+            ? "Nothing in this repo has been injected yet — the map still shows what is stored."
             : state.brainFilter === "chats"
-              ? "No session takeaways yet. Approve a draft or keep chatting."
+              ? "No session takeaways yet. Approve a capture or keep chatting."
               : state.brainFilter === "pinned"
-                ? "No pinned facts yet. Click a fact below, then Pin in the side panel — or use the pin control on each row."
+                ? "No pinned facts yet. On any fact row, click <b>Pin</b> — pinned facts rank higher and fill this view."
                 : state.brainSearch
                   ? "No facts match that filter. Clear the search box to see everything again."
                   : "No facts yet. Apply a bootstrap on Setup, or keep working in this repo."
@@ -2351,7 +2854,7 @@ function renderBrainMap() {
                   <span class="claim-text">${esc(claimPreview(c))}</span>
                   <span class="claim-tags">${tags.map((t) => `<em>${esc(t)}</em>`).join("")}</span>
                 </button>
-                <button type="button" class="claim-pin ${isPinned ? "on" : ""}" data-pin="${esc(c.id)}" data-repo="${esc(c.repo_id || "")}" title="${isPinned ? "Unpin" : "Pin"}" aria-label="${isPinned ? "Unpin fact" : "Pin fact"}">${isPinned ? "★" : "☆"}</button>
+                ${pinButtonHtml(c)}
               </li>`;
             })
             .join("")}
@@ -2360,16 +2863,106 @@ function renderBrainMap() {
           })
           .join("");
 
-  el.innerHTML = `
-    <div class="coverage-host" id="coverageHost"></div>
+  const mode = state.memoryViz || "map";
+  const scopeLabel = state.brainAll
+    ? "All memory"
+    : state.status?.repo?.repo_name || "Memory";
+
+  const vizBlock =
+    mode === "orbit"
+      ? `<div class="orbit-host viz-host" id="orbitHost">
+            <div class="viz-banner">
+              <span>${esc(scopeLabel)} · ${state.brainAll ? "click a memory, then a file" : "click a file, then a fact"}</span>
+            </div>
+            <canvas id="orbitCanvas" aria-label="Orbit memory map"></canvas>
+            <div class="viz-legend">
+              <span><i class="sw teal"></i> Used recently</span>
+              <span><i class="sw gold"></i> Has pinned</span>
+              <span><i class="sw blue"></i> ${state.brainAll ? "Other memories" : "Other files"}</span>
+            </div>
+          </div>`
+      : mode === "blocks"
+        ? `<div class="coverage-host viz-host" id="coverageHost"></div>`
+        : "";
+
+  // Files is the plain list; Blocks and Orbit put their visual on top of it.
+  el.innerHTML =
+    mode === "map"
+      ? `<div class="brain-facts">
+      <div class="pin-howto">
+        <strong>Pin a fact</strong>
+        <span>Click <em>☆ Pin</em> on any row below — pinned facts rank higher in retrieval and fill the Pinned tab.</span>
+      </div>
+      <h2>${selectedFile ? esc(fileLabel(selectedFile)) : "Facts"} <span>${esc(filterHint)}</span></h2>
+      ${list}
+    </div>`
+      : `${vizBlock}
     <div class="brain-facts">
       <h2>${selectedFile ? esc(fileLabel(selectedFile)) : "Facts"} <span>${esc(filterHint)}</span></h2>
       ${list}
     </div>`;
 
-  renderCoverageMap();
+  stopAllViz();
+  if (mode === "orbit") {
+    const canvas = $("#orbitCanvas");
+    if (canvas) {
+      try {
+        orbitViz = createOrbitViz(canvas, {
+          onSelectFile: (file) => {
+            state.selectedFile = file;
+            const group = coverageGroups().find((g) => g.file === file);
+            state.selectedNode = group
+              ? { type: "file", id: file, detail: group }
+              : { type: "file", id: file, detail: { file, items: [] } };
+            showBrainDetail(state.selectedNode);
+            // Across memories the ring is focused on a memory, so keep it there
+            // when the click came from a file on the outer ring.
+            if (!state.brainAll) orbitViz?.setFocus(file);
+          },
+          onSelectClaim: (claim) => {
+            if (!claim) return;
+            const anchors = claimAnchors(claim);
+            if (anchors[0]) state.selectedFile = anchors[0];
+            state.selectedNode = { type: "claim", id: claim.id, detail: claim };
+            showBrainDetail(state.selectedNode);
+            orbitViz?.setSelectedClaim(claim.id);
+            el.querySelectorAll(".claim-row").forEach((row) => {
+              row.classList.toggle("selected", row.dataset.claim === claim.id);
+            });
+          },
+          onSelectGroup: state.brainAll
+            ? (group) => {
+                state.selectedFile = null;
+                state.selectedNode = { type: "memory", id: group.id, detail: group };
+                showBrainDetail(state.selectedNode);
+                orbitViz?.setFocus(group.id);
+              }
+            : null,
+        });
+        orbitViz.setData({
+          claims: orbitClaims(),
+          recentClaimIds: state.graph?.recentClaimIds || [],
+          selectedFile: state.brainAll ? orbitFocusMemory() : state.selectedFile,
+          selectedClaim: selectedId,
+          label: scopeLabel,
+          ringLabel: state.brainAll ? "memories" : "files",
+        });
+        orbitViz.start();
+      } catch (err) {
+        const host = $("#orbitHost");
+        if (host) host.innerHTML = `<div class="brain-empty">Orbit view failed: ${esc(err.message || err)}</div>`;
+      }
+    }
+  } else if (mode === "blocks") {
+    renderCoverageMap();
+  }
+  bindClaimClicks(el);
+  bindPinButtons(el);
+  bindVizToggle(el);
+}
 
-  el.querySelectorAll("[data-claim]").forEach((btn) => {
+function bindClaimClicks(root) {
+  root.querySelectorAll("[data-claim]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const claim = (state.graph.claims || []).find((c) => c.id === btn.dataset.claim);
       if (!claim) return;
@@ -2379,26 +2972,41 @@ function renderBrainMap() {
       renderBrain();
     });
   });
-  el.querySelectorAll("[data-pin]").forEach((btn) => {
+}
+
+async function toggleClaimPin(id, repoId) {
+  const claim = (state.graph.claims || []).find((c) => c.id === id);
+  if (!claim) return;
+  const pinned = !(Number(claim.pinned || 0) > 0);
+  await api("/api/claims/pin", {
+    method: "POST",
+    repoId: claim.repo_id || repoId,
+    body: JSON.stringify({ id, pinned }),
+  });
+  await refreshGraph();
+  if (state.selectedNode?.type === "claim" && state.selectedNode.id === id) {
+    const updated = (state.graph.claims || []).find((c) => c.id === id);
+    if (updated) state.selectedNode = { type: "claim", id, detail: updated };
+  }
+  paintBrain();
+}
+
+function bindPinButtons(root = document) {
+  root.querySelectorAll("[data-pin]").forEach((btn) => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      const id = btn.dataset.pin;
-      const claim = (state.graph.claims || []).find((c) => c.id === id);
-      if (!claim) return;
-      const pinned = !(Number(claim.pinned || 0) > 0);
       try {
-        await api("/api/claims/pin", {
-          method: "POST",
-          repoId: claim.repo_id || btn.dataset.repo,
-          body: JSON.stringify({ id, pinned }),
-        });
-        await refreshGraph();
-        paintBrain();
+        await toggleClaimPin(btn.dataset.pin, btn.dataset.repo);
       } catch (err) {
         alert(err.message);
       }
     });
   });
+}
+
+function pinButtonHtml(c) {
+  const isPinned = Number(c.pinned || 0) > 0;
+  return `<button type="button" class="claim-pin ${isPinned ? "on" : ""}" data-pin="${esc(c.id)}" data-repo="${esc(c.repo_id || "")}" title="${isPinned ? "Unpin — stop boosting this fact" : "Pin — boost this fact in retrieval"}" aria-label="${isPinned ? "Unpin fact" : "Pin fact"}">${isPinned ? "★ Pinned" : "☆ Pin"}</button>`;
 }
 
 function showBrainOverview() {
@@ -2413,9 +3021,32 @@ function showBrainOverview() {
   drawer.innerHTML = `
     <h2>${esc(title)}</h2>
     <div class="meta">Local memory map</div>
-    <p>The map is what amem can inject instead of a repo search. Bigger tiles have more facts. Teal tiles were used in a recent query.</p>
-    <div class="meta">${durable} durable facts · ${chats} chat takeaways · ${g.flows?.length ?? 0} flows · ${g.components?.length ?? 0} components</div>
-    <p class="note" style="margin:0">Click a tile to read that file’s facts. Click a recent use to see what was injected. “Had to explore” means amem missed.</p>`;
+    <p><b>To pin:</b> stay on <b>Files</b>, find a fact in the list (top of the main panel), click <b>☆ Pin</b> on the right of that row.</p>
+    <p>The map below shows files amem can inject. Bigger tiles have more facts. Teal = used in a recent query.</p>
+    <div class="meta">${durable} durable facts · ${chats} chat takeaways · ${g.flows?.length ?? 0} flows · ${g.components?.length ?? 0} components</div>`;
+}
+
+function showPinRulesCta(claim) {
+  const drawer = $("#drawer");
+  if (!drawer || drawer.querySelector("#pinRulesCta")) return;
+  const preview = String(claim?.text || "").slice(0, 160);
+  const box = document.createElement("div");
+  box.id = "pinRulesCta";
+  box.className = "pin-rules-cta";
+  box.innerHTML = `
+    <strong>Sync pinned → Cursor rules (Pro)</strong>
+    <p class="note" style="margin:0.35rem 0">Would write a line like: <code>${esc(preview)}${preview.length >= 160 ? "…" : ""}</code> into <code>.cursor/rules/amem-pinned.mdc</code></p>
+    <button class="btn small" type="button" id="pinRulesSyncNow">Sync pinned rules</button>`;
+  drawer.appendChild(box);
+  $("#pinRulesSyncNow")?.addEventListener("click", async () => {
+    try {
+      const result = await api("/api/rules/sync", { method: "POST", body: "{}" });
+      markProOnboardDone(["rules"]);
+      box.innerHTML = `<p class="note">Wrote ${esc(result.path || "rules")} (${result.pinned || 0} pinned).</p>`;
+    } catch (e) {
+      box.innerHTML = `<p class="note">${esc(e?.message || String(e))}</p>`;
+    }
+  });
 }
 
 function showBrainDetail(node) {
@@ -2435,9 +3066,52 @@ function showBrainDetail(node) {
       <div class="meta">${kind === "local_hit" ? `Injected ${claims.length} fact(s) · ~${formatTokens(d.estimated_tokens_saved)} tokens estimated avoided` : "amem returned nothing useful, so Cursor likely grepped or read files."}</div>
       ${
         claims.length
-          ? `<ul class="detail-list">${claims.map((c) => `<li><strong>${esc(claimPreview(c, 90))}</strong><div class="meta">${claimAnchors(c).map((a) => `<code>${esc(a)}</code>`).join(" ") || ""}</div></li>`).join("")}</ul>`
+          ? `<ul class="detail-list detail-list-pin">${claims
+              .map(
+                (c) =>
+                  `<li><div class="detail-pin-row"><strong>${esc(claimPreview(c, 90))}</strong>${pinButtonHtml(c)}</div><div class="meta">${claimAnchors(c).map((a) => `<code>${esc(a)}</code>`).join(" ") || ""}</div></li>`,
+              )
+              .join("")}</ul>`
           : ""
       }`;
+    bindPinButtons(drawer);
+    return;
+  }
+  if (node.type === "memory") {
+    const items = node.detail?.items || [];
+    const byFile = new Map();
+    for (const c of items) {
+      const file = claimAnchors(c)[0] || "(no file yet)";
+      const key = fileGroupKey(c, file);
+      const entry = byFile.get(key) || { label: fileLabel(file), path: file, n: 0 };
+      entry.n += 1;
+      byFile.set(key, entry);
+    }
+    const files = [...byFile.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 12);
+    const pinned = items.filter((c) => Number(c.pinned || 0) > 0).length;
+    drawer.innerHTML = `
+      <h2>${esc(orbitMemoryLabel(node.id))}</h2>
+      <div class="meta">${items.length} fact${items.length === 1 ? "" : "s"} · ${pinned} pinned</div>
+      <p>Click a dot on the outer ring to open one of these files. Switch the sidebar to this memory to work on it alone.</p>
+      ${
+        files.length
+          ? `<ul class="detail-list">${files
+              .map(
+                ([key, f]) =>
+                  `<li><button type="button" class="link-row" data-orbit-file="${esc(key)}"><strong>${esc(f.label)}</strong></button><div class="meta">${f.n} fact${f.n === 1 ? "" : "s"} · <code>${esc(f.path)}</code></div></li>`,
+              )
+              .join("")}</ul>`
+          : `<p class="note">No anchored files in this memory yet.</p>`
+      }`;
+    drawer.querySelectorAll("[data-orbit-file]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const file = btn.dataset.orbitFile;
+        state.selectedFile = file;
+        const group = coverageGroups().find((g) => g.file === file);
+        state.selectedNode = { type: "file", id: file, detail: group || { file, items: [] } };
+        showBrainDetail(state.selectedNode);
+      });
+    });
     return;
   }
   if (node.type === "file") {
@@ -2446,17 +3120,18 @@ function showBrainDetail(node) {
     drawer.innerHTML = `
       <h2>${esc(fileLabel(node.id))}</h2>
       <div class="meta"><code>${esc(node.id)}</code> · ${items.length} fact${items.length === 1 ? "" : "s"}</div>
-      <p>amem can inject these instead of grepping this file. Teal on the map means a recent query already used one of them.</p>
+      <p>Pin any fact here to boost it in retrieval. Teal on the map means a recent query already used one of them.</p>
       ${
         items.length
-          ? `<ul class="detail-list">${items
+          ? `<ul class="detail-list detail-list-pin">${items
               .map(
                 (c) =>
-                  `<li><strong>${esc(claimPreview(c, 90))}</strong><div class="meta">${esc(c.kind || "fact")}</div></li>`,
+                  `<li><div class="detail-pin-row"><strong>${esc(claimPreview(c, 90))}</strong>${pinButtonHtml(c)}</div><div class="meta">${esc(c.kind || "fact")}</div></li>`,
               )
               .join("")}</ul>`
           : ""
       }`;
+    bindPinButtons(drawer);
     return;
   }
   if (node.type === "draft") {
@@ -2546,13 +3221,13 @@ function showBrainDetail(node) {
       <input id="claimAnchors" type="text" value="${esc(anchors.join(", "))}" />
       <div class="drawer-actions">
         <button class="btn" type="button" id="claimSave">Save</button>
-        <button class="btn secondary" type="button" id="claimPin">${pinned ? "Unpin ★" : "Pin ☆"}</button>
+        <button class="btn secondary" type="button" id="claimPin">${pinned ? "Unpin ★" : "Pin ★"}</button>
         <button class="btn secondary" type="button" id="claimClose">Close</button>
         <button class="btn secondary danger" type="button" id="claimDelete">Delete</button>
       </div>
       ${rel.flows.length ? `<div class="meta">Flows: ${rel.flows.map((f) => esc(f.name)).join(", ")}</div>` : ""}
       ${rel.components.length ? `<div class="meta">Components: ${rel.components.map((c) => esc(c.name)).join(", ")}</div>` : ""}
-      <p class="note" style="margin:0">Pin with ★ on a fact row or here — pinned facts rank higher in <code>amem context</code> and fill the Pinned filter.</p>`;
+      <p class="note" style="margin:0"><b>Pin</b> boosts this fact in <code>amem context</code>. Use the Pin button on each row, or here. Pinned facts appear under the Pinned filter and can sync to Cursor rules (Pro).</p>`;
     $("#claimSave")?.addEventListener("click", async () => {
       try {
         const text = $("#claimText")?.value ?? "";
@@ -2576,14 +3251,18 @@ function showBrainDetail(node) {
     });
     $("#claimPin")?.addEventListener("click", async () => {
       try {
+        const nextPinned = !pinned;
         const result = await api("/api/claims/pin", {
           method: "POST",
           repoId: d.repo_id,
-          body: JSON.stringify({ id: d.id, pinned: !pinned }),
+          body: JSON.stringify({ id: d.id, pinned: nextPinned }),
         });
         state.selectedNode = { type: "claim", id: d.id, detail: result.claim };
         await refreshGraph();
         paintBrain();
+        if (nextPinned && state.license?.features?.includes("rules_sync") && !state.brainAll) {
+          showPinRulesCta(result.claim);
+        }
       } catch (err) {
         alert(err.message);
       }
@@ -2640,22 +3319,179 @@ function formatChartDay(iso) {
 }
 
 function renderStats() {
+  return renderAnalytics();
+}
+
+function renderDashboard() {
   const main = $("#main");
   setMainMode("page");
+  stopAllViz();
+  const g = state.graph || emptyGraph(state.brainAll ? "all" : "current");
+  const agg = state.usage?.aggregate;
+  const totals = agg?.totals || {};
+  const drafts = (g.drafts || []).filter((d) => d.status === "pending");
+  const pendingTotal = Number(g.pendingDraftTotal ?? drafts.length);
+  const claims = g.claims || [];
+  const pinned = claims.filter((c) => Number(c.pinned || 0) > 0).length;
+  const events = g.recentEvents || [];
+  const hits = events.filter((e) => eventKindOf(e) === "local_hit");
+  const misses = events.filter((e) => eventKindOf(e) !== "local_hit");
+  const focus = statsFocusLabel();
+  const tier = state.license?.tier || "free";
+  const highDrafts = drafts.filter((d) => d.quality?.label === "high").length;
+  const junkDrafts = drafts.filter((d) => d.quality?.reject || d.quality?.label === "low").length;
+  const topFiles = fileGroups(claims)
+    .slice()
+    .sort((a, b) => b.items.length - a.items.length)
+    .slice(0, 6);
+
+  renderPageInsight();
+  main.innerHTML = `
+    <section class="dash-page">
+      <header class="dash-head">
+        <div>
+          <h1>Dashboard</h1>
+          <p class="sub">What matters right now for <strong>${esc(focus)}</strong>. Memory stays on this machine.</p>
+        </div>
+        <div class="dash-actions">
+          <button class="btn secondary small" type="button" data-go="brain">Open Memory</button>
+          <button class="btn secondary small" type="button" data-go="analytics">Open Analytics</button>
+        </div>
+      </header>
+
+      <div class="dash-kpis">
+        <button type="button" class="dash-kpi" data-go="brain" data-filter="files">
+          <b>${claims.length}</b><span>Facts stored</span>
+        </button>
+        <button type="button" class="dash-kpi ${pendingTotal ? "warn" : ""}" data-go="brain" data-filter="drafts">
+          <b>${pendingTotal}</b><span>Waiting to approve</span>
+        </button>
+        <button type="button" class="dash-kpi" data-go="brain" data-filter="pinned">
+          <b>${pinned}</b><span>Pinned</span>
+        </button>
+        <button type="button" class="dash-kpi" data-go="analytics">
+          <b>${formatPct(totals.hitRate)}</b><span>Hit rate · ${totals.localHits ?? 0} hits</span>
+        </button>
+        <div class="dash-kpi static">
+          <b>${esc(String(tier))}</b><span>License</span>
+        </div>
+        <div class="dash-kpi static">
+          <b>${formatUsd(totals.estimatedUsdSaved)}</b><span>Est. $ saved (proxy)</span>
+        </div>
+      </div>
+
+      <div class="dash-grid">
+        <article class="dash-panel">
+          <h2>Needs attention</h2>
+          ${
+            pendingTotal
+              ? `<p>${pendingTotal} session capture${pendingTotal === 1 ? "" : "s"} waiting · ${highDrafts} high · ${junkDrafts} junk.</p>
+                 <div class="drawer-actions">
+                   <button class="btn small" type="button" data-go="brain" data-filter="drafts">Review Approve queue</button>
+                 </div>`
+              : `<p class="note">No pending captures. New session-end drafts will show up here.</p>`
+          }
+          ${
+            misses.length
+              ? `<h3>Recent misses</h3><ul class="dash-list">${misses
+                  .slice(0, 5)
+                  .map(
+                    (e) =>
+                      `<li><strong>${esc(eventQueryLabel(e))}</strong><span class="meta">${esc(e.platform || "agent")} · ${esc(formatWhen(e.created_at))}</span></li>`,
+                  )
+                  .join("")}</ul>`
+              : `<p class="note">No recent misses in the feed.</p>`
+          }
+        </article>
+        <article class="dash-panel">
+          <h2>Working well</h2>
+          <p>${hits.length} local hit${hits.length === 1 ? "" : "s"} in recent uses · ~${formatTokens(totals.estimatedTokensSaved ?? 0)} tokens estimated avoided (${state.usage?.days ?? 30}d).</p>
+          ${
+            hits.length
+              ? `<ul class="dash-list">${hits
+                  .slice(0, 5)
+                  .map(
+                    (e) =>
+                      `<li><strong>${esc(eventQueryLabel(e))}</strong><span class="meta">${eventClaimIds(e).length} facts · ${esc(formatWhen(e.created_at))}</span></li>`,
+                  )
+                  .join("")}</ul>`
+              : `<p class="note">Ask Cursor something in a tracked repo — hits appear after <code>amem context</code> runs.</p>`
+          }
+        </article>
+        <article class="dash-panel">
+          <h2>Densest files</h2>
+          ${
+            topFiles.length
+              ? `<ul class="dash-list">${topFiles
+                  .map(
+                    (f) =>
+                      `<li><button type="button" class="linkish" data-file="${esc(f.file)}"><code>${esc(fileLabel(f.file))}</code></button><span class="meta">${f.items.length} fact${f.items.length === 1 ? "" : "s"}</span></li>`,
+                  )
+                  .join("")}</ul>`
+              : `<p class="note">No facts yet.</p>`
+          }
+          <div class="drawer-actions">
+            <button class="btn secondary small" type="button" data-go="brain" data-viz="orbit">View as Orbit</button>
+            <button class="btn secondary small" type="button" data-go="brain" data-filter="pinned">Pinned facts</button>
+          </div>
+        </article>
+      </div>
+    </section>`;
+
+  main.querySelectorAll("[data-go]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.go;
+      if (btn.dataset.filter) state.brainFilter = btn.dataset.filter;
+      if (btn.dataset.viz) {
+        setMemoryViz(btn.dataset.viz);
+      }
+      setTab(tab);
+    });
+  });
+  main.querySelectorAll("[data-file]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.selectedFile = btn.dataset.file;
+      state.brainFilter = "files";
+      setTab("brain");
+    });
+  });
+}
+
+function renderAnalytics() {
+  const main = $("#main");
+  setMainMode("page");
+  stopAllViz();
   renderPageInsight();
   if (!state.brainAll && !state.status?.repo) {
-    main.innerHTML = `<section class="hero"><div class="hero-inner"><h1>Stats</h1><p>Pick <strong>All memory</strong> in the header, or a tracked repo, to see savings.</p></div></section>`;
+    main.innerHTML = `<section class="hero"><div class="hero-inner"><h1>Analytics</h1><p>Pick <strong>All memory</strong> in the header, or a tracked repo, to see usage analytics.</p></div></section>`;
     return;
   }
   const agg = state.usage?.aggregate;
+  const totals = agg?.totals || {};
   const currentDays = String(state.usage?.days ?? state.statsDays ?? 30);
   const focus = statsFocusLabel();
+  const byDay = agg?.byDay || [];
+  const g = state.graph || {};
+  const claimUse = new Map();
+  for (const e of state.usage?.events || g.recentEvents || []) {
+    for (const id of eventClaimIds(e)) {
+      claimUse.set(id, (claimUse.get(id) || 0) + 1);
+    }
+  }
+  const topClaims = [...claimUse.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([id, n]) => {
+      const c = (g.claims || []).find((x) => x.id === id);
+      return { id, n, text: c ? claimPreview(c, 100) : id };
+    });
+
   main.innerHTML = `
-    <section class="stats-page">
-      <h1>Token, time &amp; money savings</h1>
-      <p class="sub">Local lookup time is measured. Time and money are proxies (avoided file reads / input tokens) — not your Cursor or model bill. Showing <strong>${esc(focus)}</strong>${state.brainAll ? " — every tracked repo and workspace on this machine" : ""}.</p>
+    <section class="stats-page analytics-page">
+      <h1>Analytics</h1>
+      <p class="sub">Deeper usage for <strong>${esc(focus)}</strong>. Hit rate is local memory success — not Cursor→model API trips. Time and $ are proxies.</p>
       <div class="filters">
-        <select id="days" aria-label="Stats time range">
+        <select id="days" aria-label="Analytics time range">
           <option value="7" ${currentDays === "7" ? "selected" : ""}>7 days</option>
           <option value="30" ${currentDays === "30" ? "selected" : ""}>30 days</option>
           <option value="90" ${currentDays === "90" ? "selected" : ""}>90 days</option>
@@ -2664,21 +3500,50 @@ function renderStats() {
         <button class="btn secondary small" type="button" data-export="md">Export markdown</button>
         <button class="btn secondary small" type="button" data-export="pdf">Export PDF</button>
       </div>
+
+      <div class="analytics-split">
+        <div class="chart-wrap">
+          <h2>Hits vs misses by day</h2>
+          <div class="chart-stage">
+            <canvas id="hitMissChart"></canvas>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <h2>Estimated tokens saved by day</h2>
+          <div class="chart-stage">
+            <canvas id="savingsChart"></canvas>
+            <div class="chart-tooltip hidden" id="chartTooltip"></div>
+          </div>
+        </div>
+      </div>
+
       <div class="platform-cards" id="speedCards"></div>
       <h2 class="stats-heading">Monthly projection</h2>
       <div class="platform-cards" id="monthlyCards"></div>
       <div class="platform-cards" id="cards"></div>
-      <div class="chart-wrap">
-        <h2>Estimated tokens saved by day</h2>
-        <div class="chart-stage">
-          <canvas id="savingsChart"></canvas>
-          <div class="chart-tooltip hidden" id="chartTooltip"></div>
-        </div>
+
+      <div class="analytics-split">
+        <article class="dash-panel">
+          <h2>Top injected facts</h2>
+          ${
+            topClaims.length
+              ? `<ul class="dash-list">${topClaims
+                  .map(
+                    (c) =>
+                      `<li><strong>${esc(c.text)}</strong><span class="meta">${c.n}× · <code>${esc(c.id)}</code></span></li>`,
+                  )
+                  .join("")}</ul>`
+              : `<p class="note">No claim injections logged in this window.</p>`
+          }
+        </article>
+        <article class="dash-panel">
+          <h2>By platform</h2>
+          <ul class="dash-list" id="platformList"></ul>
+        </article>
       </div>
-      <p class="note">Tokens: max(0, anchors×4000 + claims×200 − packet tokens). Time: anchors×1.2s + claims×80ms. Money: tokens × $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input tokens (Sonnet-class). Monthly figures scale the last ${agg?.monthly?.trendDays || "N"} day(s) of calls to 30 days. Hover a bar for that day’s numbers.</p>
+      <p class="note">Tokens: max(0, anchors×4000 + claims×200 − packet tokens). Time: anchors×1.2s + claims×80ms. Money: tokens × $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input tokens. “Server trips” = empty amem lookups, not model API calls.</p>
     </section>`;
 
-  const totals = agg?.totals || {};
   const speedCards = $("#speedCards");
   speedCards.innerHTML = `
     <div class="platform-card"><div class="label">Estimated time saved</div><div class="value">~${formatDuration(totals.estimatedMsSaved)}</div><div class="meta">proxy vs tool round-trips · not model latency</div></div>
@@ -2709,15 +3574,62 @@ function renderStats() {
       )
       .join("")}`;
 
-  drawChart(agg?.byDay || []);
+  const platformList = $("#platformList");
+  if (platformList) {
+    platformList.innerHTML = platforms
+      .map(
+        (p) =>
+          `<li><strong>${esc(p.platform)}</strong><span class="meta">${p.queries} queries · hit-ish savings ~${formatTokens(p.estimatedTokensSaved)} · ${formatUsd(p.estimatedUsdSaved)}</span></li>`,
+      )
+      .join("");
+  }
+
+  drawChart(byDay);
+  drawHitMissChart(byDay);
 
   $("#days").addEventListener("change", async (e) => {
     await refreshUsage(statsScope(), Number(e.target.value));
-    renderStats();
+    renderAnalytics();
   });
   main.querySelectorAll("[data-export]").forEach((btn) => {
     btn.addEventListener("click", () => downloadSavings(btn.dataset.export));
   });
+}
+
+function drawHitMissChart(days) {
+  const canvas = $("#hitMissChart");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const dpr = devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (!days.length) {
+    ctx.fillStyle = "#8fa3b0";
+    ctx.fillText("No usage yet.", 16, 32);
+    return;
+  }
+  const max = Math.max(...days.map((d) => (d.localHits || 0) + (d.serverTrips || 0)), 1);
+  const pad = 36;
+  const bw = (w - pad * 2) / days.length;
+  days.forEach((d, i) => {
+    const hits = d.localHits || 0;
+    const misses = d.serverTrips || 0;
+    const x = pad + i * bw + 4;
+    const barW = Math.max(bw - 8, 2);
+    const hitH = ((h - pad * 2) * hits) / max;
+    const missH = ((h - pad * 2) * misses) / max;
+    ctx.fillStyle = "#2ec4b6";
+    ctx.fillRect(x, h - pad - hitH, barW, Math.max(hitH, hits ? 1 : 0));
+    ctx.fillStyle = "rgba(232, 140, 90, 0.85)";
+    ctx.fillRect(x, h - pad - hitH - missH, barW, Math.max(missH, misses ? 1 : 0));
+  });
+  ctx.fillStyle = "#8fa3b0";
+  ctx.font = "12px 'IBM Plex Sans', system-ui, sans-serif";
+  ctx.fillText("teal = hits · orange = misses", pad, 18);
 }
 
 async function downloadSavings(format) {
@@ -2853,7 +3765,7 @@ async function render() {
     await refreshVault();
     if (/encrypted|unlock|Passphrase/i.test(String(e.message))) {
       setMainMode("page");
-      $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>Locked</h1><p>Unlock from <strong>Lock / backup</strong> in the sidebar to open Memory and Stats. Memory never left this machine.</p></div></section>`;
+      $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>Locked</h1><p>Unlock from <strong>Lock / backup</strong> in the sidebar to open Memory, Dashboard, and Analytics. Memory never left this machine.</p></div></section>`;
       renderPageInsight();
       return;
     }
@@ -2882,26 +3794,77 @@ async function render() {
       $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>Memory</h1><p>${esc(e.message || e)}</p><button class="btn" id="retryBrain" type="button">Try again</button></div></section>`;
       $("#retryBrain")?.addEventListener("click", () => setTab("brain"));
     }
+  } else if (state.tab === "dashboard") {
+    stopAllViz();
+    await Promise.all([
+      refreshGraph().catch(() => {
+        state.graph = emptyGraph(state.brainAll ? "all" : "current");
+      }),
+      refreshUsage(statsScope(), state.statsDays || 30).catch(() => {
+        state.usage = null;
+      }),
+    ]);
+    if (stale()) return;
+    renderDashboard();
   } else {
+    stopAllViz();
+    if (state.tab === "stats") state.tab = "analytics";
     try {
       await refreshUsage(statsScope(), state.statsDays || 30);
     } catch {
       state.usage = null;
     }
+    try {
+      await refreshGraph();
+    } catch {
+      /* analytics can still show usage without graph */
+    }
     if (stale()) return;
-    renderStats();
+    renderAnalytics();
   }
 }
 
 document.querySelectorAll("#tabs button[data-tab]").forEach((b) => {
   b.addEventListener("click", () => setTab(b.dataset.tab));
 });
-$("#brandBtn")?.addEventListener("click", () => setTab("welcome"));
+$("#brandBtn")?.addEventListener("click", () => setTab(isPaidLicense() ? "dashboard" : "welcome"));
 
 $("#brainSearch")?.addEventListener("input", (e) => {
   if (state.tab !== "brain") return;
   state.brainSearch = e.target.value;
   paintBrain();
+});
+$("#tryRetrievalBtn")?.addEventListener("click", async () => {
+  if (state.tab !== "brain") return;
+  const q = String($("#brainSearch")?.value || state.brainSearch || "").trim();
+  if (!q) {
+    alert("Type a query in the search box first.");
+    return;
+  }
+  state.brainSearch = q;
+  state.showdownOpen = true;
+  state.showdownQuery = q;
+  renderBrain();
+  const input = $("#showdownQuery");
+  if (input) input.value = q;
+  await runRetrievalShowdown();
+  try {
+    const packet = await api("/api/context", {
+      method: "POST",
+      body: JSON.stringify({ query: q }),
+    });
+    const n = Array.isArray(packet?.claims) ? packet.claims.length : 0;
+    noteContextHit();
+    const el = $("#showdownResult");
+    if (el && n >= 0) {
+      const note = document.createElement("p");
+      note.className = "note";
+      note.textContent = `Live amem_context would return ${n} claim${n === 1 ? "" : "s"} for this query (same path MCP uses).`;
+      el.prepend(note);
+    }
+  } catch {
+    /* showdown result is enough */
+  }
 });
 $("#showdownToggle")?.addEventListener("click", () => {
   if (state.tab !== "brain") return;

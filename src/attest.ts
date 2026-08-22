@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getRepoByCwd, getSetupState } from "./db.js";
+import { getRepoByCwd, getSetupState, openDb } from "./db.js";
 import { claudeInstallHealth } from "./install/claude.js";
 import { cursorInstallHealth } from "./install/cursor.js";
 import { amemHome, dbPath, ensureAmemHome } from "./paths.js";
@@ -14,7 +14,7 @@ import {
 } from "./policy.js";
 import { detectRepoIdentity } from "./repo-identity.js";
 import { FEATURE_ATTEST_SKU, hasFeature, licenseStatus } from "./license.js";
-import { embedStatus } from "./embed.js";
+import { embedIndexIssues, embedStatus } from "./embed.js";
 import { vaultStatus } from "./vault.js";
 import { hostInstallHealth } from "./install/hosts.js";
 
@@ -155,6 +155,11 @@ export function buildAttestReport(cwd: string = process.cwd()): AttestReport {
   const embed = embedStatus();
   if (embed.requested === "ngram" && !embed.licensed) {
     issues.push("embed_backend ngram requested but license is not Pro/IT — using hash");
+  }
+  try {
+    issues.push(...embedIndexIssues(openDb()));
+  } catch {
+    // Locked vault: the vault section already reports that.
   }
 
   const pkgPath = join(packageRoot(), "package.json");

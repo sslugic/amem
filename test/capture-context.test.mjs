@@ -14,8 +14,13 @@ describe("capture + context ranking", () => {
         const { captureSessionDraft, isUsefulCaptureText } = await import("../dist/capture.js");
 
         assert.equal(isUsefulCaptureText("ok"), false);
+        assert.equal(isUsefulCaptureText("test"), false);
         assert.equal(isUsefulCaptureText("password=secretvalue"), false);
         assert.equal(isUsefulCaptureText("How does auth startup work in src/auth.ts?"), true);
+        const { isUsefulRememberText } = await import("../dist/capture.js");
+        assert.equal(isUsefulRememberText("test"), false);
+        assert.equal(isUsefulRememberText("ok"), false);
+        assert.equal(isUsefulRememberText("Auth mode is checked before Drive sync starts"), true);
 
         const repo = upsertRepo(detectRepoIdentity(repoDir), "cursor");
         const draft = captureSessionDraft({

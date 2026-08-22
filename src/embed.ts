@@ -102,7 +102,7 @@ export function setEmbedBackend(
 ): EmbedStatus {
   if ((backend === "ngram" || backend === "external") && !hasFeature(FEATURE_LOCAL_EMBED)) {
     throw new Error(
-      "Local embeddings need an amem Pro or IT license. Run: amem license activate --dev --tier pro",
+      "Local embeddings need an amem Pro or IT license. Buy at https://getamem.com then: amem license apply --file <amem-license.json>",
     );
   }
   if (backend === "external" && !(extra.command || process.env.AMEM_EMBED_CMD || readEmbedSettings().command)) {
@@ -283,6 +283,59 @@ export function reindexAllEmbeds(db: Database.Database): { repos: number; claims
     ).n;
   }
   return { repos: repos.length, claims };
+}
+
+export type EmbedIndexHealth = {
+  active: EmbedBackend;
+  dim: number;
+  total: number;
+  usable: number;
+  stale: number;
+  strandedBy: Array<{ backend: string; dim: number; count: number }>;
+};
+
+/**
+ * Stored vectors are only scored when their backend *and* dim match the active one, so a
+ * backend switch (usually a license change) silently drops facts out of semantic ranking
+ * without any error. This reports that drift so doctor/attest can tell the user to reindex.
+ */
+export function embedIndexHealth(db: Database.Database): EmbedIndexHealth {
+  ensureClaimsEmbed(db);
+  const active = activeEmbedBackend();
+  const dim = embedDim(active);
+  const rows = db
+    .prepare(
+      `SELECT COALESCE(backend, 'hash') AS backend, dim, COUNT(*) AS n
+       FROM claims_embed GROUP BY backend, dim`,
+    )
+    .all() as Array<{ backend: string; dim: number; n: number }>;
+
+  let total = 0;
+  let usable = 0;
+  const strandedBy: EmbedIndexHealth["strandedBy"] = [];
+  for (const row of rows) {
+    total += row.n;
+    if (row.backend === active && row.dim === dim) usable += row.n;
+    else strandedBy.push({ backend: row.backend, dim: row.dim, count: row.n });
+  }
+  return { active, dim, total, usable, stale: total - usable, strandedBy };
+}
+
+/** Human-readable warnings for doctor/attest. Empty when the index is consistent. */
+export function embedIndexIssues(db: Database.Database): string[] {
+  let health: EmbedIndexHealth;
+  try {
+    health = embedIndexHealth(db);
+  } catch {
+    return [];
+  }
+  if (health.stale === 0) return [];
+  const from = health.strandedBy
+    .map((s) => `${s.backend}/${s.dim}`)
+    .join(", ");
+  return [
+    `${health.stale} of ${health.total} facts are indexed with ${from} but the active embed backend is ${health.active}/${health.dim} — semantic search skips them. Run: amem embed reindex`,
+  ];
 }
 
 export type EmbedHit = { id: string; score: number };

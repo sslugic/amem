@@ -958,6 +958,20 @@ export function listProposalDraftsAll(opts: { status?: string; limit?: number } 
     .all(limit) as ProposalDraftRow[];
 }
 
+export function countProposalDrafts(repoId: string, status = "pending"): number {
+  const row = openDb()
+    .prepare(`SELECT COUNT(*) AS n FROM proposal_drafts WHERE repo_id = ? AND status = ?`)
+    .get(repoId, status) as { n: number };
+  return Number(row?.n || 0);
+}
+
+export function countProposalDraftsAll(status = "pending"): number {
+  const row = openDb()
+    .prepare(`SELECT COUNT(*) AS n FROM proposal_drafts WHERE status = ?`)
+    .get(status) as { n: number };
+  return Number(row?.n || 0);
+}
+
 export function setProposalDraftStatus(
   id: string,
   status: "pending" | "applied" | "dismissed",

@@ -17,7 +17,7 @@
       <aside class="side-nav" id="sideNav">
         <button class="brand" id="brandBtn" type="button">amem</button>
         <nav class="side-tabs" id="tabs" aria-label="Primary">
-          <button type="button" data-tab="welcome" class="active">
+          <button type="button" data-tab="welcome">
             <span class="nav-ico" aria-hidden="true"></span>
             Plans
           </button>
@@ -25,13 +25,17 @@
             <span class="nav-ico" aria-hidden="true"></span>
             Setup
           </button>
+          <button type="button" data-tab="dashboard">
+            <span class="nav-ico" aria-hidden="true"></span>
+            Dashboard
+          </button>
           <button type="button" data-tab="brain">
             <span class="nav-ico" aria-hidden="true"></span>
             Memory
           </button>
-          <button type="button" data-tab="stats">
+          <button type="button" data-tab="analytics">
             <span class="nav-ico" aria-hidden="true"></span>
-            Stats
+            Analytics
           </button>
         </nav>
         <div class="side-footer">
@@ -52,19 +56,22 @@
               id="brainSearch"
               class="top-search"
               type="search"
-              placeholder="Filter facts…"
+              placeholder="Filter facts or try retrieval…"
               autocomplete="off"
             />
+            <button class="btn secondary small top-mem-only hidden" type="button" id="tryRetrievalBtn" title="Run the same lookup MCP uses">
+              Try retrieval
+            </button>
           </div>
           <div class="top-actions" id="topActions">
             <label class="autostart brain-auto top-mem-only hidden" id="autoApplyLabel">
-              <input type="checkbox" id="autoApplyAll" /> Auto-approve
+              <input type="checkbox" id="autoApplyAll" /> Auto-approve new
             </label>
             <button class="btn secondary small top-mem-only hidden" type="button" id="showdownToggle">
               Compare retrieval
             </button>
             <button class="btn secondary small top-mem-only hidden" type="button" id="rulesSyncBtn">
-              Sync rules
+              Sync pinned → rules
             </button>
           </div>
           <p class="vault-summary" id="vaultChips"></p>
@@ -106,13 +113,15 @@
                 >Buy IT · $49</a
               >
               <span class="note"
-                >After pay, download <code>amem-license.json</code> on the thank-you page, then
-                <code>amem license apply --file</code>. Mailtrap testing also keeps a copy in the sandbox inbox.</span
+                >After pay, download <code>amem-license.json</code> on the thank-you page, then apply it in Plans/Setup or
+                <code>amem license apply --file</code>.</span
               >
             </div>
             <p class="note" id="vaultDetail"></p>
           </div>
         </div>
+
+        <div id="embedIndexBanner" class="embed-index-banner hidden" role="status"></div>
 
         <div id="addRepoPanel" class="add-repo-panel hidden">
           <label for="addRepoPath">Path to another git repo on this machine</label>
@@ -129,6 +138,41 @@
         </div>
       </div>
     </div>
+    <script>
+      (function () {
+        var TABS = ["welcome", "setup", "dashboard", "brain", "analytics"];
+        var params = new URLSearchParams(location.search);
+        var fromUrl = params.get("tab");
+        var welcomeDismissed = false;
+        var paid = false;
+        try {
+          welcomeDismissed = localStorage.getItem("amem.welcome.dismissed") === "1";
+          var tier = localStorage.getItem("amem.license.tier");
+          paid = tier === "pro" || tier === "it";
+        } catch (e) {}
+        var tab = "setup";
+        if (paid) {
+          if (fromUrl === "stats") tab = "analytics";
+          else if (TABS.indexOf(fromUrl) !== -1) tab = fromUrl;
+          else tab = "dashboard";
+        } else if (
+          !welcomeDismissed &&
+          fromUrl !== "brain" &&
+          fromUrl !== "stats" &&
+          fromUrl !== "analytics" &&
+          fromUrl !== "dashboard"
+        ) {
+          tab = "welcome";
+        } else if (fromUrl === "stats") {
+          tab = "analytics";
+        } else if (TABS.indexOf(fromUrl) !== -1) {
+          tab = fromUrl;
+        }
+        document.querySelectorAll("#tabs button[data-tab]").forEach(function (b) {
+          b.classList.toggle("active", b.getAttribute("data-tab") === tab);
+        });
+      })();
+    </script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

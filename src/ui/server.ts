@@ -105,6 +105,13 @@ function serveStatic(res: ServerResponse, urlPath: string): void {
   rel = rel.split("?")[0] ?? rel;
   const filePath = join(root, rel.replace(/^\//, ""));
   if (!filePath.startsWith(root) || !existsSync(filePath) || !statSync(filePath).isFile()) {
+    // A missing asset must 404: falling back to index.html would hand the browser
+    // HTML with a JS content type and fail the module load for an unclear reason.
+    const ext = extname(filePath);
+    if (ext && ext !== ".html") {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
+      return;
+    }
     // SPA fallback
     const index = join(root, "index.html");
     if (existsSync(index)) {
@@ -116,7 +123,15 @@ function serveStatic(res: ServerResponse, urlPath: string): void {
     return;
   }
   const type = MIME[extname(filePath)] ?? "application/octet-stream";
-  res.writeHead(200, { "Content-Type": type });
+  const noStore =
+    filePath.endsWith(".js") ||
+    filePath.endsWith(".css") ||
+    filePath.endsWith(".html") ||
+    filePath.endsWith("index.html");
+  res.writeHead(200, {
+    "Content-Type": type,
+    ...(noStore ? { "Cache-Control": "no-store" } : {}),
+  });
   res.end(readFileSync(filePath));
 }
 

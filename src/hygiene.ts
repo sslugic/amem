@@ -38,10 +38,19 @@ export type HygienePreview = {
   /** Estimated active count after decay + merge */
   afterCleanup: number;
   softPaywall: boolean;
+  /** Active claims with kind=session (chat noise indicator). */
+  sessionCount: number;
+  /** sessionCount / active, 0 when empty. */
+  sessionRatio: number;
 };
 
 export const SOFT_PAYWALL_FACTS = 200;
 export const SOFT_PAYWALL_NOISE = 15;
+/** Soft-paywall when session chat takeaways dominate the graph. */
+export const SOFT_PAYWALL_SESSION_RATIO = 0.55;
+export const SOFT_PAYWALL_SESSION_MIN = 25;
+/** Unused unpinned session claims become decay candidates sooner than durable kinds. */
+export const SESSION_UNUSED_DAYS = 14;
 
 function usedClaimIds(repoId: string, days: number): Set<string> {
   const ids = new Set<string>();
@@ -61,12 +70,20 @@ function usedClaimIds(repoId: string, days: number): Set<string> {
 function computeHygiene(repoId: string, unusedDays = 90): HygieneReport {
   const claims = listClaims(repoId);
   const used = usedClaimIds(repoId, unusedDays);
+  const usedSessions = usedClaimIds(repoId, SESSION_UNUSED_DAYS);
   const cutoff = Date.now() - unusedDays * 86_400_000;
+  const sessionCutoff = Date.now() - SESSION_UNUSED_DAYS * 86_400_000;
   const stale = claims.filter((c) => {
     if (Number(c.pinned || 0) > 0) return false;
-    if (used.has(c.id)) return false;
     const updated = Date.parse(c.updated_at);
-    return Number.isFinite(updated) && updated < cutoff;
+    if (!Number.isFinite(updated)) return false;
+    const isSession = (c.kind || "").toLowerCase() === "session";
+    if (isSession) {
+      if (usedSessions.has(c.id)) return false;
+      return updated < sessionCutoff;
+    }
+    if (used.has(c.id)) return false;
+    return updated < cutoff;
   });
 
   const duplicates: HygieneDuplicate[] = [];
@@ -95,15 +112,48 @@ function computeHygiene(repoId: string, unusedDays = 90): HygieneReport {
   };
 }
 
+function sessionStats(repoId: string): { sessionCount: number; sessionRatio: number; active: number } {
+  const claims = listClaims(repoId);
+  const active = claims.length;
+  const sessionCount = claims.filter((c) => (c.kind || "").toLowerCase() === "session").length;
+  const sessionRatio = active > 0 ? sessionCount / active : 0;
+  return { sessionCount, sessionRatio, active };
+}
+
+function softPaywallFrom(preview: {
+  active: number;
+  staleCount: number;
+  duplicateCount: number;
+  sessionCount: number;
+  sessionRatio: number;
+}): boolean {
+  if (hasFeature(FEATURE_HYGIENE)) return false;
+  const noise = preview.staleCount + preview.duplicateCount;
+  if (preview.active >= SOFT_PAYWALL_FACTS || noise >= SOFT_PAYWALL_NOISE) return true;
+  if (
+    preview.sessionCount >= SOFT_PAYWALL_SESSION_MIN &&
+    preview.sessionRatio >= SOFT_PAYWALL_SESSION_RATIO
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /** Free: counts only for soft paywall / banners. Never applies changes. */
 export function hygienePreview(repoId: string, unusedDays = 90): HygienePreview {
   const report = computeHygiene(repoId, unusedDays);
+  const { sessionCount, sessionRatio } = sessionStats(repoId);
   const staleCount = report.stale.length;
   const duplicateCount = report.duplicates.length;
   const removable = Math.min(report.active, staleCount + duplicateCount);
   const afterCleanup = Math.max(0, report.active - removable);
-  const softPaywall =
-    report.active >= SOFT_PAYWALL_FACTS || staleCount + duplicateCount >= SOFT_PAYWALL_NOISE;
+  const softPaywall = softPaywallFrom({
+    active: report.active,
+    staleCount,
+    duplicateCount,
+    sessionCount,
+    sessionRatio,
+  });
   return {
     active: report.active,
     staleCount,
@@ -111,6 +161,8 @@ export function hygienePreview(repoId: string, unusedDays = 90): HygienePreview 
     pendingDrafts: report.pendingDrafts,
     afterCleanup,
     softPaywall,
+    sessionCount,
+    sessionRatio,
   };
 }
 
@@ -120,17 +172,35 @@ export function hygienePreviewAll(unusedDays = 90): HygienePreview {
   let staleCount = 0;
   let duplicateCount = 0;
   let pendingDrafts = 0;
+  let sessionCount = 0;
   for (const repo of listRepos()) {
     const p = hygienePreview(repo.id, unusedDays);
     active += p.active;
     staleCount += p.staleCount;
     duplicateCount += p.duplicateCount;
     pendingDrafts += p.pendingDrafts;
+    sessionCount += p.sessionCount;
   }
   const removable = Math.min(active, staleCount + duplicateCount);
   const afterCleanup = Math.max(0, active - removable);
-  const softPaywall = active >= SOFT_PAYWALL_FACTS || staleCount + duplicateCount >= SOFT_PAYWALL_NOISE;
-  return { active, staleCount, duplicateCount, pendingDrafts, afterCleanup, softPaywall };
+  const sessionRatio = active > 0 ? sessionCount / active : 0;
+  const softPaywall = softPaywallFrom({
+    active,
+    staleCount,
+    duplicateCount,
+    sessionCount,
+    sessionRatio,
+  });
+  return {
+    active,
+    staleCount,
+    duplicateCount,
+    pendingDrafts,
+    afterCleanup,
+    softPaywall,
+    sessionCount,
+    sessionRatio,
+  };
 }
 
 export function hygieneReport(repoId: string, unusedDays = 90): HygieneReport {

@@ -95,6 +95,7 @@ There is no license server and no cloud sync.
 3. Optional: wrap co.amem.managed.plist in your MDM profile.
 4. Offboard with mdm-offboard.sh (wipes ~/.amem on that machine).
 5. Attach sbom.json + \`amem doctor --attest --json\` to the security ticket.
+   IT tier adds a richer vault/host attest packet; the pack folder itself is available on Free.
 
 Signed macOS/Windows installers need your org’s code-signing cert — amem does not upload binaries.
 

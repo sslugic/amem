@@ -18,15 +18,27 @@ import { scoreProposal } from "./draft-quality.js";
 import { tokenJaccard } from "./search.js";
 import { isAutoApplyAll } from "./prefs.js";
 
-const TRIVIAL = /^(ok|okay|yes|yep|no|nah|thanks|thank you|continue|go ahead|sure|please)\.?$/i;
+const TRIVIAL =
+  /^(ok|okay|yes|yep|no|nah|thanks|thank you|continue|go ahead|sure|please|test|testing|hello|hi|hey|ping|asdf|foo|bar)\.?$/i;
 const SECRET = /password|api[_-]?key|secret|token\s*[:=]|begin (rsa |openssh )?private/i;
 const PATH_RE =
   /\b(?:[\w.-]+\/)*[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|md|json|yml|yaml|sql)\b/g;
 
+/** Reject empty / chat-noise / secret-like text before it becomes a claim. */
 export function isUsefulCaptureText(text: string): boolean {
   const t = text.trim();
   if (t.length < 16) return false;
   if (TRIVIAL.test(t)) return false;
+  if (SECRET.test(t)) return false;
+  return true;
+}
+
+/** Same guard for explicit amem_remember / API writes (including short “test”). */
+export function isUsefulRememberText(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (TRIVIAL.test(t)) return false;
+  if (t.length < 8) return false;
   if (SECRET.test(t)) return false;
   return true;
 }

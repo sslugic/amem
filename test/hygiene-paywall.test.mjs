@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { withAmemHome, makeGitRepo } from "./helpers.mjs";
+import { withAmemHome, makeGitRepo, installTestLicense } from "./helpers.mjs";
 
 describe("hygiene preview + accept-safe + schedule", () => {
   it("preview works on free; accept-safe and report need Pro", async () => {
@@ -16,7 +16,7 @@ describe("hygiene preview + accept-safe + schedule", () => {
         SOFT_PAYWALL_FACTS,
         SOFT_PAYWALL_NOISE,
       } = await import("../dist/hygiene.js");
-      const { activateDevLicense, clearLicense } = await import("../dist/license.js");
+      const { clearLicense } = await import("../dist/license.js");
       const { handleApi } = await import("../dist/api/routes.js");
 
       const repo = upsertRepo(detectRepoIdentity(repoDir), "cursor");
@@ -45,8 +45,27 @@ describe("hygiene preview + accept-safe + schedule", () => {
       assert.ok(preview.duplicateCount >= 1);
       assert.equal(typeof preview.softPaywall, "boolean");
       assert.ok(preview.afterCleanup <= preview.active);
+      assert.equal(typeof preview.sessionCount, "number");
+      assert.equal(typeof preview.sessionRatio, "number");
+      assert.ok(preview.sessionCount >= 12);
       assert.equal(SOFT_PAYWALL_FACTS, 200);
       assert.equal(SOFT_PAYWALL_NOISE, 15);
+
+      // Session-heavy graphs trip the soft paywall even under the fact-count threshold.
+      clearLicense();
+      const sessionClaims = [];
+      for (let i = 0; i < 30; i++) {
+        sessionClaims.push({
+          id: `claim.session_flood_${i}`,
+          kind: "session",
+          text: `Short chat takeaway number ${i} about nothing durable`,
+          code_anchors: ["README.md"],
+        });
+      }
+      applyProposal(repo.id, { claims: sessionClaims });
+      const flood = hygienePreview(repo.id);
+      assert.ok(flood.sessionRatio >= 0.55);
+      assert.equal(flood.softPaywall, true, "high session ratio should soft-paywall on free");
 
       const freePreview = handleApi({
         method: "GET",
@@ -70,7 +89,19 @@ describe("hygiene preview + accept-safe + schedule", () => {
       });
       assert.equal(blocked.status, 403);
 
-      activateDevLicense("pro");
+      await installTestLicense("pro");
+      const paidPreview = hygienePreview(repo.id);
+      assert.equal(paidPreview.softPaywall, false, "paid licenses must not report softPaywall");
+      const paidApi = handleApi({
+        method: "GET",
+        pathname: "/api/hygiene/preview",
+        searchParams: new URLSearchParams({ repo: repo.id }),
+        body: null,
+        cwd: repoDir,
+      });
+      assert.equal(paidApi.status, 200);
+      assert.equal(paidApi.body.softPaywall, false);
+
       const cleaned = acceptSafeCleanups(repo.id);
       assert.ok(Array.isArray(cleaned.decayed));
       assert.ok(Array.isArray(cleaned.merged));

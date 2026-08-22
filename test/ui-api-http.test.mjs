@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { withAmemHome, makeGitRepo, root } from "./helpers.mjs";
 
 const UI_APP = readFileSync(join(root, "ui-static", "app.js"), "utf8");
+const UI_ORBIT = readFileSync(join(root, "ui-static", "orbit.js"), "utf8");
+const UI_CSS = readFileSync(join(root, "ui-static", "styles.css"), "utf8");
 const ROUTES_SRC = readFileSync(join(root, "src", "api", "routes.ts"), "utf8");
 
 /** Paths the local UI actually fetches. Keep in sync with ui-static/app.js. */
@@ -28,7 +30,7 @@ const UI_API_CALLS = [
   ["POST", "/api/track"],
   ["POST", "/api/service"],
   ["POST", "/api/bootstrap"],
-  ["POST", "/api/drafts/reject-noisy"],
+  ["POST", "/api/drafts/bulk"],
   ["POST", "/api/drafts/apply"],
   ["POST", "/api/drafts/dismiss"],
   ["POST", "/api/claims/pin"],
@@ -48,6 +50,7 @@ const UI_API_CALLS = [
   ["POST", "/api/hygiene/schedule"],
   ["POST", "/api/hygiene/unschedule"],
   ["POST", "/api/rules/sync"],
+  ["POST", "/api/it-pack"],
 ];
 
 function uiFetchedPaths() {
@@ -219,5 +222,35 @@ describe("UI setup stepper + brain defaults", () => {
     assert.doesNotMatch(UI_APP, /This repo/);
     assert.match(UI_APP, /function statsScope/);
     assert.match(UI_APP, /function statsFocusLabel/);
+    assert.match(UI_APP, /function renderDashboard/);
+    assert.match(UI_APP, /function renderAnalytics/);
+    assert.match(UI_APP, /createOrbitViz/);
+    assert.match(UI_APP, /Orbit/);
+    assert.doesNotMatch(UI_APP, /createNeuralViz/);
+    // Memory must open on the whole store: no leftover file/search scoping,
+    // and the Files view must not drop session facts.
+    assert.match(UI_APP, /function resetBrainView/);
+    assert.match(UI_APP, /if \(filter === "files"\) return true;/);
+    // The visualization toggle lives once, in the Memory chrome.
+    assert.equal(UI_APP.match(/vizToggleHtml\(\)/g).length, 2);
+    // Across all memories Orbit rings memories, not raw paths: every repo anchors
+    // most facts to README.md, so path grouping hides the smaller repos.
+    assert.match(UI_APP, /function orbitClaims/);
+    assert.match(UI_APP, /_group: c\.repo_id/);
+    assert.match(UI_APP, /ringLabel: state\.brainAll \? "memories" : "files"/);
+    assert.match(UI_APP, /function fileGroupKey/);
+    assert.match(UI_ORBIT, /function isPathish/);
+    // Orbit resolves focus by group id; `.file` was dropped from ring nodes.
+    assert.doesNotMatch(UI_ORBIT, /n\.file/);
+    // Three distinct Memory views: plain list, treemap blocks, orbit.
+    assert.match(UI_APP, /const VIZ_MODES = \["map", "blocks", "orbit"\]/);
+    assert.match(UI_APP, /data-viz="blocks"/);
+    assert.match(UI_APP, /mode === "blocks"/);
+    // The viz row must not be sized by the fact list: a fr unit there grew the
+    // host to ~73000px, which pushed the treemap and the Orbit canvas off screen.
+    assert.match(UI_CSS, /\.viz-host \{[^}]*height: clamp\(/s);
+    assert.match(UI_CSS, /\.brain-map:has\(\.viz-host\) \{\s*grid-template-rows: auto minmax\(0, 1fr\);/);
+    assert.match(UI_APP, /Math\.min\(2400, Math\.max\(160/);
+    assert.match(UI_ORBIT, /MAX_CANVAS/);
   });
 });

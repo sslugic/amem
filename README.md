@@ -68,17 +68,24 @@ Guarantees:
 ## Install the tool
 
 ```bash
-npx amem setup            # Node 20+
-# or from a clone while developing:
-git clone <this-repo-url> amem
+npx @iamem/amem setup   # Node 20+ — installs the `amem` CLI
+# or
+npm i -g @iamem/amem && amem setup
+```
+
+From a clone while developing:
+
+```bash
+git clone https://github.com/sslugic/amem.git
 cd amem
 npm install
 npm link
 amem setup
-amem status
 ```
 
-`npx amem setup` and `npm i -g amem` are the supported install. CI runs `npm test` and `npm run pack:check`; tagging `v*` publishes if `NPM_TOKEN` is set. See [docs/npm-release.md](docs/npm-release.md). `better-sqlite3` uses its own prebuilds — no extra native step on common macOS/Linux + Node 20/22.
+See [docs/npm-release.md](docs/npm-release.md). CI runs `npm test` and `npm run pack:check`. `better-sqlite3` uses its own prebuilds — no extra native step on common macOS/Linux + Node 20/22.
+
+If `npm install` fails compiling native code, install Xcode CLT (macOS) or `build-essential` (Linux) and retry, or use a Node 20/22 official binary that matches the prebuild matrix.
 
 ### Quick paths
 
@@ -111,7 +118,7 @@ While locked, set `AMEM_PASSPHRASE` (or unlock) before any command that opens th
 Free includes the hashing embedder (no download). Pro/IT can switch to a **local n-gram model** or an **external local command** (stdin text → JSON vector). Still no cloud embed API.
 
 ```bash
-amem license activate --dev --tier pro   # this machine only
+amem license apply --file ~/Downloads/amem-license.json   # after checkout on getamem.com
 amem embed use ngram
 amem embed reindex
 amem restore --file ~/.amem/backups/amem-….db.enc
@@ -121,7 +128,7 @@ amem it-pack --out ~/.amem/it-pack
 amem doctor --attest                     # IT tier adds a vault/host SKU packet
 ```
 
-See [docs/license.md](docs/license.md). Signed license files verify offline. Nothing is uploaded.
+See [docs/license.md](docs/license.md). Only vendor-signed license files unlock Pro/IT (verified offline). Nothing is uploaded.
 
 Checkout + email delivery is a **separate** seller process (`npm run shop`) that is not published with the CLI. It can whitelist Mailtrap and Stripe names from another project’s `.env` — see [shop/README.md](shop/README.md).
 

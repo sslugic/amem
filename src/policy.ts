@@ -220,6 +220,14 @@ export function loadPolicy(forceReload = false): LoadedPolicy {
   }
   policy = { ...policy, telemetry: false };
 
+  // A policy file we could not read must not silently relax into permissive defaults:
+  // an admin deploying deny-default would otherwise get allow_export back on a typo.
+  // Clamp only the exfiltration-relevant knobs — blanking allowed_platforms here would
+  // brick every host instead of protecting anything.
+  if (sources.some((s) => s.error)) {
+    policy = { ...policy, allow_export: false, auto_apply_kinds: [] };
+  }
+
   cached = { policy, sources };
   return cached;
 }

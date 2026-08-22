@@ -32,6 +32,7 @@ Hosts can also call the `amem_recipe` MCP tool.
 - Must: Memory stays on this machine under `~/.amem`. Do not upload claims, paste them into shared docs, or commit them to product git.
 - Must: Never remember passwords, API keys, tokens, or private key material.
 - Must: Store repo or workspace facts with file anchors — not proprietary prompting strategy.
+- Must: Prefer kinds constraint, gotcha, structure, howto, or owner. Use kind=session only for short-lived chat takeaways — session spam drowns retrieval.
 - Must: Named workspaces are not git repos. Always pass the workspace slug on context and remember.
 
 ## Example

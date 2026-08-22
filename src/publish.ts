@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Paths that must be inside the published tarball for `npx amem setup`. */
+/** Paths that must be inside the published tarball for `npx @iamem/amem setup`. */
 export const REQUIRED_PACK_PATHS = [
   "dist/cli.js",
   "dist/mcp.js",
@@ -16,6 +16,8 @@ export const REQUIRED_PACK_PATHS = [
   "skills/amem-update-working-memory/SKILL.md",
   "scripts/mdm-offboard.sh",
 ] as const;
+
+export const PUBLISH_PACKAGE_NAME = "@iamem/amem";
 
 export type PublishReady = {
   root: string;
@@ -64,7 +66,7 @@ export function inspectPublishReady(root = packageRoot()): PublishReady {
     engines: pkg.engines?.node ?? "",
     filesField,
     missing,
-    ok: missing.length === 0 && pkg.name === "amem" && Boolean(bin),
+    ok: missing.length === 0 && pkg.name === PUBLISH_PACKAGE_NAME && Boolean(bin),
   };
 }
 

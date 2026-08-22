@@ -74,7 +74,6 @@ import {
 import { rememberContract } from "./remember-contract.js";
 import { vaultStatus } from "./vault.js";
 import {
-  activateDevLicense,
   applyLicenseFile,
   clearLicense,
   generateLicenseKeys,
@@ -82,6 +81,7 @@ import {
   signLicense,
 } from "./license.js";
 import {
+  embedIndexIssues,
   embedStatus,
   reindexAllEmbeds,
   setEmbedBackend,
@@ -137,12 +137,13 @@ Usage:
   amem ui [--port 7843] [--no-open]
   amem service install|uninstall|status
   amem mcp [--print-config] [--workspace <name>]
-  amem license status|apply|activate|clear|issue|keys
+  amem license status|apply|clear|issue|keys
   amem embed status|use hash|use ngram|use external|reindex
 
-Install (npx-ready once published):
-  npx amem setup
-  npm i -g amem && amem setup
+Install:
+  npx @iamem/amem setup
+  npm i -g @iamem/amem && amem setup
+  # or from a clone: npm install && npm link && amem setup
 
 Privacy:
   All memory stays in ${amemHome()} on this machine.
@@ -245,7 +246,7 @@ async function main(): Promise<void> {
         console.log(`Memory DB: ${dbPath()}`);
         console.log("Next: amem ui   or   amem context \"What should I know?\"");
         console.log("Host recipe (any MCP client): amem recipe");
-        console.log("npx: once published, `npx amem setup` works the same (Node 20+, native better-sqlite3).");
+        console.log("Install: npx @iamem/amem setup  (or npm i -g @iamem/amem)");
         break;
       }
       case "init": {
@@ -424,6 +425,11 @@ async function main(): Promise<void> {
           if (src.error) issues.push(`Policy ${src.role}: ${src.error}`);
         }
         if (!repo) issues.push("Repo not initialized — run amem init");
+        try {
+          issues.push(...embedIndexIssues(openDb()));
+        } catch {
+          // A locked or absent vault is reported elsewhere; don't fail doctor on it.
+        }
         const platform = repo?.platform ?? flagString(flags, "platform");
         if (platform === "cursor") {
           issues.push(...cursorInstallHealth(identity.rootPath));
@@ -936,12 +942,9 @@ async function main(): Promise<void> {
           break;
         }
         if (sub === "activate") {
-          if (!flags.get("dev")) throw new Error("Usage: amem license activate --dev --tier pro|it");
-          const tier = flagString(flags, "tier");
-          if (tier !== "pro" && tier !== "it") throw new Error("--tier must be pro or it");
-          const status = activateDevLicense(tier);
-          console.log(`Dev license on this machine · tier ${status.tier} (not transferable)`);
-          break;
+          throw new Error(
+            "Self-activate is disabled. Buy Pro/IT at https://getamem.com then: amem license apply --file <amem-license.json>",
+          );
         }
         if (sub === "clear") {
           clearLicense();
@@ -982,7 +985,7 @@ async function main(): Promise<void> {
           console.log(`private: ${keys.privateKeyHex}`);
           break;
         }
-        throw new Error("Usage: amem license status|apply|activate|clear|issue|keys");
+        throw new Error("Usage: amem license status|apply|clear|issue|keys");
       }
       case "embed": {
         const sub = positional[1];

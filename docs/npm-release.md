@@ -1,14 +1,16 @@
-# npm release (npx amem setup)
+# npm release
 
-The published package is how people install amem without cloning this repo:
+Published package: **`@iamem/amem`** (CLI binary name stays `amem`).
 
 ```bash
-npx amem setup
+npx @iamem/amem setup
 # or
-npm i -g amem && amem setup
+npm i -g @iamem/amem && amem setup
 ```
 
-`better-sqlite3` ships its own prebuilds. Users need **Node.js 20+**. If a prebuild is missing for their platform, npm falls back to compiling (needs a C++ toolchain).
+Unscoped `amem` is blocked on the registry (“too similar” to existing packages). The scoped name is the supported install path.
+
+`better-sqlite3` ships its own prebuilds. Users need **Node.js 20+**. If a prebuild is missing, npm falls back to compiling (needs a C++ toolchain: Xcode CLT on macOS, `build-essential` on Debian/Ubuntu).
 
 ## What CI does
 
@@ -28,8 +30,8 @@ This repo does **not** auto-publish on every push.
    git push origin main --tags
    ```
 
-4. Add an `NPM_TOKEN` repo secret (Automation token) before the first tagged release.
-5. Confirm `npx amem setup` from a folder that is not this checkout.
+4. Ensure `NPM_TOKEN` repo secret is an Automation token with publish rights to `@iamem`.
+5. Confirm `npx @iamem/amem setup` from a folder that is not this checkout.
 
 ## Pack contents
 

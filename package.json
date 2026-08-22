@@ -1,12 +1,12 @@
 {
-  "name": "amem",
-  "version": "0.1.0",
+  "name": "@iamem/amem",
+  "version": "0.1.1",
   "description": "Local personal agent memory for Cursor and Claude Code. Private to your machine — never shared.",
   "type": "module",
   "bin": {
-    "amem": "./dist/cli.js"
+    "amem": "dist/cli.js"
   },
-  "main": "./dist/cli.js",
+  "main": "dist/cli.js",
   "exports": {
     ".": "./dist/cli.js"
   },

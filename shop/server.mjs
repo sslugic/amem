@@ -75,9 +75,9 @@ async function licenseFns() {
   return import(join(REPO, "dist", "license.js"));
 }
 
-function siteChrome(_active, body) {
+function siteChrome(_active, body, title = "amem — get started") {
   return htmlPage(
-    "amem — get started",
+    title,
     `<div class="shell">
   <header class="top">
     <a class="brand" href="/">amem</a>
@@ -237,13 +237,13 @@ function installCommands() {
   </div>
   <div class="cmd-panel active" data-panel="npx">
     <div class="cmd-row">
-      <code id="cmd-npx">npx amem setup</code>
+      <code id="cmd-npx">npx @iamem/amem setup</code>
       <button type="button" class="btn compact" data-copy="cmd-npx">Copy</button>
     </div>
   </div>
   <div class="cmd-panel" data-panel="global">
     <div class="cmd-row">
-      <code id="cmd-global">npm i -g amem &amp;&amp; amem setup</code>
+      <code id="cmd-global">npm i -g @iamem/amem &amp;&amp; amem setup</code>
       <button type="button" class="btn compact" data-copy="cmd-global">Copy</button>
     </div>
   </div>
@@ -273,6 +273,55 @@ function landing() {
   );
 }
 
+function pricingPage() {
+  const pro = dollars(amountFor("pro"));
+  const it = dollars(amountFor("it"));
+  return siteChrome(
+    "pricing",
+    `<main class="plans-wrap">
+  <h1>Free · Pro · IT</h1>
+  <p class="plans-lead">Free already remembers. Pro is the agent upgrade (better local ranking + cleanup + rules sync). IT is paperwork for security/DevEx — not “more IQ.” Memory never leaves the laptop.</p>
+  <div class="plan-grid">
+    <article class="plan-card">
+      <h2>Free</h2>
+      <p class="plan-price">$0</p>
+      <ul>
+        <li>Memory UI, MCP, Stats</li>
+        <li>Lock + local backup</li>
+        <li>Hash embedder (no download)</li>
+        <li>IT pack folder (unsigned templates)</li>
+      </ul>
+      <a class="btn secondary" href="/">Get started</a>
+    </article>
+    <article class="plan-card featured">
+      <h2>Pro</h2>
+      <p class="plan-price">${pro} <span>once</span></p>
+      <ul>
+        <li>Everything in Free</li>
+        <li>Local n-gram / external embedder</li>
+        <li>Hygiene apply + weekly schedule</li>
+        <li>Pin facts → Cursor rules</li>
+      </ul>
+      <a class="btn" href="/buy/pro">Buy Pro</a>
+    </article>
+    <article class="plan-card">
+      <h2>IT</h2>
+      <p class="plan-price">${it} <span>once</span></p>
+      <ul>
+        <li>Everything in Pro</li>
+        <li>Richer <code>amem doctor --attest</code> packet</li>
+        <li>Solo agents usually stop at Pro</li>
+        <li>Buy when someone asks for host attestation</li>
+      </ul>
+      <a class="btn secondary" href="/buy/it">Buy IT</a>
+    </article>
+  </div>
+  <p class="fine">After pay, download <code>amem-license.json</code> on the thank-you page and apply it in <code>amem ui</code>. Offline signed file — no license server, no telemetry.</p>
+</main>`,
+    "amem — pricing",
+  );
+}
+
 function successPage(result) {
   if (!result) {
     return htmlPage(
@@ -294,13 +343,13 @@ function successPage(result) {
       "amem · issue",
       `<div class="page"><h1>Paid, license not issued</h1>
 <p>${escapeHtml(result.reason || "unknown")}</p>
-<p>Keep this tab and retry, or open the Mailtrap inbox. Do not pay again.</p>
+<p>Keep this tab and retry the success URL from Stripe. Do not pay again. Download will appear once the license is ready.</p>
 <p class="actions"><a class="btn secondary" href="/">Get started</a></p></div>`,
     );
   }
   const mailNote = result.emailed
     ? result.mode === "testing"
-      ? `<p>A copy is in the <strong>Mailtrap sandbox inbox</strong> (testing mode), not a real mailbox.</p>`
+      ? `<p class="note">Seller testing: email went to the configured sandbox, not a customer mailbox. Prefer the download above.</p>`
       : `<p>A copy was emailed to <code>${escapeHtml(result.email)}</code>.</p>`
     : `<p>Email did not send (${escapeHtml(result.mailReason || "skipped")}). Use the download.</p>`;
   return htmlPage(
@@ -525,8 +574,12 @@ async function onRequest(req, res) {
       html(res, 200, landing());
       return;
     }
-    if (req.method === "GET" && url.pathname === "/plans") {
-      res.writeHead(302, { Location: "/" });
+    if (req.method === "GET" && url.pathname === "/pricing") {
+      html(res, 200, pricingPage());
+      return;
+    }
+    if (req.method === "GET" && (url.pathname === "/plans" || url.pathname === "/shop")) {
+      res.writeHead(302, { Location: "/pricing" });
       res.end();
       return;
     }

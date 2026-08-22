@@ -16,7 +16,7 @@ Personal memory stays on the laptop. IT governs **install, policy, attestation, 
 | Repo allowlist | `allowed_remote_hosts` |
 | Draft auto-apply | `auto_apply_kinds` (default empty = Memory approve only) |
 | Optional at-rest encryption | User/local `amem lock` + encrypted `amem backup` (still no sync) |
-| License SKU | `amem license` (signed file or machine-local dev). IT tier adds vault/host fields to attest |
+| License SKU | Vendor-signed `amem-license.json` only (`amem license apply`). Self-issued /dev unlocks are rejected. IT tier adds vault/host fields to attest |
 
 ## IT pack (one folder for the security ticket)
 
@@ -30,7 +30,7 @@ The pack includes deny-by-default `policy.toml`, an MDM plist stub, `mdm-offboar
 
 ## Install (DevEx / IT)
 
-1. Ship a pinned amem build (internal npm, pkg, or `npm link` from a mirrored clone). Node 20+ required (`better-sqlite3`).
+1. Ship a pinned amem build: `npm i -g @iamem/amem` (or internal mirror / pkg). Node 20+ required (`better-sqlite3` prebuilds on common macOS/Linux).
 2. Deploy policy:
 
 ```bash
@@ -68,6 +68,17 @@ See [templates/policy.example.toml](../templates/policy.example.toml).
 | `auto_apply_kinds` | Draft kinds that may auto-apply without Memory approve (empty = never) |
 
 Hard stops (not overridable): telemetry stays off; UI bind forced to loopback.
+
+## Local UI / MCP CORS threat model
+
+`amem ui` binds **127.0.0.1 only**. HTTP responses (including MCP) set `Access-Control-Allow-Origin: *` so local hosts (Cursor, Claude, browser tools) can call the loopback API without a special Origin.
+
+That is not a remote public API:
+
+- Nothing in `~/.amem` is uploaded or synced.
+- Binding is loopback-only — LAN/WAN clients cannot reach the UI by default.
+- Treat any process on the same machine as potentially able to call `127.0.0.1:7843` while the UI is running (same as any local MCP server).
+- Do not expose the UI on a non-loopback bind; policy forces loopback. Tightening `Access-Control-Allow-Origin` to specific Origins is optional and can break some MCP hosts — leave `*` unless you control every client Origin.
 
 ## Offboarding
 

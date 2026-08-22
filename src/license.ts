@@ -1,15 +1,14 @@
 /**
  * Local license SKU. No license server, no telemetry.
- * Signed files verify against an Ed25519 public key. Dev licenses stay on this machine.
+ * Paid tiers require a vendor-signed file (Ed25519). No self-serve unlock from source.
  */
-import { createHash, generateKeyPairSync, sign as signBytes, verify as verifyBytes } from "node:crypto";
+import { generateKeyPairSync, sign as signBytes, verify as verifyBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { hostname } from "node:os";
 import { join } from "node:path";
 import { amemHome } from "./paths.js";
 
 export type LicenseTier = "free" | "pro" | "it";
-export type LicenseKind = "none" | "signed" | "dev" | "env";
+export type LicenseKind = "none" | "signed";
 
 export type LicensePayload = {
   tier: LicenseTier;
@@ -20,9 +19,9 @@ export type LicensePayload = {
 };
 
 export type LicenseFile = {
-  kind: "signed" | "dev";
+  kind: "signed";
   payload: LicensePayload;
-  signature?: string;
+  signature: string;
 };
 
 export type LicenseStatus = {
@@ -45,6 +44,8 @@ export const FEATURE_RULES_SYNC = "rules_sync";
 /** Vendor verify key (SPKI DER hex). Issue signed files with AMEM_LICENSE_PRIVKEY. */
 export const DEFAULT_LICENSE_PUBKEY_HEX =
   "302a300506032b6570032100b1e01cdb2d1ec60b372bb4307fa48ed743caba09a67633e4689aaa22221080fa";
+
+const BUY_HINT = "Buy at https://getamem.com then: amem license apply --file ~/Downloads/amem-license.json";
 
 const TIER_FEATURES: Record<LicenseTier, string[]> = {
   free: [],
@@ -113,27 +114,20 @@ export function verifySignedLicense(
   return issues;
 }
 
-function machineFingerprint(): string {
-  return createHash("sha256")
-    .update(`${hostname()}|${amemHome()}`)
-    .digest("hex")
-    .slice(0, 16);
-}
-
 export function parseLicenseFile(raw: unknown): LicenseFile {
   if (!raw || typeof raw !== "object") throw new Error("License must be a JSON object");
-  const rec = raw as LicenseFile;
-  if (rec.kind !== "signed" && rec.kind !== "dev") throw new Error("License kind must be signed or dev");
+  const rec = raw as { kind?: string; signature?: unknown; payload?: LicensePayload };
+  if (rec.kind === "dev") {
+    throw new Error(`Self-issued /dev licenses are not accepted. ${BUY_HINT}`);
+  }
+  if (rec.kind !== "signed") throw new Error("License kind must be signed");
+  if (!rec.signature || typeof rec.signature !== "string") {
+    throw new Error("Signed license requires a signature");
+  }
   if (!rec.payload || !["free", "pro", "it"].includes(rec.payload.tier)) {
     throw new Error("License payload.tier must be free, pro, or it");
   }
-  return rec;
-}
-
-function envTier(): LicenseTier | null {
-  const raw = (process.env.AMEM_LICENSE_TIER || "").trim().toLowerCase();
-  if (raw === "pro" || raw === "it" || raw === "free") return raw;
-  return null;
+  return { kind: "signed", payload: rec.payload, signature: rec.signature };
 }
 
 function expired(payload: LicensePayload, now = new Date()): boolean {
@@ -150,18 +144,6 @@ export function readLicenseFile(path = licensePath()): LicenseFile | null {
 export function licenseStatus(now = new Date()): LicenseStatus {
   const path = licensePath();
   const issues: string[] = [];
-  const env = envTier();
-  if (env) {
-    return {
-      tier: env,
-      kind: "env",
-      features: featuresForTier(env),
-      valid: true,
-      transferable: false,
-      path,
-      issues: [],
-    };
-  }
 
   try {
     const file = readLicenseFile(path);
@@ -177,20 +159,17 @@ export function licenseStatus(now = new Date()): LicenseStatus {
       };
     }
     if (expired(file.payload, now)) issues.push("license expired");
-    if (file.kind === "signed") issues.push(...verifySignedLicense(file));
-    if (file.kind === "dev" && file.payload.subject && file.payload.subject !== machineFingerprint()) {
-      issues.push("dev license is bound to another machine");
-    }
+    issues.push(...verifySignedLicense(file));
     const tier = issues.length ? "free" : file.payload.tier;
     const features = [...new Set([...(file.payload.features ?? []), ...featuresForTier(tier)])];
     return {
       tier,
-      kind: file.kind,
+      kind: "signed",
       subject: file.payload.subject,
       expires_at: file.payload.expires_at,
       features,
       valid: issues.length === 0,
-      transferable: file.kind === "signed",
+      transferable: true,
       path,
       issues,
     };
@@ -220,34 +199,16 @@ export function writeLicense(file: LicenseFile, path = licensePath()): string {
 }
 
 export function applyLicenseJson(raw: unknown): LicenseStatus {
-  const parsed =
-    typeof raw === "string"
-      ? (JSON.parse(raw) as unknown)
-      : raw;
+  const parsed = typeof raw === "string" ? (JSON.parse(raw) as unknown) : raw;
   const file = parseLicenseFile(parsed);
-  if (file.kind === "signed") {
-    const bad = verifySignedLicense(file);
-    if (bad.length) throw new Error(bad.join("; "));
-  }
+  const bad = verifySignedLicense(file);
+  if (bad.length) throw new Error(bad.join("; "));
   writeLicense(file);
   return licenseStatus();
 }
 
 export function applyLicenseFile(sourcePath: string): LicenseStatus {
   return applyLicenseJson(JSON.parse(readFileSync(sourcePath, "utf8")));
-}
-
-export function activateDevLicense(tier: "pro" | "it"): LicenseStatus {
-  writeLicense({
-    kind: "dev",
-    payload: {
-      tier,
-      subject: machineFingerprint(),
-      issued_at: new Date().toISOString(),
-      features: featuresForTier(tier),
-    },
-  });
-  return licenseStatus();
 }
 
 export function clearLicense(): void {
@@ -257,7 +218,5 @@ export function clearLicense(): void {
 
 export function requireFeature(feature: string, label = feature): void {
   if (hasFeature(feature)) return;
-  throw new Error(
-    `${label} needs an amem Pro or IT license. Run: amem license activate --dev --tier pro`,
-  );
+  throw new Error(`${label} needs an amem Pro or IT license. ${BUY_HINT}`);
 }

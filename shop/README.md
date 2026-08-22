@@ -1,8 +1,8 @@
 # amem shop (seller process)
 
-Stripe Checkout → signed license JSON → email (Mailtrap while testing).
+Stripe Checkout → signed license JSON → email via Mailtrap (live send in production).
 
-This is **not** part of the published `amem` CLI. Memory still never leaves the buyer’s machine. The shop only emails a file they apply with `amem license apply`.
+This is **not** part of the published `@iamem/amem` CLI. Memory still never leaves the buyer’s machine. The shop only emails a file they apply with `amem license apply`.
 
 ## Production
 
@@ -11,6 +11,7 @@ Public shop: **https://getamem.com** (alias **https://tryamem.com** redirects th
 - App Runner service `amem-shop` (us-east-1), image `…/amem-shop:latest` (linux/amd64).
 - Secrets from Secrets Manager `amem/shop` (Stripe, Mailtrap, `AMEM_LICENSE_PRIVKEY` hex).
 - Health: `GET /health` (never redirected by canonical-host logic).
+- Mail: set `MAILTRAP_USE_TESTING=false` and a verified `AMEM_FROM_EMAIL` / `INVITE_FROM_EMAIL` for real inbox delivery. Thank-you page download still works if email fails.
 
 ### Stripe live webhook
 
@@ -20,11 +21,10 @@ Public shop: **https://getamem.com** (alias **https://tryamem.com** redirects th
 2. Copy the signing secret (`whsec_…`) into Secrets Manager `amem/shop` → `STRIPE_WEBHOOK_SECRET`.
 3. Redeploy / restart the App Runner service so it picks up the new secret version.
 
-The thank-you page (`/success?session_id=…`) also issues the file if the webhook is late. Download `amem-license.json` there even when Mailtrap is in testing mode.
-
 Buyers: open getamem.com or the Buy links in `amem ui` (default shop URL is `https://getamem.com`).
 
 ```bash
+npx @iamem/amem setup
 amem license apply --file ~/Downloads/amem-license.json
 amem license status
 ```

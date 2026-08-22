@@ -24,6 +24,8 @@ import {
   listUsageEvents,
   listProposalDrafts,
   listProposalDraftsAll,
+  countProposalDrafts,
+  countProposalDraftsAll,
   getProposalDraft,
   setProposalDraftStatus,
   updateClaim,
@@ -44,6 +46,7 @@ import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
 import { hostInstallHealth, installHost } from "../install/hosts.js";
 import { decorateDraft, decorateDrafts } from "../draft-quality.js";
+import { isUsefulRememberText } from "../capture.js";
 import {
   buildSavingsExport,
   formatSavingsMarkdown,
@@ -82,7 +85,7 @@ import { shopStatus } from "../shop.js";
 import { prefsStatus, setAutoApplyAll } from "../prefs.js";
 import { applyPendingDrafts } from "../capture.js";
 import { applyLicenseJson, licenseStatus } from "../license.js";
-import { embedStatus, reindexAllEmbeds, setEmbedBackend, type EmbedBackend } from "../embed.js";
+import { embedStatus, embedIndexHealth, embedIndexIssues, reindexAllEmbeds, setEmbedBackend, type EmbedBackend } from "../embed.js";
 import {
   createBackup,
   lockDatabase,
@@ -97,6 +100,7 @@ import {
   writeHygieneHelperScript,
 } from "../hygiene-schedule.js";
 import { syncPinnedRules } from "../rules-sync.js";
+import { writeItPack } from "../it-pack.js";
 import {
   installBackupSchedule,
   uninstallBackupSchedule,
@@ -533,6 +537,9 @@ function runContext(repo: RepoRow, body: unknown, searchParams: URLSearchParams)
 function runRemember(repo: RepoRow, body: unknown): ApiResponse {
   const text = bodyField(body, "text");
   if (!text) return err(400, "text required");
+  if (!isUsefulRememberText(text)) {
+    return err(400, "text too trivial or secret-like — remember a durable fact with context");
+  }
   const kind = bodyField(body, "kind") ?? "session";
   const id =
     bodyField(body, "id") ??
@@ -684,7 +691,12 @@ export function handleApi(req: ApiRequest): ApiResponse {
   }
 
   if (method === "GET" && pathname === "/api/embed") {
-    return ok(embedStatus());
+    const db = openDb();
+    return ok({
+      ...embedStatus(),
+      index: embedIndexHealth(db),
+      issues: embedIndexIssues(db),
+    });
   }
 
   if (method === "POST" && pathname === "/api/embed") {
@@ -1053,6 +1065,15 @@ export function handleApi(req: ApiRequest): ApiResponse {
     }
   }
 
+  if (method === "POST" && pathname === "/api/it-pack") {
+    try {
+      const outDir = bodyField(body, "out") || join(amemHome(), "it-pack");
+      return ok(writeItPack(outDir));
+    } catch (error) {
+      return err(400, error instanceof Error ? error.message : String(error));
+    }
+  }
+
   if (method === "GET" && pathname === "/api/graph") {
     const all = searchParams.get("scope") === "all";
     if (!all && !repo) return err(400, "Repo not initialized");
@@ -1067,6 +1088,8 @@ export function handleApi(req: ApiRequest): ApiResponse {
         // ignore
       }
     }
+    const pendingTotal = all ? countProposalDraftsAll("pending") : countProposalDrafts(repo!.id, "pending");
+    const draftLimit = Math.min(500, Math.max(pendingTotal, 100));
     return ok({
       scope: all ? "all" : "current",
       components: all ? listComponentsAll() : listComponents(repo!.id),
@@ -1075,9 +1098,10 @@ export function handleApi(req: ApiRequest): ApiResponse {
       edges: all ? listEdgesAll() : listEdges(repo!.id),
       drafts: decorateDrafts(
         all
-          ? listProposalDraftsAll({ status: "pending", limit: 80 })
-          : listProposalDrafts(repo!.id, { status: "pending", limit: 30 }),
+          ? listProposalDraftsAll({ status: "pending", limit: draftLimit })
+          : listProposalDrafts(repo!.id, { status: "pending", limit: draftLimit }),
       ),
+      pendingDraftTotal: pendingTotal,
       recentClaimIds: [...recentClaimIds],
       recentEvents: events.slice(0, 30),
       activity: buildActivityGraph({
@@ -1091,12 +1115,20 @@ export function handleApi(req: ApiRequest): ApiResponse {
     const all = searchParams.get("scope") === "all";
     if (!all && !repo) return err(400, "Repo not initialized");
     const status = searchParams.get("status") ?? "pending";
+    const pendingTotal =
+      status === "pending"
+        ? all
+          ? countProposalDraftsAll("pending")
+          : countProposalDrafts(repo!.id, "pending")
+        : undefined;
+    const limit = Math.min(500, Number(searchParams.get("limit") || 500) || 500);
     return ok({
       drafts: decorateDrafts(
         all
-          ? listProposalDraftsAll({ status, limit: 80 })
-          : listProposalDrafts(repo!.id, { status, limit: 50 }),
+          ? listProposalDraftsAll({ status, limit })
+          : listProposalDrafts(repo!.id, { status, limit }),
       ),
+      pendingDraftTotal: pendingTotal,
     });
   }
 
@@ -1105,12 +1137,107 @@ export function handleApi(req: ApiRequest): ApiResponse {
     if (!all && !repo) return err(400, "Repo not initialized");
     const pending = decorateDrafts(
       all
-        ? listProposalDraftsAll({ status: "pending", limit: 80 })
-        : listProposalDrafts(repo!.id, { status: "pending", limit: 80 }),
+        ? listProposalDraftsAll({ status: "pending", limit: 500 })
+        : listProposalDrafts(repo!.id, { status: "pending", limit: 500 }),
     );
     const noisy = pending.filter((d) => d.quality.reject);
     for (const d of noisy) setProposalDraftStatus(d.id, "dismissed");
     return ok({ dismissed: noisy.map((d) => d.id), count: noisy.length });
+  }
+
+  if (method === "POST" && pathname === "/api/drafts/bulk") {
+    const all = searchParams.get("scope") === "all" || bodyField(body, "scope") === "all";
+    if (!all && !repo) return err(400, "Repo not initialized");
+    const action = String(bodyField(body, "action") || "").trim();
+    const idsRaw = (body as { ids?: unknown } | null)?.ids;
+    const ids = Array.isArray(idsRaw)
+      ? idsRaw.filter((x): x is string => typeof x === "string" && Boolean(x.trim()))
+      : [];
+    const pending = decorateDrafts(
+      all
+        ? listProposalDraftsAll({ status: "pending", limit: 500 })
+        : listProposalDrafts(repo!.id, { status: "pending", limit: 500 }),
+    );
+    const byId = new Map(pending.map((d) => [d.id, d]));
+    const selected =
+      ids.length > 0
+        ? ids.map((id) => byId.get(id)).filter((d): d is (typeof pending)[number] => Boolean(d))
+        : pending;
+    const policy = loadPolicy().policy;
+    const applied: string[] = [];
+    const dismissed: string[] = [];
+    const skipped: { id: string; reason: string }[] = [];
+
+    const dismissOne = (d: (typeof pending)[number]) => {
+      setProposalDraftStatus(d.id, "dismissed");
+      dismissed.push(d.id);
+    };
+    const applyOne = (d: (typeof pending)[number], resolve: "keep" | "supersede" = "keep") => {
+      const liveConflicts = d.conflicts.filter((c) => !c.withinProposal);
+      let proposal;
+      try {
+        proposal = parseProposalJson(d.proposal_json);
+      } catch {
+        skipped.push({ id: d.id, reason: "bad_json" });
+        return;
+      }
+      if (resolve === "supersede" && liveConflicts.length > 0) {
+        proposal = applySupersedes(
+          proposal,
+          liveConflicts.map((c) => c.otherId),
+        );
+      }
+      const target = getRepoById(d.repo_id);
+      if (!target) {
+        skipped.push({ id: d.id, reason: "missing_repo" });
+        return;
+      }
+      applyProposal(target.id, proposal, policy);
+      setProposalDraftStatus(d.id, "applied");
+      applied.push(d.id);
+    };
+
+    if (action === "reject_noisy") {
+      for (const d of selected) {
+        if (d.quality.reject) dismissOne(d);
+      }
+    } else if (action === "dismiss_low" || action === "dismiss_junk") {
+      for (const d of selected) {
+        if (d.quality.reject || d.quality.label === "low") dismissOne(d);
+      }
+    } else if (action === "approve_high") {
+      for (const d of selected) {
+        if (d.quality.label === "high" && !d.quality.reject) applyOne(d, "keep");
+        else if (ids.length) skipped.push({ id: d.id, reason: "not_high" });
+      }
+    } else if (action === "dismiss_all") {
+      const confirmRaw = (body as { confirm?: unknown } | null)?.confirm;
+      if (confirmRaw !== true && String(confirmRaw || "").toLowerCase() !== "true") {
+        return err(400, "confirm=true required to dismiss all pending drafts");
+      }
+      for (const d of pending) dismissOne(d);
+    } else if (action === "dismiss_ids") {
+      if (!ids.length) return err(400, "ids required");
+      for (const d of selected) dismissOne(d);
+    } else if (action === "apply_ids") {
+      if (!ids.length) return err(400, "ids required");
+      const resolve = bodyField(body, "resolve") === "supersede" ? "supersede" : "keep";
+      for (const d of selected) applyOne(d, resolve);
+    } else {
+      return err(
+        400,
+        "action must be reject_noisy, dismiss_low, dismiss_junk, approve_high, apply_ids, dismiss_ids, or dismiss_all",
+      );
+    }
+
+    return ok({
+      action,
+      applied,
+      dismissed: [...new Set(dismissed)],
+      skipped,
+      appliedCount: applied.length,
+      dismissedCount: new Set(dismissed).size,
+    });
   }
 
   if (method === "POST" && pathname === "/api/drafts/apply") {

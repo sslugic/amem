@@ -18,7 +18,7 @@ Updated after completing the Feature Map **Later** phase (local embedding model 
 - Optional **AES-256-GCM lock/unlock** + encrypted **backup** / schedule
 - On-device **hashing embeddings** hybrid with FTS
 - Smarter multi-turn draft compaction + **`auto_apply_kinds`** policy
-- **CI + pack:check** for `npx amem setup` (release workflow on `v*` tags; see `docs/npm-release.md`)
+- **CI + pack:check** for `npx @iamem/amem setup` (release workflow on `v*` tags; see `docs/npm-release.md`)
 - **Remember contract** — `amem recipe`, `GET /api/recipe`, MCP `amem_recipe`, Setup copy card
 - **Memory / header chrome** — lock indicator, backup status + schedule, **Personal** switcher
 - **Draft quality scoring** — confidence 0–100; reject noisy session-end drafts; Memory “Reject noisy”
@@ -26,7 +26,7 @@ Updated after completing the Feature Map **Later** phase (local embedding model 
 - **Savings export** — `amem usage export` / Stats JSON · markdown · PDF (proxy, not a bill)
 - **Richer host adapters** — Continue `mcpServers/amem.yaml`, Zed HTTP `url`, doctor health for continue/zed/windsurf
 - **Local n-gram embedder** — Pro/IT; no model download, no cloud API (`amem embed use ngram`)
-- **License + IT attest SKU** — signed or machine-local dev license; IT attest adds vault/host packet
+- **License + IT attest SKU** — vendor-signed license only; IT attest adds vault/host packet
 
 - **Auto-capture** — high-quality session-end facts apply without `amem_remember`
 - **Restore** — `amem restore --file` + vault UI path (encrypted or plaintext backup)
@@ -37,17 +37,19 @@ Updated after completing the Feature Map **Later** phase (local embedding model 
 
 ## Open
 
-- First npm publish (`NPM_TOKEN` + package rename — `amem` blocked as too similar to mem/pem/viem).
-- Turn Mailtrap from testing → live send for real license emails (success-page download works either way).
 - Prompt-pack before/after Stats benchmark; restore wizard polish; IT seat pack.
 - Decide one-time vs subscription (offline files cannot revoke on cancel unless you add `expires_at` and re-issue).
 - Optional vendored ONNX/MiniLM weights in a paid pack (external command is the local hook today).
+- Move CI publish to npm Trusted Publishing (OIDC) before Jan 2027 GAT bypass-2FA publish sunset.
 
 ## Shipped (go-to-market / upsell)
 
 - Public Checkout at **getamem.com** (tryamem redirects); Stripe live webhook.
+- Mailtrap **live send** (`MAILTRAP_USE_TESTING=false`); thank-you download still works if mail fails.
+- **`@iamem/amem@0.1.0` on npm** — `npx @iamem/amem setup` / `npm i -g @iamem/amem` (CLI binary `amem`).
 - UI **Apply license** (paste/drop) + **Turn on Pro retrieval** checklist.
-- Memory **retrieval showdown** (free hash vs Pro n-gram).
+- Memory **retrieval showdown** (free hash vs Pro n-gram) + top-bar **Try retrieval**.
+- Remember-contract guidance: prefer durable kinds; avoid `session` spam.
 - **Hygiene auto-cleanup** — `accept-safe`, weekly OS schedule, soft paywall banner at ~200 facts / noisy dups (free preview; apply stays Pro).
 
 ## Explicit non-goals (keep)

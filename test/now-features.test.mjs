@@ -18,6 +18,7 @@ describe("remember contract", () => {
     assert.ok(contract.tools.some((t) => t.name === "amem_context" && t.role === "read"));
     assert.ok(contract.tools.some((t) => t.name === "amem_remember" && t.role === "write"));
     assert.deepEqual(rememberContractMustIds().sort(), [
+      "durable-kinds",
       "local-only",
       "no-prompt-strategy",
       "no-secrets",
@@ -213,7 +214,7 @@ describe("npx / publish readiness", () => {
     const { assertPublishReady, REQUIRED_PACK_PATHS } = await import("../dist/publish.js");
     const info = assertPublishReady(root);
     assert.equal(info.ok, true);
-    assert.equal(info.name, "amem");
+    assert.equal(info.name, "@iamem/amem");
     assert.ok(info.bin.includes("dist/cli.js"));
     assert.match(info.engines, /20/);
     for (const rel of REQUIRED_PACK_PATHS) {

@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { withAmemHome, makeGitRepo } from "./helpers.mjs";
+import { withAmemHome, makeGitRepo, installTestLicense } from "./helpers.mjs";
 
 describe("auto-capture applies strong session facts", () => {
   it("stores a high-quality session draft as an applied claim", async () => {
@@ -70,7 +70,7 @@ describe("hygiene", () => {
       const { upsertRepo } = await import("../dist/db.js");
       const { applyProposal } = await import("../dist/proposal.js");
       const { hygieneReport, mergeDuplicate } = await import("../dist/hygiene.js");
-      const { activateDevLicense, clearLicense } = await import("../dist/license.js");
+      const { clearLicense } = await import("../dist/license.js");
       const repo = upsertRepo(detectRepoIdentity(repoDir), "cursor");
       applyProposal(repo.id, {
         claims: [
@@ -90,7 +90,7 @@ describe("hygiene", () => {
       });
       clearLicense();
       assert.throws(() => hygieneReport(repo.id), /Pro or IT/);
-      activateDevLicense("pro");
+      await installTestLicense("pro");
       const report = hygieneReport(repo.id, 90);
       assert.ok(report.duplicates.length >= 1);
       const merged = mergeDuplicate(repo.id, "claim.one", "claim.two");
@@ -112,9 +112,8 @@ console.log(JSON.stringify({ vector: v }));
 `,
         "utf8",
       );
-      const { activateDevLicense } = await import("../dist/license.js");
       const { setEmbedBackend, embedExternal, embedStatus } = await import("../dist/embed.js");
-      activateDevLicense("pro");
+      await installTestLicense("pro");
       setEmbedBackend("external", { command: process.execPath, args: [script], dim: 8 });
       assert.equal(embedStatus().backend, "external");
       const vec = embedExternal("hello amem");
@@ -131,7 +130,6 @@ describe("rules sync + IT pack", () => {
       const { upsertRepo } = await import("../dist/db.js");
       const { applyProposal } = await import("../dist/proposal.js");
       const { setClaimPinned } = await import("../dist/db.js");
-      const { activateDevLicense } = await import("../dist/license.js");
       const { syncPinnedRules } = await import("../dist/rules-sync.js");
       const { writeItPack, buildSbom } = await import("../dist/it-pack.js");
       const repo = upsertRepo(detectRepoIdentity(repoDir), "cursor");
@@ -146,7 +144,7 @@ describe("rules sync + IT pack", () => {
         ],
       });
       setClaimPinned(repo.id, "claim.pinme", true);
-      activateDevLicense("pro");
+      await installTestLicense("pro");
       const synced = syncPinnedRules(repo);
       assert.equal(synced.pinned, 1);
       assert.ok(existsSync(synced.path));

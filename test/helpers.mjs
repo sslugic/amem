@@ -10,6 +10,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 export async function withAmemHome(fn) {
   const home = mkdtempSync(join(tmpdir(), "amem-test-home-"));
   const prev = process.env.AMEM_HOME;
+  const prevPub = process.env.AMEM_LICENSE_PUBKEY;
   process.env.AMEM_HOME = home;
   const { closeDb } = await import("../dist/db.js");
   closeDb();
@@ -19,8 +20,24 @@ export async function withAmemHome(fn) {
     closeDb();
     if (prev === undefined) delete process.env.AMEM_HOME;
     else process.env.AMEM_HOME = prev;
+    if (prevPub === undefined) delete process.env.AMEM_LICENSE_PUBKEY;
+    else process.env.AMEM_LICENSE_PUBKEY = prevPub;
     rmSync(home, { recursive: true, force: true });
   }
+}
+
+/** Install a vendor-style signed Pro/IT license for tests (ephemeral keypair). */
+export async function installTestLicense(tier = "pro") {
+  const { generateLicenseKeys, signLicense, applyLicenseJson } = await import("../dist/license.js");
+  const keys = generateLicenseKeys();
+  process.env.AMEM_LICENSE_PUBKEY = keys.publicKeyHex;
+  const file = signLicense(keys.privateKeyHex, {
+    tier,
+    subject: "test",
+    issued_at: new Date().toISOString(),
+  });
+  const status = applyLicenseJson(file);
+  return { status, keys, file };
 }
 
 export function makeGitRepo(prefix = "amem-test-repo-") {

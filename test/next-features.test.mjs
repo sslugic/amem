@@ -90,6 +90,64 @@ describe("draft quality scoring", () => {
       assert.equal(listProposalDrafts(repo.id, { status: "pending" }).length, 0);
     });
   });
+
+  it("bulk-approves high drafts and dismisses junk", async () => {
+    await withAmemHome(async () => {
+      const repoDir = makeGitRepo();
+      const { detectRepoIdentity } = await import("../dist/repo-identity.js");
+      const { upsertRepo, insertProposalDraft, listProposalDrafts, listClaims } = await import(
+        "../dist/db.js"
+      );
+      const { handleApi } = await import("../dist/api/routes.js");
+      const repo = upsertRepo(detectRepoIdentity(repoDir), "cursor");
+      insertProposalDraft({
+        repoId: repo.id,
+        platform: "cursor",
+        title: "good",
+        source: "test-high",
+        proposal: {
+          claims: [
+            {
+              id: "claim.good",
+              kind: "constraint",
+              text: "Auth mode must be checked in src/auth.ts before Drive sync starts.",
+              code_anchors: ["src/auth.ts"],
+            },
+          ],
+        },
+      });
+      insertProposalDraft({
+        repoId: repo.id,
+        platform: "cursor",
+        title: "junk",
+        source: "test-junk",
+        proposal: {
+          claims: [{ id: "claim.junk", kind: "session", text: "ok thanks", code_anchors: [] }],
+        },
+      });
+      const approved = handleApi({
+        method: "POST",
+        pathname: "/api/drafts/bulk",
+        searchParams: new URLSearchParams({ repo: repo.id }),
+        body: { action: "approve_high" },
+        cwd: repoDir,
+      });
+      assert.equal(approved.status, 200);
+      assert.equal(approved.body.appliedCount, 1);
+      assert.ok(listClaims(repo.id).some((c) => c.id === "claim.good"));
+
+      const junked = handleApi({
+        method: "POST",
+        pathname: "/api/drafts/bulk",
+        searchParams: new URLSearchParams({ repo: repo.id }),
+        body: { action: "dismiss_junk" },
+        cwd: repoDir,
+      });
+      assert.equal(junked.status, 200);
+      assert.equal(junked.body.dismissedCount, 1);
+      assert.equal(listProposalDrafts(repo.id, { status: "pending" }).length, 0);
+    });
+  });
 });
 
 describe("draft conflict UI / apply resolve", () => {

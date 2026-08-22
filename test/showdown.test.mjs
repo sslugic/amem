@@ -1,16 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { withAmemHome, makeGitRepo } from "./helpers.mjs";
+import { withAmemHome, makeGitRepo, installTestLicense } from "./helpers.mjs";
 
 describe("license apply JSON + retrieval showdown", () => {
-  it("applies a dev license from JSON without a file path", async () => {
+  it("applies a signed license from JSON without a file path", async () => {
     await withAmemHome(async () => {
-      const { applyLicenseJson, activateDevLicense, clearLicense, licenseStatus, readLicenseFile } =
-        await import("../dist/license.js");
+      const { applyLicenseJson, clearLicense, licenseStatus } = await import("../dist/license.js");
       clearLicense();
-      activateDevLicense("pro");
-      const file = readLicenseFile();
-      assert.ok(file);
+      const { file } = await installTestLicense("pro");
       clearLicense();
       assert.equal(licenseStatus().tier, "free");
       const applied = applyLicenseJson(file);
@@ -27,7 +24,7 @@ describe("license apply JSON + retrieval showdown", () => {
       const { upsertRepo } = await import("../dist/db.js");
       const { applyProposal } = await import("../dist/proposal.js");
       const { buildRetrievalShowdown } = await import("../dist/context.js");
-      const { activateDevLicense, clearLicense, readLicenseFile } = await import("../dist/license.js");
+      const { clearLicense, readLicenseFile } = await import("../dist/license.js");
       const { handleApi } = await import("../dist/api/routes.js");
 
       const repo = upsertRepo(detectRepoIdentity(repoDir), "cursor");
@@ -60,7 +57,7 @@ describe("license apply JSON + retrieval showdown", () => {
       assert.equal(locked.pro.length, 0);
       assert.ok(locked.free.length >= 1);
 
-      activateDevLicense("pro");
+      await installTestLicense("pro");
       const open = buildRetrievalShowdown(repo.id, "n-gram embeddings vault restore", 5);
       assert.equal(open.proLocked, false);
       assert.ok(open.pro.length >= 1);
