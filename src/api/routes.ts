@@ -42,6 +42,9 @@ import {
   type UsageEventRow,
 } from "../db.js";
 import { buildContext, buildRetrievalShowdown, decorateUsageEvents, renderContextMarkdown } from "../context.js";
+import { normalizeAnchors } from "../anchors.js";
+import { findMemoryGaps, renderGapsMarkdown } from "../gaps.js";
+import { recordClaimHelpful } from "../reinforce.js";
 import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
 import { hostInstallHealth, installHost } from "../install/hosts.js";
@@ -521,16 +524,32 @@ function runContext(repo: RepoRow, body: unknown, searchParams: URLSearchParams)
   const platform =
     bodyField(body, "platform") || searchParams.get("platform") || repo.platform || "unknown";
   const sessionId = bodyField(body, "sessionId") || searchParams.get("sessionId") || undefined;
+  const format =
+    bodyField(body, "format") || searchParams.get("format") || "";
+  const compact =
+    format === "compact" ||
+    bodyField(body, "compact") === "1" ||
+    bodyField(body, "compact") === "true" ||
+    searchParams.get("compact") === "1" ||
+    searchParams.get("compact") === "true";
+  const includeGaps =
+    bodyField(body, "gaps") === "1" ||
+    bodyField(body, "gaps") === "true" ||
+    searchParams.get("gaps") === "1" ||
+    compact;
   const result = logContextUsage({
     repoId: repo.id,
     platform,
     sessionId,
     query,
+    compact,
+    includeGaps,
   });
   return ok({
     markdown: result.markdown,
     event: result.event,
     workspace: parseWorkspaceSlug(repo.remote_url) ?? repo.repo_name,
+    format: compact ? "compact" : "full",
   });
 }
 
@@ -547,7 +566,9 @@ function runRemember(repo: RepoRow, body: unknown): ApiResponse {
   const payload = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const anchorsRaw = payload.anchors;
   const anchors = Array.isArray(anchorsRaw)
-    ? anchorsRaw.filter((a): a is string => typeof a === "string" && Boolean(a.trim())).slice(0, 8)
+    ? normalizeAnchors(
+        anchorsRaw.filter((a): a is string => typeof a === "string" && Boolean(a.trim())).slice(0, 8),
+      )
     : [];
   if (anchors.length === 0) {
     anchors.push(parseWorkspaceSlug(repo.remote_url) ?? repo.repo_name);
@@ -957,6 +978,21 @@ export function handleApi(req: ApiRequest): ApiResponse {
   if ((method === "POST" || method === "GET") && pathname === "/api/context") {
     if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
     return runContext(repo, body, searchParams);
+  }
+
+  if (method === "GET" && pathname === "/api/gaps") {
+    if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
+    const days = Number(searchParams.get("days") ?? "30");
+    const limit = Number(searchParams.get("limit") ?? "8");
+    const gaps = findMemoryGaps(repo.id, {
+      days: Number.isFinite(days) ? days : 30,
+      limit: Number.isFinite(limit) ? Math.min(20, Math.max(1, limit)) : 8,
+    });
+    return ok({
+      ...gaps,
+      markdown: renderGapsMarkdown(gaps),
+      workspace: parseWorkspaceSlug(repo.remote_url) ?? repo.repo_name,
+    });
   }
 
   if (method === "POST" && pathname === "/api/retrieval/showdown") {
@@ -1456,13 +1492,18 @@ export function logContextUsage(input: {
   platform: string;
   sessionId?: string;
   query: string;
+  compact?: boolean;
+  includeGaps?: boolean;
 }): { markdown: string; event: UsageEventRow; packet: ReturnType<typeof buildContext> } {
   const started = Date.now();
   const repo = getRepoById(input.repoId);
+  const compact = Boolean(input.compact);
+  const includeGaps = input.includeGaps ?? compact;
   const packet = buildContext(input.repoId, input.query, {
     rootPath: repo?.root_path,
+    includeGaps,
   });
-  const markdown = renderContextMarkdown(packet);
+  const markdown = renderContextMarkdown(packet, { compact, includeGaps });
   const metrics = metricsFromPacket(packet, markdown);
   const localMs = Math.max(0, Date.now() - started);
   const event = insertUsageEvent({
@@ -1479,5 +1520,9 @@ export function logContextUsage(input: {
     estimatedMsSaved: metrics.estimatedMsSaved,
     kind: metrics.kind,
   });
+  if (metrics.kind === "local_hit") {
+    const helpfulIds = packet.claims.filter((c) => c.score > 0).map((c) => c.id);
+    recordClaimHelpful(input.repoId, input.query, helpfulIds);
+  }
   return { markdown, event, packet };
 }

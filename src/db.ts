@@ -11,6 +11,7 @@ import {
   upsertClaimEmbed,
 } from "./embed.js";
 import { isDbEncryptedAtRest, resolvePassphrase, unlockDatabase } from "./crypto.js";
+import { normalizeAnchors } from "./anchors.js";
 
 export type RepoRow = {
   id: string;
@@ -267,8 +268,31 @@ export function openDb(): Database.Database {
   migrateClaimsFtsBootstrap(db);
   ensureProposalDrafts(db);
   ensureClaimsEmbed(db);
+  ensureReinforceSchema(db);
   cached = db;
   return db;
+}
+
+function ensureReinforceSchema(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS claim_feedback (
+      repo_id TEXT NOT NULL,
+      claim_id TEXT NOT NULL,
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      last_hit_at TEXT NOT NULL,
+      PRIMARY KEY (repo_id, claim_id)
+    );
+    CREATE TABLE IF NOT EXISTS query_claim_assoc (
+      repo_id TEXT NOT NULL,
+      query_key TEXT NOT NULL,
+      claim_id TEXT NOT NULL,
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      last_hit_at TEXT NOT NULL,
+      PRIMARY KEY (repo_id, query_key, claim_id)
+    );
+    CREATE INDEX IF NOT EXISTS claim_feedback_repo_idx ON claim_feedback(repo_id);
+    CREATE INDEX IF NOT EXISTS query_claim_assoc_repo_idx ON query_claim_assoc(repo_id, query_key);
+  `);
 }
 
 function migrateUsageEvents(db: Database.Database): void {
@@ -506,7 +530,7 @@ export function updateClaim(
   const kind = patch.kind !== undefined ? patch.kind.trim() : existing.kind;
   const anchors =
     patch.code_anchors !== undefined
-      ? JSON.stringify(patch.code_anchors)
+      ? JSON.stringify(normalizeAnchors(patch.code_anchors))
       : existing.code_anchors;
   const pinned =
     patch.pinned !== undefined ? (patch.pinned ? 1 : 0) : (existing.pinned ?? 0);

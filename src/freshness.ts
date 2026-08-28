@@ -1,5 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { anchorFsPath, normalizeAnchor } from "./anchors.js";
 import type { ClaimRow } from "./db.js";
 
 export type FreshnessStatus = "fresh" | "stale" | "missing_anchor" | "unanchored" | "unknown";
@@ -14,19 +15,24 @@ export function parseAnchors(codeAnchorsJson: string): string[] {
   try {
     const parsed = JSON.parse(codeAnchorsJson) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((a): a is string => typeof a === "string" && Boolean(a.trim()));
+    return parsed
+      .filter((a): a is string => typeof a === "string" && Boolean(a.trim()))
+      .map((a) => normalizeAnchor(a) || a.trim())
+      .filter(Boolean);
   } catch {
     return [];
   }
 }
 
 function resolveAnchorPath(rootPath: string, anchor: string): string {
-  if (isAbsolute(anchor)) return anchor;
-  return join(rootPath, anchor);
+  const pathPart = anchorFsPath(anchor) || anchor;
+  if (isAbsolute(pathPart)) return pathPart;
+  return join(rootPath, pathPart);
 }
 
 /**
  * Compare claim.updated_at to filesystem mtimes of code_anchors.
+ * Symbol/line suffixes are stripped for FS checks (path:Symbol → path).
  * Missing paths → missing_anchor; any newer file → stale.
  */
 export function assessClaimFreshness(rootPath: string | undefined, claim: ClaimRow): ClaimFreshness {
@@ -48,10 +54,11 @@ export function assessClaimFreshness(rootPath: string | undefined, claim: ClaimR
   let sawFile = false;
 
   for (const anchor of anchors) {
+    const pathPart = anchorFsPath(anchor) || anchor;
     const full = resolveAnchorPath(rootPath, anchor);
     if (!existsSync(full)) {
       // Workspace-style anchors (slug names) are not real paths — ignore those.
-      if (!anchor.includes("/") && !anchor.includes("\\") && !anchor.includes(".")) {
+      if (!pathPart.includes("/") && !pathPart.includes("\\") && !pathPart.includes(".")) {
         continue;
       }
       missingAnchors.push(anchor);

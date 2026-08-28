@@ -12,9 +12,11 @@ import {
   type FlowRow,
   type UsageEventRow,
 } from "./db.js";
+import { symbolTokensFromAnchors } from "./anchors.js";
 import {
   assessClaimFreshness,
   freshnessScoreMultiplier,
+  parseAnchors,
   type ClaimFreshness,
   type FreshnessStatus,
 } from "./freshness.js";
@@ -28,6 +30,17 @@ import {
 import { embedBoostFromScore, searchClaimsEmbed, searchClaimsEmbedLive } from "./embed.js";
 import { FEATURE_LOCAL_EMBED, hasFeature } from "./license.js";
 import { PERSONAL_SLUG } from "./personal.js";
+import {
+  assocBoostMap,
+  claimHitCountMap,
+  reinforceBoostForClaim,
+} from "./reinforce.js";
+import {
+  findMemoryGaps,
+  gapsRelevantToQuery,
+  renderGapsMarkdown,
+  type MemoryGaps,
+} from "./gaps.js";
 
 function scoreNote(note: ConversationNoteRow, queryTokens: string[]): number {
   if (queryTokens.length === 0) return 0;
@@ -35,6 +48,17 @@ function scoreNote(note: ConversationNoteRow, queryTokens: string[]): number {
   let score = 0;
   for (const token of queryTokens) {
     if (hay.includes(token)) score += token.length > 4 ? 3 : 2;
+  }
+  return score;
+}
+
+function symbolBoost(claim: ClaimRow, queryTokens: string[]): number {
+  if (queryTokens.length === 0) return 0;
+  const symbols = symbolTokensFromAnchors(parseAnchors(claim.code_anchors));
+  if (symbols.length === 0) return 0;
+  let score = 0;
+  for (const token of queryTokens) {
+    if (symbols.includes(token)) score += token.length > 4 ? 5 : 3;
   }
   return score;
 }
@@ -52,6 +76,8 @@ export type ContextPacket = {
   flows: FlowRow[];
   components: ComponentRow[];
   notes: Array<ConversationNoteRow & { score: number }>;
+  /** Optional gaps relevant to this query (compact packets may omit). */
+  gaps?: MemoryGaps;
 };
 
 export type BuildContextOptions = {
@@ -59,6 +85,8 @@ export type BuildContextOptions = {
   rootPath?: string;
   /** Include cross-repo personal prefs (default true). */
   includePersonal?: boolean;
+  /** Attach query-relevant memory gaps (default false — use for CLI/API opt-in). */
+  includeGaps?: boolean;
 };
 
 function rankClaims(
@@ -69,22 +97,34 @@ function rankClaims(
     rootPath?: string;
     ftsBoost: Map<string, number>;
     embedBoost: Map<string, number>;
+    hitCounts?: Map<string, number>;
+    assocBoosts?: Map<string, number>;
     extraReason?: string;
   },
 ): RankedClaim[] {
+  const hitCounts = opts.hitCounts ?? new Map();
+  const assocBoosts = opts.assocBoosts ?? new Map();
   return claims.map((c) => {
     const freshness = assessClaimFreshness(opts.rootPath, c);
     const keyword = keywordScoreClaim(c, queryTokens);
+    const sym = symbolBoost(c, queryTokens);
     const boost = opts.ftsBoost.get(c.id) ?? 0;
     const embed = opts.embedBoost.get(c.id) ?? 0;
     const pinBoost = (c.pinned ?? 0) > 0 ? 40 : 0;
     const kindBoost = kindRankBoost(c.kind);
-    const matchSignal = keyword + boost + embed + pinBoost;
+    const { boost: helpBoost, reason: helpReason } = reinforceBoostForClaim(
+      c.id,
+      hitCounts,
+      assocBoosts,
+    );
+    const matchSignal = keyword + sym + boost + embed + pinBoost + helpBoost;
     const reasons: string[] = [];
     if (opts.extraReason) reasons.push(opts.extraReason);
     if (keyword > 0) reasons.push(`keyword+${keyword}`);
+    if (sym > 0) reasons.push(`symbol+${sym}`);
     if (boost > 0) reasons.push(`fts+${boost.toFixed(1)}`);
     if (embed > 0) reasons.push(`embed+${embed.toFixed(1)}`);
+    if (helpReason) reasons.push(helpReason);
     if (pinBoost > 0) reasons.push("pinned");
     if (matchSignal > 0 && kindBoost >= 8) reasons.push(`kind:${c.kind}`);
     if (freshness.status === "stale") reasons.push("stale↓");
@@ -95,7 +135,9 @@ function rankClaims(
       raw > 0
         ? Math.max(
             raw,
-            boost > 0 || embed > 0 ? boost + embed + pinBoost + kindBoost * 0.35 : raw,
+            boost > 0 || embed > 0 || helpBoost > 0
+              ? boost + embed + pinBoost + helpBoost + kindBoost * 0.35
+              : raw,
           )
         : 0;
     const score = withFloor * freshnessScoreMultiplier(freshness.status);
@@ -128,11 +170,15 @@ export function buildContext(
   for (const hit of embedHits) {
     embedBoost.set(hit.id, embedBoostFromScore(hit.score));
   }
+  const hitCounts = claimHitCountMap(repoId);
+  const assocBoosts = assocBoostMap(repoId, query);
 
   const scored = rankClaims(allActive, query, queryTokens, {
     rootPath,
     ftsBoost,
     embedBoost,
+    hitCounts,
+    assocBoosts,
   })
     .filter((c) => (queryTokens.length === 0 ? true : c.score > 0))
     .sort((a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at));
@@ -224,7 +270,13 @@ export function buildContext(
       ? notesRaw
       : listConversationNotes(repoId, 5).map((n) => ({ ...n, score: 0 }));
 
-  return { query, claims: selected, flows, components, notes };
+  let gaps: MemoryGaps | undefined;
+  if (opts.includeGaps) {
+    gaps = gapsRelevantToQuery(findMemoryGaps(repoId, { days: 30, limit: 6 }), query);
+    if (gaps.suggestions.length === 0) gaps = undefined;
+  }
+
+  return { query, claims: selected, flows, components, notes, gaps };
 }
 
 export type ShowdownClaim = {
@@ -329,6 +381,13 @@ function freshnessLabel(status: FreshnessStatus): string | null {
   }
 }
 
+export type RenderContextOptions = {
+  /** Dense packet for MCP / hooks — fewer tokens, same facts. */
+  compact?: boolean;
+  /** Append relevant memory gaps (default: true when packet.gaps set). */
+  includeGaps?: boolean;
+};
+
 /** Keyword match only. Fallback packets (score 0) are misses — the model call still happens. */
 export function classifyLookup(query: string, claims: ClaimRow[]): "local_hit" | "server_trip" {
   const tokens = tokenize(query);
@@ -366,7 +425,65 @@ export function decorateUsageEvents(events: UsageEventRow[]): UsageEventRow[] {
   });
 }
 
-export function renderContextMarkdown(packet: ContextPacket): string {
+function renderClaimCompact(claim: RankedClaim): string[] {
+  const lines: string[] = [];
+  const why = claim.reasons?.length ? ` · ${claim.reasons.slice(0, 4).join(",")}` : "";
+  const fl = freshnessLabel(claim.freshness.status);
+  const pin = (claim.pinned ?? 0) > 0 ? " · pin" : "";
+  const fresh = fl ? ` · ${fl}` : "";
+  lines.push(`### ${claim.id} · ${claim.kind}${pin}${fresh}${why}`);
+  const text = claim.text.replace(/\s+/g, " ").trim();
+  lines.push(text.length > 220 ? `${text.slice(0, 217)}…` : text);
+  let anchors: string[] = [];
+  try {
+    anchors = JSON.parse(claim.code_anchors) as string[];
+  } catch {
+    anchors = [];
+  }
+  if (anchors.length > 0) {
+    lines.push(`→ ${anchors.slice(0, 6).map((a) => `\`${a}\``).join(" ")}`);
+  }
+  lines.push("");
+  return lines;
+}
+
+export function renderContextMarkdown(
+  packet: ContextPacket,
+  opts: RenderContextOptions = {},
+): string {
+  const compact = Boolean(opts.compact);
+  if (compact) {
+    const lines: string[] = ["# amem", `Q: ${packet.query}`, ""];
+    if (packet.claims.length === 0 && packet.notes.length === 0) {
+      lines.push("No claims yet. Seed with bootstrap or remember after a durable outcome.");
+      return lines.join("\n");
+    }
+    for (const claim of packet.claims) {
+      lines.push(...renderClaimCompact(claim));
+    }
+    if (packet.components.length > 0) {
+      lines.push(
+        `Components: ${packet.components
+          .slice(0, 4)
+          .map((c) => c.name)
+          .join("; ")}`,
+        "",
+      );
+    }
+    if (packet.notes.length > 0 && packet.claims.length < 3) {
+      for (const note of packet.notes.slice(0, 2)) {
+        lines.push(`- ${note.text.replace(/\s+/g, " ").slice(0, 160)}`);
+      }
+      lines.push("");
+    }
+    const showGaps = opts.includeGaps !== false && packet.gaps?.suggestions.length;
+    if (showGaps && packet.gaps) {
+      lines.push(renderGapsMarkdown(packet.gaps, { maxItems: 3 }).trimEnd(), "");
+    }
+    lines.push("_Local `~/.amem`. Verify anchors before edits._");
+    return lines.join("\n");
+  }
+
   const lines: string[] = ["# Agent Memory Context", "", `Query: ${packet.query}`, ""];
 
   if (packet.claims.length === 0 && packet.notes.length === 0) {
@@ -448,6 +565,10 @@ export function renderContextMarkdown(packet: ContextPacket): string {
       lines.push(`- (${label}) ${note.text.replace(/\s+/g, " ").slice(0, 280)}`);
     }
     lines.push("");
+  }
+
+  if (opts.includeGaps !== false && packet.gaps?.suggestions.length) {
+    lines.push(renderGapsMarkdown(packet.gaps, { maxItems: 4 }).trimEnd(), "");
   }
 
   lines.push(

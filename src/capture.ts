@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { extractAnchorsFromText, normalizeAnchors, anchorFsPath } from "./anchors.js";
 import {
   insertProposalDraft,
   listProposalDrafts,
@@ -44,9 +45,16 @@ export function isUsefulRememberText(text: string): boolean {
 }
 
 export function extractCaptureAnchors(text: string, repoRoot: string): string[] {
+  const extracted = extractAnchorsFromText(text).filter((a) => {
+    const path = anchorFsPath(a);
+    return path && existsSync(resolve(repoRoot, path));
+  });
+  // Also keep legacy bare-path hits that exist on disk
   const found = [...text.matchAll(PATH_RE)].map((m) => m[0]);
-  const unique = [...new Set(found)].slice(0, 6);
-  return unique.filter((p) => existsSync(resolve(repoRoot, p)));
+  const legacy = [...new Set(found)]
+    .slice(0, 6)
+    .filter((p) => existsSync(resolve(repoRoot, p)));
+  return normalizeAnchors([...extracted, ...legacy]).slice(0, 6);
 }
 
 function draftExistsWithSource(repoId: string, source: string): boolean {

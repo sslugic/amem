@@ -24,12 +24,17 @@ const TOOLS: RememberContract["tools"] = [
   {
     name: "amem_context",
     role: "read",
-    when: "Before exploring files or sending a large prompt. Pass workspace=<slug>.",
+    when: "Before exploring files or sending a large prompt. Pass workspace=<slug>. Dense compact packet by default.",
   },
   {
     name: "amem_remember",
     role: "write",
-    when: "After a durable outcome: a decision, constraint, owner, or gotcha that should survive this chat.",
+    when: "After a durable outcome: a decision, constraint, owner, or gotcha that should survive this chat. Prefer path:Symbol anchors.",
+  },
+  {
+    name: "amem_gaps",
+    role: "meta",
+    when: "When misses keep recurring — list hot queries and unanchored paths worth remembering.",
   },
   {
     name: "amem_recipe",
@@ -62,7 +67,7 @@ const RULES: RememberRule[] = [
   {
     id: "no-prompt-strategy",
     must: true,
-    text: "Store repo or workspace facts with file anchors — not proprietary prompting strategy.",
+    text: "Store repo or workspace facts with file anchors (path or path:Symbol) — not proprietary prompting strategy.",
   },
   {
     id: "durable-kinds",
@@ -103,7 +108,7 @@ ${ruleLines}
 
 1. \`amem_context\` query="What should I know before changing auth?" workspace=my-app
 2. Do the work, verify files.
-3. \`amem_remember\` text="Auth mode is checked in src/auth.ts before Drive sync" workspace=my-app kind=constraint anchors=["src/auth.ts"]
+3. \`amem_remember\` text="Auth mode is checked in src/auth.ts before Drive sync" workspace=my-app kind=constraint anchors=["src/auth.ts:checkAuthMode"]
 `;
 }
 

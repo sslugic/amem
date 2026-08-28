@@ -1,4 +1,5 @@
 import type { ContextPacket } from "./context.js";
+import { uniqueAnchorPaths } from "./anchors.js";
 
 /** Rough chars→tokens. */
 export function estimateTokensFromText(text: string): number {
@@ -61,14 +62,16 @@ export function metricsFromPacket(packet: ContextPacket, markdown: string): {
   for (const claim of scored) {
     try {
       const anchors = JSON.parse(claim.code_anchors) as string[];
-      for (const a of anchors) anchorSet.add(a);
+      for (const path of uniqueAnchorPaths(anchors)) anchorSet.add(path);
     } catch {
       // ignore
     }
   }
   if (kind === "local_hit") {
     for (const component of packet.components) {
-      if (component.code_anchor) anchorSet.add(component.code_anchor);
+      if (component.code_anchor) {
+        for (const path of uniqueAnchorPaths([component.code_anchor])) anchorSet.add(path);
+      }
     }
   }
   const anchorsCount = anchorSet.size;

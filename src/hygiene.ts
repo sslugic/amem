@@ -16,6 +16,7 @@ import { FEATURE_HYGIENE, hasFeature, requireFeature } from "./license.js";
 import { applyProposal, applySupersedes } from "./proposal.js";
 import { tokenJaccard } from "./search.js";
 import { parseAnchors } from "./freshness.js";
+import { anchorsOverlap } from "./anchors.js";
 
 export type HygieneDuplicate = {
   keepId: string;
@@ -93,9 +94,9 @@ function computeHygiene(repoId: string, unusedDays = 90): HygieneReport {
       const b = claims[j]!;
       const sim = tokenJaccard(a.text, b.text);
       if (sim < 0.72) continue;
-      const aAnchors = new Set(parseAnchors(a.code_anchors));
+      const aAnchors = parseAnchors(a.code_anchors);
       const bAnchors = parseAnchors(b.code_anchors);
-      const share = bAnchors.some((p) => aAnchors.has(p));
+      const share = anchorsOverlap(aAnchors, bAnchors);
       if (!share && sim < 0.85) continue;
       const keep =
         Number(a.pinned || 0) >= Number(b.pinned || 0) && a.text.length >= b.text.length ? a : b;

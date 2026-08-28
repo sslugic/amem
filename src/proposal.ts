@@ -14,6 +14,7 @@ import {
 } from "./db.js";
 import { compiledDenyPatterns, type AmemPolicy } from "./policy.js";
 import { newId } from "./repo-identity.js";
+import { anchorsOverlap, normalizeAnchors, sharedAnchorLabels } from "./anchors.js";
 import { parseAnchors } from "./freshness.js";
 import { tokenJaccard } from "./search.js";
 
@@ -97,8 +98,7 @@ export function collectSupersedeTargets(proposal: Proposal): Map<string, string>
 }
 
 function shareAnchor(a: string[], b: string[]): boolean {
-  const set = new Set(a);
-  return b.some((x) => set.has(x));
+  return anchorsOverlap(a, b);
 }
 
 export type ClaimConflict = {
@@ -143,7 +143,7 @@ export function findClaimConflicts(
           otherId: other.id,
           otherText: other.text,
           similarity: sim,
-          sharedAnchors: anchors.filter((a) => otherAnchors.includes(a)),
+          sharedAnchors: sharedAnchorLabels(anchors, otherAnchors),
           withinProposal: false,
         });
       }
@@ -163,7 +163,7 @@ export function findClaimConflicts(
           otherId: peer.id,
           otherText: peer.text ?? "",
           similarity: sim,
-          sharedAnchors: anchors.filter((a) => peerAnchors.includes(a)),
+          sharedAnchors: sharedAnchorLabels(anchors, peerAnchors),
           withinProposal: true,
         });
       }
@@ -480,7 +480,7 @@ export function applyProposal(
         claim.id,
         claim.kind,
         claim.text,
-        JSON.stringify(claim.code_anchors ?? []),
+        JSON.stringify(normalizeAnchors(claim.code_anchors ?? [])),
         claim.source_ref ?? null,
         prior?.created_at ?? ts,
         ts,
