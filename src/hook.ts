@@ -86,6 +86,8 @@ function injectPacket(repo: RepoRow, query: string, session: string, platform: s
     platform,
     sessionId: session,
     query: query || "(session start)",
+    compact: true,
+    includeGaps: true,
   });
   if (packet.claims.length === 0 && packet.notes.length === 0) return null;
   return cap(markdown);

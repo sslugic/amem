@@ -31,12 +31,13 @@ Hosts can also call the `amem_recipe` MCP tool.
 - Must: Call `amem_remember` when the user confirms a durable fact, or when you discover a constraint that the next session will need.
 - Must: Memory stays on this machine under `~/.amem`. Do not upload claims, paste them into shared docs, or commit them to product git.
 - Must: Never remember passwords, API keys, tokens, or private key material.
-- Must: Store repo or workspace facts with file anchors — not proprietary prompting strategy.
+- Must: Store repo or workspace facts with file anchors — not proprietary prompting strategy. Prefer `path` or `path:Symbol` (e.g. `src/auth.ts:checkAuthMode`).
 - Must: Prefer kinds constraint, gotcha, structure, howto, or owner. Use kind=session only for short-lived chat takeaways — session spam drowns retrieval.
 - Must: Named workspaces are not git repos. Always pass the workspace slug on context and remember.
+- Should: After durable work, call `amem_gaps` (or `amem gaps`) when context misses keep recurring — fill thin spots.
 
 ## Example
 
 1. `amem_context` query="What should I know before changing auth?" workspace=my-app
 2. Do the work, verify files.
-3. `amem_remember` text="Auth mode is checked in src/auth.ts before Drive sync" workspace=my-app kind=constraint anchors=["src/auth.ts"]
+3. `amem_remember` text="Auth mode is checked in src/auth.ts before Drive sync" workspace=my-app kind=constraint anchors=["src/auth.ts:checkAuthMode"]

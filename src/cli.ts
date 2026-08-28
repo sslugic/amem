@@ -22,6 +22,7 @@ import {
   openDb,
 } from "./db.js";
 import { handleHookPayload } from "./hook.js";
+import { findMemoryGaps, renderGapsMarkdown } from "./gaps.js";
 import { installClaude, claudeInstallHealth } from "./install/claude.js";
 import { installCursor, cursorInstallHealth } from "./install/cursor.js";
 import { installHost } from "./install/hosts.js";
@@ -108,8 +109,9 @@ Usage:
   amem rename "<display name>" --workspace <slug>
   amem status [--workspace <name>]
   amem doctor [--attest] [--json]
-  amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna]
-  amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>]
+  amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna] [--compact] [--gaps]
+  amem gaps [--workspace <name>] [--days 30] [--json]
+  amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path|path:Symbol>]
   amem recipe [--json]
   amem propose validate <file.json>
   amem propose diff <file.json>
@@ -450,7 +452,7 @@ async function main(): Promise<void> {
       }
       case "context": {
         const query = positional.slice(1).join(" ").trim();
-        if (!query) throw new Error('Usage: amem context "<query>"');
+        if (!query) throw new Error('Usage: amem context "<query>" [--compact] [--gaps]');
         const repo = resolveBinding(flags);
         const platform =
           flagString(flags, "platform") ??
@@ -464,11 +466,15 @@ async function main(): Promise<void> {
           process.env.AMEM_SESSION_ID ??
           process.env.CURSOR_SESSION_ID ??
           process.env.CLAUDE_SESSION_ID;
+        const compact = Boolean(flags.get("compact"));
+        const includeGaps = Boolean(flags.get("gaps")) || compact;
         const { markdown, event } = logContextUsage({
           repoId: repo.id,
           platform,
           sessionId,
           query,
+          compact,
+          includeGaps,
         });
         console.log(markdown);
         console.log("");
@@ -477,9 +483,26 @@ async function main(): Promise<void> {
         );
         break;
       }
+      case "gaps": {
+        const repo = resolveBinding(flags);
+        const days = Number(flagString(flags, "days") ?? "30");
+        const gaps = findMemoryGaps(repo.id, {
+          days: Number.isFinite(days) ? days : 30,
+          limit: 10,
+        });
+        if (flags.get("json")) {
+          console.log(JSON.stringify(gaps, null, 2));
+        } else {
+          console.log(renderGapsMarkdown(gaps).trimEnd());
+          if (gaps.missQueries.length === 0 && gaps.unclaimedPaths.length === 0) {
+            console.log(`(looked at last ${gaps.days} days for ${repo.repo_name})`);
+          }
+        }
+        break;
+      }
       case "remember": {
         const text = positional.slice(1).join(" ").trim();
-        if (!text) throw new Error('Usage: amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>]');
+        if (!text) throw new Error('Usage: amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path|path:Symbol>]');
         const repo = resolveBinding(flags);
         const anchor = flagString(flags, "anchor");
         const result = handleApi({

@@ -24,7 +24,7 @@ const TOOLS = [
   {
     name: "amem_context",
     description:
-      "Retrieve compact local amem memory for a query. Use before exploring files or calling a remote LLM with a large prompt. Pass workspace for named app memory, not only git repos.",
+      "Retrieve compact local amem memory for a query. Use before exploring files or calling a remote LLM with a large prompt. Pass workspace for named app memory, not only git repos. Returns a dense packet by default (format=compact).",
     inputSchema: {
       type: "object",
       properties: {
@@ -32,6 +32,10 @@ const TOOLS = [
         workspace: { type: "string", description: "Named workspace (not a git repo)" },
         platform: { type: "string" },
         sessionId: { type: "string" },
+        format: {
+          type: "string",
+          description: "compact (default) or full",
+        },
       },
       required: ["query"],
     },
@@ -44,14 +48,19 @@ const TOOLS = [
   },
   {
     name: "amem_remember",
-    description: "Store a durable local fact in amem (stays on this machine).",
+    description:
+      "Store a durable local fact in amem (stays on this machine). Prefer anchors like path or path:Symbol (e.g. src/api.ts:validateWebhook).",
     inputSchema: {
       type: "object",
       properties: {
         text: { type: "string" },
         workspace: { type: "string" },
         kind: { type: "string" },
-        anchors: { type: "array", items: { type: "string" } },
+        anchors: {
+          type: "array",
+          items: { type: "string" },
+          description: "File paths and optional path:Symbol anchors",
+        },
       },
       required: ["text"],
     },
@@ -95,6 +104,19 @@ const TOOLS = [
       properties: {
         workspace: { type: "string" },
         days: { type: "number", description: "Activity lookback (default 30)" },
+      },
+    },
+  },
+  {
+    name: "amem_gaps",
+    description:
+      "Find memory gaps: recurring context misses and file paths that show up in exploration but have no claim anchors. Use to decide what to remember next.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace: { type: "string" },
+        days: { type: "number", description: "Lookback window (default 30)" },
+        limit: { type: "number", description: "Max gaps per category (default 8)" },
       },
     },
   },
@@ -214,6 +236,10 @@ function callTool(name: string, args: Record<string, unknown>, fallbackWorkspace
   if (name === "amem_context") {
     const query = typeof args.query === "string" ? args.query : "";
     if (!query.trim()) return textResult("query is required", true);
+    const format =
+      typeof args.format === "string" && args.format.trim().toLowerCase() === "full"
+        ? "full"
+        : "compact";
     const result = api(
       "POST",
       "/api/context",
@@ -222,6 +248,9 @@ function callTool(name: string, args: Record<string, unknown>, fallbackWorkspace
         workspace,
         platform: typeof args.platform === "string" ? args.platform : "mcp",
         sessionId: typeof args.sessionId === "string" ? args.sessionId : undefined,
+        format,
+        compact: format === "compact",
+        gaps: true,
       },
       { workspace },
     );
@@ -290,6 +319,19 @@ function callTool(name: string, args: Record<string, unknown>, fallbackWorkspace
     });
     if (result.status >= 400) return apiResult(result);
     return jsonResult(compactGraph(result.body));
+  }
+  if (name === "amem_gaps") {
+    const result = api("GET", "/api/gaps", null, {
+      workspace,
+      query: {
+        days: parseDays(args.days),
+        limit: parseDays(args.limit, 8),
+      },
+    });
+    if (result.status >= 400) return apiResult(result);
+    const body = result.body as { markdown?: string; suggestions?: string[] };
+    if (body.markdown) return textResult(body.markdown);
+    return jsonResult(result.body);
   }
   if (name === "amem_status") {
     if (workspace && !getRepoByName(workspace)) {
