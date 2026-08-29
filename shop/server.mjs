@@ -80,12 +80,18 @@ async function licenseFns() {
   return import(join(REPO, "dist", "license.js"));
 }
 
-function siteChrome(_active, body, title = "amem — get started") {
+function siteChrome(active, body, title = "amem — get started") {
+  const tab = (id, href, label) =>
+    `<a class="nav-tab${active === id ? " active" : ""}" href="${href}">${label}</a>`;
   return htmlPage(
     title,
     `<div class="shell">
   <header class="top">
     <a class="brand" href="/">amem</a>
+    <nav class="nav" aria-label="Site">
+      ${tab("start", "/", "Start")}
+      ${tab("what", "/what", "What it does")}
+    </nav>
   </header>
   ${body}
 </div>
@@ -127,7 +133,7 @@ body{
   padding:.4rem .85rem;border-radius:999px;border:1px solid transparent}
 .nav-tab:hover{color:var(--ink)}
 .nav-tab.active{color:var(--ink);border-color:rgba(126,184,255,.55);background:rgba(126,184,255,.08)}
-.hero{position:relative;flex:1;display:grid;align-items:center;min-height:calc(100vh - 3.4rem);
+.hero{position:relative;flex:0 0 auto;display:grid;align-items:center;min-height:min(68vh, 38rem);
   padding:2rem 1.25rem 2.5rem;overflow:hidden}
 .hero-art{position:absolute;inset:0;pointer-events:none}
 .hero-art img{width:100%;height:100%;object-fit:cover;object-position:center 28%;
@@ -158,6 +164,48 @@ body{
 .cmd-panel.active{display:block}
 .cmd-hint{margin:.75rem 0 0;color:var(--muted);font-size:.8rem}
 .cmd-hint a{color:var(--accent)}
+.show{position:relative;z-index:1;padding:0 1.25rem 3.25rem;max-width:720px;margin:-1.25rem auto 0;width:100%}
+.show-card{border:1px solid var(--line);border-radius:18px;background:rgba(20,27,33,.88);
+  backdrop-filter:blur(14px);box-shadow:0 18px 50px rgba(0,0,0,.35);padding:1.25rem 1.3rem 1.15rem}
+.show-kicker{margin:0 0 .45rem;color:var(--accent);font-size:.72rem;font-weight:600;
+  letter-spacing:.08em;text-transform:uppercase}
+.show-frame{position:relative;min-height:8.5rem}
+.show-slide{display:none}
+.show-slide.active{display:block}
+.show-slide h3{margin:0 0 .4rem;font-size:1.15rem;letter-spacing:-.02em}
+.show-slide p{margin:0;color:var(--muted);font-size:.92rem;max-width:36rem}
+.show-nav{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin:.95rem 0 0}
+.show-dots{display:flex;flex-wrap:wrap;gap:.4rem}
+.show-dot{appearance:none;width:.65rem;height:.65rem;padding:0;border-radius:999px;cursor:pointer;
+  border:1px solid var(--line);background:transparent}
+.show-dot.active{background:var(--accent);border-color:var(--accent)}
+.show-arrows{display:flex;gap:.4rem}
+.show-arrows button{appearance:none;border:1px solid var(--line);background:transparent;color:var(--ink);
+  font:inherit;font-size:.85rem;padding:.3rem .7rem;border-radius:999px;cursor:pointer}
+.show-arrows button:hover,.show-dot:hover{border-color:rgba(232,238,242,.35)}
+.show-more{margin:.85rem 0 0;font-size:.88rem}
+.show-more a{color:var(--accent);text-decoration:none;font-weight:500}
+.show-more a:hover{text-decoration:underline}
+.show[data-paused="true"] .show-kicker::after{content:" · paused"}
+.what{max-width:860px;margin:0 auto;padding:2rem 1.25rem 3.5rem;width:100%}
+.what h1{margin:0 0 .4rem;font-size:clamp(1.6rem,4vw,2.1rem);letter-spacing:-.03em}
+.what-lead{margin:0 0 1.75rem;color:var(--muted);max-width:40rem;font-size:1.02rem}
+.what h2{margin:2rem 0 .65rem;font-size:1.15rem;letter-spacing:-.02em}
+.what-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem}
+.what-card{padding:1rem 1.05rem;border:1px solid var(--line);border-radius:14px;background:rgba(20,27,33,.85)}
+.what-card h3{margin:0 0 .35rem;font-size:.98rem}
+.what-card p{margin:0;color:var(--muted);font-size:.88rem}
+.what-table{width:100%;border-collapse:collapse;font-size:.9rem}
+.what-table th,.what-table td{text-align:left;padding:.55rem .45rem;border-bottom:1px solid var(--line);vertical-align:top}
+.what-table th{color:var(--muted);font-weight:500;width:42%}
+.what-list{margin:0;padding:0 0 0 1.15rem;color:var(--muted)}
+.what-list li+li{margin-top:.4rem}
+.what-cta{margin:2rem 0 0;padding:1.15rem 1.2rem;border:1px solid var(--line);border-radius:16px;
+  background:rgba(20,27,33,.85)}
+.what-cta p{margin:0 0 .85rem;color:var(--muted)}
+@media(max-width:800px){
+  .what-grid{grid-template-columns:1fr}
+}
 a.btn,button.btn{appearance:none;display:block;width:100%;text-align:center;text-decoration:none;border:0;cursor:pointer;
   background:var(--accent);color:#062925;font:inherit;font-weight:600;padding:.85rem 1.2rem;border-radius:999px}
 a.btn.secondary,button.btn.secondary{background:transparent;color:var(--ink);border:1px solid var(--line)}
@@ -532,6 +580,50 @@ function cmdScript() {
       }
     });
   });
+
+  const show = document.querySelector("[data-show]");
+  if (show) {
+    const slides = [...show.querySelectorAll("[data-slide]")];
+    const dots = [...show.querySelectorAll("[data-dot]")];
+    let i = 0;
+    let timer = null;
+    let locked = false;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const go = (n, fromUser) => {
+      if (fromUser) locked = true;
+      i = (n + slides.length) % slides.length;
+      slides.forEach((s, k) => {
+        const on = k === i;
+        s.classList.toggle("active", on);
+        s.hidden = !on;
+      });
+      dots.forEach((d, k) => {
+        const on = k === i;
+        d.classList.toggle("active", on);
+        d.setAttribute("aria-current", on ? "true" : "false");
+      });
+      if (fromUser) stop();
+    };
+    const stop = () => {
+      locked = true;
+      if (timer) clearInterval(timer);
+      timer = null;
+      show.dataset.paused = "true";
+    };
+    show.querySelector("[data-prev]")?.addEventListener("click", () => go(i - 1, true));
+    show.querySelector("[data-next]")?.addEventListener("click", () => go(i + 1, true));
+    dots.forEach((d, k) => d.addEventListener("click", () => go(k, true)));
+    show.addEventListener("click", (ev) => {
+      if (ev.target.closest("a")) return;
+      if (!locked) stop();
+    });
+    show.addEventListener("keydown", (ev) => {
+      if (ev.key === "ArrowLeft") go(i - 1, true);
+      if (ev.key === "ArrowRight") go(i + 1, true);
+    });
+    go(0, false);
+    if (!reduce) timer = setInterval(() => { if (!locked) go(i + 1, false); }, 6500);
+  }
 })();
 </script>`;
 }
@@ -555,7 +647,7 @@ function installCommands() {
     </div>
   </div>
 </div>
-<p class="cmd-hint">Node 20+. Then run <code>amem ui</code> — upgrade to Pro there when you want it. Source on <a href="https://github.com/sslugic/amem">GitHub</a>.</p>`;
+<p class="cmd-hint">Node 20+. Then run <code>amem ui</code>. Source on <a href="https://github.com/sslugic/amem">GitHub</a>.</p>`;
 }
 
 function dollars(cents) {
@@ -563,20 +655,152 @@ function dollars(cents) {
 }
 
 function landing() {
+  const slides = [
+    {
+      title: "Agents forget. amem does not.",
+      body: "The next Cursor or Claude session starts with the constraints, gotchas, and file anchors you already paid to discover — not a cold grep of the whole tree.",
+    },
+    {
+      title: "Facts, procedures, and a board",
+      body: "Memory holds what is true. Skills hold how you do it here, loaded only when relevant. Tasks are a Kanban the agent can move so follow-ups survive the chat.",
+    },
+    {
+      title: "It learns at the end of a hard session",
+      body: "amem ships no model. When a session looks like a hard-won procedure, it nudges the agent to write a skill. You approve. The next agent does not rediscover it.",
+    },
+    {
+      title: "Never leaves the laptop",
+      body: "The database lives in <code>~/.amem</code>. The UI binds to localhost. No managed sync, no org wiki, no cloud RAG. Optional lock and encrypted local backups.",
+    },
+    {
+      title: "Cursor, Claude, and the rest",
+      body: "A project rule, stop hooks, and MCP tools (<code>amem_context</code>, <code>amem_remember</code>, skills, tasks). Same local DB for Windsurf, Continue, Aider, and Zed.",
+    },
+  ];
+  const slideHtml = slides
+    .map(
+      (s, i) => `<article class="show-slide${i === 0 ? " active" : ""}" data-slide ${i === 0 ? "" : "hidden"}>
+      <h3>${s.title}</h3>
+      <p>${s.body}</p>
+    </article>`,
+    )
+    .join("");
+  const dots = slides
+    .map(
+      (_, i) =>
+        `<button type="button" class="show-dot${i === 0 ? " active" : ""}" data-dot aria-label="Show slide ${i + 1}"${i === 0 ? ' aria-current="true"' : ""}></button>`,
+    )
+    .join("");
   return siteChrome(
     "start",
-    `<main class="hero">
-  <div class="hero-art" aria-hidden="true">
-    <img src="/public/amem-ui.png" alt="" width="1600" height="1000"/>
+    `<main>
+  <section class="hero">
+    <div class="hero-art" aria-hidden="true">
+      <img src="/public/amem-ui.png" alt="" width="1600" height="1000"/>
+    </div>
+    <div class="hero-panel">
+      <p class="hero-kicker">Local agent memory</p>
+      <p class="hero-brand">amem</p>
+      <h1>Everything is free</h1>
+      <p class="hero-lead">Memory, skills, tasks, and the desktop app — all of it. Facts stay in <code>~/.amem</code> on your machine. One command, then open the UI.</p>
+      ${installCommands()}
+    </div>
+  </section>
+  <section class="show" data-show tabindex="0" aria-roledescription="carousel" aria-label="What amem does">
+    <div class="show-card">
+      <p class="show-kicker">What changes</p>
+      <div class="show-frame">${slideHtml}</div>
+      <div class="show-nav">
+        <div class="show-dots">${dots}</div>
+        <div class="show-arrows">
+          <button type="button" data-prev aria-label="Previous">←</button>
+          <button type="button" data-next aria-label="Next">→</button>
+        </div>
+      </div>
+      <p class="show-more"><a href="/what">Everything amem does — problems, features, privacy</a></p>
+    </div>
+  </section>
+</main>`,
+  );
+}
+
+function whatPage() {
+  return siteChrome(
+    "what",
+    `<main class="what">
+  <h1>What amem actually does</h1>
+  <p class="what-lead">Coding agents forget between sessions. They re-grep the same tree, re-learn the same constraints, and burn tokens rediscovering decisions you already paid for. amem is a private local sidecar so the next session starts oriented.</p>
+
+  <h2>The problems</h2>
+  <table class="what-table">
+    <thead><tr><th>Without it</th><th>With it</th></tr></thead>
+    <tbody>
+      <tr><th>Agent explores broadly every session</th><td>It queries memory first, then verifies the right files</td></tr>
+      <tr><th>Decisions die in chat scrollback</th><td>They become claims with file anchors and a Why line</td></tr>
+      <tr><th>The same deploy dance is rediscovered</th><td>A skill loads only when that work comes up again</td></tr>
+      <tr><th>“Do this later” vanishes when the tab closes</th><td>A Kanban the agent can add, move, and complete</td></tr>
+      <tr><th>Pressure to dump context into a shared wiki</th><td>Explicitly personal — prompts and learnings stay on the laptop</td></tr>
+      <tr><th>A flat AGENTS.md that goes stale</th><td>A small graph: components → flows → claims, updated as drafts</td></tr>
+    </tbody>
+  </table>
+
+  <h2>What you get</h2>
+  <div class="what-grid">
+    <article class="what-card">
+      <h3>Memory</h3>
+      <p>Durable facts (constraints, gotchas, owners, how-tos) ranked by FTS, on-device embeddings, pins, and freshness. Stale anchors get marked. You approve drafts — amem does not silently invent truth.</p>
+    </article>
+    <article class="what-card">
+      <h3>Skills</h3>
+      <p>Multi-step procedures as <code>SKILL.md</code> files. Agents see names and descriptions only, then load a body with <code>amem_skill_view</code>. Session-end can suggest one worth writing. Content is scanned before it is stored.</p>
+    </article>
+    <article class="what-card">
+      <h3>Tasks</h3>
+      <p>Backlog → Next → Doing → Blocked → Done. Open tasks ride in the context packet. Use memory for facts, the board for “do later.” Works across every repo you track.</p>
+    </article>
+    <article class="what-card">
+      <h3>Local UI + desktop</h3>
+      <p><code>amem ui</code> is Setup, Dashboard, Memory, Analytics, Tasks, Skills — localhost only. <code>amem app</code> is the same thing in a window. Optional login item so it comes back after reboot.</p>
+    </article>
+    <article class="what-card">
+      <h3>Hooks and MCP</h3>
+      <p>Cursor and Claude get a project rule plus stop hooks. Any MCP host can call <code>amem_context</code>, <code>amem_remember</code>, skill and task tools. Same SQLite for Windsurf, Continue, Aider, Zed.</p>
+    </article>
+    <article class="what-card">
+      <h3>Lock, backup, policy</h3>
+      <p>Optional AES-256-GCM lock, encrypted local snapshots, a daily timer. Enterprise <code>policy.toml</code> can deny export, lock platforms, and stage skill writes. <code>amem doctor --attest</code> is the IT ticket packet.</p>
+    </article>
   </div>
-  <div class="hero-panel">
-    <p class="hero-kicker">Local agent memory</p>
-    <p class="hero-brand">amem</p>
-    <h1>Everything is free</h1>
-    <p class="hero-lead">Memory, skills, tasks, and the desktop app — all of it. Facts stay in <code>~/.amem</code> on your machine. One command, then open the UI.</p>
+
+  <h2>How a day goes</h2>
+  <ol class="what-list">
+    <li>You (or the hook) run a context lookup. Matching claims, open tasks, and skill names land in the prompt.</li>
+    <li>The agent prefers those file anchors over a broad explore, then verifies the current code — memory can be stale.</li>
+    <li>When something durable is learned, it remembers a fact or saves a skill. Follow-ups go on the board.</li>
+    <li>At session end, amem may queue a compact memory draft, a miss→learn draft, or one skill suggestion. You approve in the UI.</li>
+  </ol>
+
+  <h2>Privacy, on purpose</h2>
+  <ul class="what-list">
+    <li>The tool is public (GitHub / npm). Your database is <code>~/.amem/graph.db</code> and is not shared.</li>
+    <li>The Cursor rule you commit is guidance only — no memory contents.</li>
+    <li>The UI binds to <code>127.0.0.1</code>. There is no “share with org” mode and no cloud embed API.</li>
+    <li>Optional anonymous install ping (package version, Node, OS). Opt out with <code>AMEM_TELEMETRY_DISABLED=1</code>.</li>
+  </ul>
+
+  <h2>Not this</h2>
+  <ul class="what-list">
+    <li>Not a company wiki or a hosted RAG product.</li>
+    <li>Not an agent runtime — Cursor and Claude still do the work. amem is the librarian.</li>
+    <li>Not a replacement for reading the code. Trust fresh claims; re-check anything marked stale.</li>
+  </ul>
+
+  <div class="what-cta">
+    <p>One command. Then the UI.</p>
     ${installCommands()}
   </div>
 </main>`,
+    "amem — what it does",
   );
 }
 
@@ -933,6 +1157,15 @@ async function onRequest(req, res) {
     }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       html(res, 200, landing());
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/what") {
+      html(res, 200, whatPage());
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/features") {
+      res.writeHead(302, { Location: "/what" });
+      res.end();
       return;
     }
     if (req.method === "GET" && url.pathname === "/pricing") {

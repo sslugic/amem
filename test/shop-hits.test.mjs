@@ -18,6 +18,7 @@ import { classifyNetwork } from "../shop/net-class.mjs";
 test("shouldRecordPath skips health webhook admin public beacon", () => {
   assert.equal(shouldRecordPath("/"), true);
   assert.equal(shouldRecordPath("/pricing"), true);
+  assert.equal(shouldRecordPath("/what"), true);
   assert.equal(shouldRecordPath("/health"), false);
   assert.equal(shouldRecordPath("/webhook"), false);
   assert.equal(shouldRecordPath("/api/beacon"), false);
