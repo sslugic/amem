@@ -37,6 +37,14 @@
             <span class="nav-ico" aria-hidden="true"></span>
             Analytics
           </button>
+          <button type="button" data-tab="tasks">
+            <span class="nav-ico" aria-hidden="true"></span>
+            Tasks
+          </button>
+          <button type="button" data-tab="skills">
+            <span class="nav-ico" aria-hidden="true"></span>
+            Skills
+          </button>
         </nav>
         <div class="side-footer">
           <button class="side-foot-btn" id="personalBtn" type="button">Personal</button>
@@ -105,18 +113,6 @@
               />
               <button class="btn secondary" id="vaultRestoreBtn" type="button">Restore</button>
             </div>
-            <div class="add-repo-row" id="shopRow">
-              <a class="btn" id="buyPro" href="https://getamem.com/buy/pro" target="_blank" rel="noopener"
-                >Buy Pro · $12</a
-              >
-              <a class="btn secondary" id="buyIt" href="https://getamem.com/buy/it" target="_blank" rel="noopener"
-                >Buy IT · $49</a
-              >
-              <span class="note"
-                >After pay, download <code>amem-license.json</code> on the thank-you page, then apply it in Plans/Setup or
-                <code>amem license apply --file</code>.</span
-              >
-            </div>
             <p class="note" id="vaultDetail"></p>
           </div>
         </div>
@@ -140,30 +136,11 @@
     </div>
     <script>
       (function () {
-        var TABS = ["welcome", "setup", "dashboard", "brain", "analytics"];
+        var TABS = ["setup", "dashboard", "brain", "analytics", "tasks"];
         var params = new URLSearchParams(location.search);
         var fromUrl = params.get("tab");
-        var welcomeDismissed = false;
-        var paid = false;
-        try {
-          welcomeDismissed = localStorage.getItem("amem.welcome.dismissed") === "1";
-          var tier = localStorage.getItem("amem.license.tier");
-          paid = tier === "pro" || tier === "it";
-        } catch (e) {}
-        var tab = "setup";
-        if (paid) {
-          if (fromUrl === "stats") tab = "analytics";
-          else if (TABS.indexOf(fromUrl) !== -1) tab = fromUrl;
-          else tab = "dashboard";
-        } else if (
-          !welcomeDismissed &&
-          fromUrl !== "brain" &&
-          fromUrl !== "stats" &&
-          fromUrl !== "analytics" &&
-          fromUrl !== "dashboard"
-        ) {
-          tab = "welcome";
-        } else if (fromUrl === "stats") {
+        var tab = "dashboard";
+        if (fromUrl === "stats") {
           tab = "analytics";
         } else if (TABS.indexOf(fromUrl) !== -1) {
           tab = fromUrl;

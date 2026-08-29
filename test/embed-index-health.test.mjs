@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { withAmemHome, makeGitRepo, installTestLicense, root } from "./helpers.mjs";
+import { withAmemHome, makeGitRepo, root } from "./helpers.mjs";
 
 const cli = join(root, "dist", "cli.js");
 
@@ -33,7 +33,7 @@ describe("embed index health", () => {
       const db = openDb();
 
       const health = embedIndexHealth(db);
-      assert.equal(health.active, "hash");
+      assert.equal(health.active, "ngram");
       assert.equal(health.stale, 0);
       assert.equal(health.usable, health.total);
       assert.ok(health.total >= 3);
@@ -43,24 +43,20 @@ describe("embed index health", () => {
     });
   });
 
-  it("detects vectors stranded by a license downgrade and clears after reindex", async () => {
+  it("detects vectors stranded by a backend switch and clears after reindex", async () => {
     await withAmemHome(async () => {
       const repoDir = makeGitRepo("embed-health-drift");
       await seed(repoDir);
       const { embedIndexHealth, embedIndexIssues, setEmbedBackend, reindexAllEmbeds } =
         await import("../dist/embed.js");
-      const { clearLicense } = await import("../dist/license.js");
       const { openDb } = await import("../dist/db.js");
       const db = openDb();
 
-      await installTestLicense("it");
-      setEmbedBackend("ngram");
-      reindexAllEmbeds(db);
       assert.equal(embedIndexHealth(db).stale, 0, "reindexed on ngram should be clean");
 
-      clearLicense();
+      setEmbedBackend("hash");
       const health = embedIndexHealth(db);
-      assert.equal(health.active, "hash", "unlicensed falls back to hash");
+      assert.equal(health.active, "hash");
       assert.equal(health.usable, 0, "no ngram vector is scorable under hash");
       assert.equal(health.stale, health.total);
       assert.deepEqual(
@@ -85,18 +81,12 @@ describe("embed index health", () => {
     await withAmemHome(async () => {
       const repoDir = makeGitRepo("embed-health-partial");
       const repo = await seed(repoDir);
-      const { embedIndexHealth, setEmbedBackend, reindexAllEmbeds, upsertClaimEmbed } =
+      const { embedIndexHealth, setEmbedBackend, upsertClaimEmbed } =
         await import("../dist/embed.js");
-      const { clearLicense } = await import("../dist/license.js");
       const { openDb, listClaims } = await import("../dist/db.js");
       const db = openDb();
 
-      await installTestLicense("it");
-      setEmbedBackend("ngram");
-      reindexAllEmbeds(db);
-
-      // Mirrors the real machine: some rows written while licensed, some after it lapsed.
-      clearLicense();
+      setEmbedBackend("hash");
       const [first] = listClaims(repo.id);
       upsertClaimEmbed(db, first);
 
@@ -112,16 +102,10 @@ describe("embed index health", () => {
     await withAmemHome(async () => {
       const repoDir = makeGitRepo("embed-health-api");
       await seed(repoDir);
-      const { setEmbedBackend, reindexAllEmbeds } = await import("../dist/embed.js");
-      const { clearLicense } = await import("../dist/license.js");
-      const { openDb } = await import("../dist/db.js");
+      const { setEmbedBackend } = await import("../dist/embed.js");
       const { handleApi } = await import("../dist/api/routes.js");
-      const db = openDb();
 
-      await installTestLicense("pro");
-      setEmbedBackend("ngram");
-      reindexAllEmbeds(db);
-      clearLicense();
+      setEmbedBackend("hash");
 
       const res = handleApi({
         method: "GET",
@@ -143,15 +127,10 @@ describe("embed index health", () => {
   it("surfaces the drift through amem doctor and attest", async () => {
     const home = mkdtempSync(join(tmpdir(), "amem-embed-doctor-"));
     const repoDir = makeGitRepo("embed-health-cli");
-    const { generateLicenseKeys } = await import("../dist/license.js");
-    const keys = generateLicenseKeys();
     const env = {
       AMEM_HOME: home,
       HOME: home,
-      AMEM_LICENSE_PUBKEY: keys.publicKeyHex,
-      AMEM_LICENSE_PRIVKEY: keys.privateKeyHex,
     };
-    /** doctor exits non-zero when it finds issues, which is the point — keep the stdout. */
     const run = (args, extraEnv = {}) => {
       try {
         return execFileSync(process.execPath, [cli, ...args], {
@@ -170,15 +149,10 @@ describe("embed index health", () => {
       run(["init", "--platform", "cursor"]);
       run(["remember", "payment retry uses exponential backoff", "--kind", "constraint"]);
 
-      const lic = join(home, "it.json");
-      run(["license", "issue", "--tier", "it", "--out", lic]);
-      run(["license", "apply", "--file", lic]);
-      run(["embed", "use", "ngram"]);
-      run(["embed", "reindex"]);
       assert.match(run(["doctor"]), /doctor: ok/, "clean index should pass doctor");
 
-      // Drop the license the way an expiry would, leaving ngram vectors behind.
-      run(["license", "clear"]);
+      // Switch backend to hash without reindexing to produce drift
+      run(["embed", "use", "hash"]);
 
       const doctorOut = run(["doctor"]);
       assert.match(doctorOut, /issues found/);

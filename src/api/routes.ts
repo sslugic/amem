@@ -28,6 +28,24 @@ import {
   countProposalDraftsAll,
   getProposalDraft,
   setProposalDraftStatus,
+  listTasks,
+  listTasksAll,
+  getSkillDraft,
+  insertSkillDraft,
+  listSkillDrafts,
+  recordSkillUse,
+  setSkillDraftStatus,
+  setSkillRepo,
+  findTaskAnyRepo,
+  getTask,
+  insertTask,
+  updateTask,
+  completeTask,
+  deleteTask,
+  countTasks,
+  countTasksAll,
+  normalizeTaskStatus,
+  type AgentTaskStatus,
   updateClaim,
   setClaimPinned,
   deleteClaim,
@@ -41,11 +59,49 @@ import {
   type RepoRow,
   type UsageEventRow,
 } from "../db.js";
+import {
+  deleteSkill,
+  findSkillOnDisk,
+  isValidSkillName,
+  listIndexedSkills,
+  listSkillAssets,
+  rankSkills,
+  readSkillAsset,
+  readSkillBody,
+  renderSkillMarkdown,
+  scanSkillContent,
+  skillsDir,
+  slugifySkillName,
+  syncSkillIndex,
+  writeSkill,
+  type SkillMeta,
+} from "../skills.js";
 import { buildContext, buildRetrievalShowdown, decorateUsageEvents, renderContextMarkdown } from "../context.js";
 import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
 import { hostInstallHealth, installHost } from "../install/hosts.js";
 import { decorateDraft, decorateDrafts } from "../draft-quality.js";
+
+/**
+ * Which repo owns a task. Scoped requests may only touch the current repo; an
+ * all-memory request resolves the task's real owner so a board that shows every
+ * memory can also edit what it shows.
+ */
+function taskOwnerRepoId(
+  id: string,
+  currentRepoId: string | undefined,
+  all: boolean,
+): string | null {
+  if (currentRepoId) {
+    const direct = getTask(currentRepoId, id);
+    if (direct) return currentRepoId;
+  }
+  if (all) {
+    return findTaskAnyRepo(id)?.repo_id ?? null;
+  }
+  return null;
+}
+
 import { isUsefulRememberText } from "../capture.js";
 import {
   buildSavingsExport,
@@ -144,6 +200,39 @@ function ok(body: unknown): ApiResponse {
 
 function err(status: number, message: string): ApiResponse {
   return { status, body: { error: message } };
+}
+
+function safeJsonArray(raw: string): string[] {
+  try {
+    const list = JSON.parse(raw) as unknown;
+    return Array.isArray(list) ? list.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Once a skill is saved, the nudge that prompted it has done its job. */
+function resolveSuggestionFor(repoId: string | undefined, sessionId: string | undefined): void {
+  if (!repoId) return;
+  for (const draft of listSkillDrafts({ status: "pending", repoId, limit: 20 })) {
+    if (draft.kind !== "suggestion") continue;
+    if (sessionId && draft.session_id && draft.session_id !== sessionId) continue;
+    setSkillDraftStatus(draft.id, "applied");
+    return;
+  }
+}
+
+/** Level-0 view of a skill: enough to decide whether to load it, without the body. */
+function skillSummary(skill: SkillMeta & { repoId?: string | null; uses?: number }) {
+  return {
+    name: skill.name,
+    description: skill.description,
+    version: skill.version,
+    tags: skill.tags,
+    source: skill.source,
+    repo_id: skill.repoId ?? null,
+    uses: skill.uses ?? 0,
+  };
 }
 
 function bodyField(body: unknown, key: string): string | undefined {
@@ -1366,6 +1455,273 @@ export function handleApi(req: ApiRequest): ApiResponse {
     if (!id) return err(400, "id required");
     const removed = deleteClaim(repo.id, id);
     if (!removed) return err(404, "Claim not found");
+    return ok({ deleted: id });
+  }
+
+  // Skills are a global library, not repo-scoped like claims and tasks — no `repo` guard.
+  if (method === "GET" && pathname === "/api/skills") {
+    const query = searchParams.get("q") || "";
+    const skills = listIndexedSkills();
+    const ranked = query ? rankSkills(skills, query, Number(searchParams.get("limit") || 10)) : [];
+    return ok({
+      skills: skills.map(skillSummary),
+      matches: ranked.map((s) => ({ ...skillSummary(s), score: s.score, reasons: s.reasons })),
+      dir: skillsDir(),
+    });
+  }
+
+  if (method === "GET" && pathname === "/api/skills/view") {
+    const name = searchParams.get("name");
+    if (!name) return err(400, "name required");
+    const file = searchParams.get("file");
+    if (file) {
+      const asset = readSkillAsset(name, file);
+      if (asset === null) return err(404, "Skill file not found");
+      return ok({ name, file, content: asset });
+    }
+    const meta = findSkillOnDisk(name);
+    if (!meta) return err(404, "Skill not found");
+    const content = readSkillBody(name);
+    if (content === null) return err(404, "Skill not found");
+    // A skill can be viewed before anything indexed it, and the usage counter lives in
+    // the index — reconcile first or the increment silently updates zero rows.
+    syncSkillIndex();
+    recordSkillUse(meta.name, {
+      repoId: repo ? repo.id : null,
+      sessionId: searchParams.get("session_id"),
+    });
+    return ok({ ...skillSummary(meta), content, files: listSkillAssets(meta.name) });
+  }
+
+  if (method === "POST" && pathname === "/api/skills") {
+    const name = bodyField(body, "name");
+    if (!name) return err(400, "name required");
+    const slug = slugifySkillName(name);
+    if (!isValidSkillName(slug)) return err(400, "Invalid skill name");
+    const content = bodyField(body, "content");
+    const description = bodyField(body, "description") || "";
+    // Accept either a full SKILL.md or the parts, so agents can save without templating.
+    const markdown =
+      content && content.includes("---")
+        ? content
+        : renderSkillMarkdown({
+            name: slug,
+            description,
+            body: content || "",
+            version: bodyField(body, "version"),
+          });
+    const scan = scanSkillContent(markdown);
+    if (!scan.ok) return err(400, `Rejected: ${scan.reason}`);
+
+    const policy = loadPolicy().policy;
+    if (!policy.skills_enabled) return err(403, "Skills are disabled by policy");
+
+    // A SKILL.md is too long to review inline, so an approval gate stages rather than
+    // blocks — the agent keeps working and a human decides later.
+    if (policy.skill_write_approval) {
+      const draft = insertSkillDraft({
+        repoId: repo ? repo.id : null,
+        name: slug,
+        title: description || slug,
+        summary: description,
+        content: markdown,
+        kind: findSkillOnDisk(slug) ? "revision" : "create",
+        targetSkill: findSkillOnDisk(slug) ? slug : null,
+        source: `agent-save:${slug}:${Date.now()}`,
+        sessionId: bodyField(body, "session_id") ?? null,
+        reasons: ["staged by skill_write_approval"],
+      });
+      return ok({
+        staged: draft.id,
+        name: slug,
+        pending: true,
+        message: "Skill staged for review — approve it in the Skills tab or `amem skills drafts`.",
+      });
+    }
+
+    const written = writeSkill(slug, markdown);
+    syncSkillIndex();
+    const repoId = bodyField(body, "repo_id") ?? (repo ? repo.id : null);
+    if (repoId) setSkillRepo(slug, repoId);
+    resolveSuggestionFor(repo?.id, bodyField(body, "session_id"));
+    return ok({ saved: written.name, path: written.path, hash: written.hash });
+  }
+
+  if (method === "GET" && pathname === "/api/skills/drafts") {
+    const drafts = listSkillDrafts({
+      status: searchParams.get("status") || "pending",
+      limit: Number(searchParams.get("limit") || 50),
+    });
+    const repoNames = new Map(listRepos().map((r) => [r.id, r.repo_name]));
+    return ok({
+      drafts: drafts.map((d) => ({
+        ...d,
+        reasons: safeJsonArray(d.reasons),
+        repo_name: d.repo_id ? (repoNames.get(d.repo_id) ?? null) : null,
+        // A suggestion has no content yet — only an agent can write the body.
+        has_content: Boolean(d.content),
+      })),
+      counts: { pending: listSkillDrafts({ status: "pending", limit: 200 }).length },
+    });
+  }
+
+  if (method === "POST" && pathname === "/api/skills/drafts/apply") {
+    const id = bodyField(body, "id");
+    if (!id) return err(400, "id required");
+    const draft = getSkillDraft(id);
+    if (!draft) return err(404, "Draft not found");
+    if (!draft.content || !draft.name) {
+      return err(400, "This is a suggestion, not a staged skill — an agent must write it first");
+    }
+    const scan = scanSkillContent(draft.content);
+    if (!scan.ok) return err(400, `Rejected: ${scan.reason}`);
+    const written = writeSkill(draft.name, draft.content);
+    syncSkillIndex();
+    if (draft.repo_id) setSkillRepo(draft.name, draft.repo_id);
+    setSkillDraftStatus(id, "applied");
+    return ok({ applied: id, name: written.name, path: written.path });
+  }
+
+  if (method === "POST" && pathname === "/api/skills/drafts/dismiss") {
+    const id = bodyField(body, "id");
+    if (!id) return err(400, "id required");
+    if (!getSkillDraft(id)) return err(404, "Draft not found");
+    setSkillDraftStatus(id, "dismissed");
+    return ok({ dismissed: id });
+  }
+
+  if (method === "DELETE" && pathname === "/api/skills") {
+    const name = searchParams.get("name") || bodyField(body, "name");
+    if (!name) return err(400, "name required");
+    const removed = deleteSkill(name);
+    if (!removed) return err(404, "Skill not found");
+    syncSkillIndex();
+    return ok({ deleted: slugifySkillName(name) });
+  }
+
+  if (method === "GET" && pathname === "/api/tasks") {
+    const all =
+      searchParams.get("scope") === "all" ||
+      bodyField(body, "scope") === "all" ||
+      searchParams.get("repo") === "all";
+    if (!all && !repo) return err(400, "Repo not initialized");
+    const statusRaw = searchParams.get("status") || bodyField(body, "status");
+    const status = statusRaw ? normalizeTaskStatus(statusRaw) : null;
+    if (statusRaw && !status) return err(400, "invalid status");
+    const includeDone =
+      searchParams.get("include_done") === "1" ||
+      searchParams.get("include_done") === "true" ||
+      bodyField(body, "include_done") === "1" ||
+      bodyField(body, "include_done") === "true";
+    const listOpts = {
+      status: status || undefined,
+      includeDone: includeDone || Boolean(status === "done"),
+      limit: Number(searchParams.get("limit") || (all ? 200 : 100)),
+    };
+    const tasks = all ? listTasksAll(listOpts) : listTasks(repo!.id, listOpts);
+    const count = (o: { status?: AgentTaskStatus; openOnly?: boolean }) =>
+      all ? countTasksAll(o) : countTasks(repo!.id, o);
+    // Name the owning memory so an all-memory board can say where each task lives.
+    const repoNames = all
+      ? new Map(listRepos().map((r) => [r.id, r.repo_name]))
+      : new Map<string, string>();
+    return ok({
+      scope: all ? "all" : "current",
+      tasks: all
+        ? tasks.map((t) => ({ ...t, repo_name: repoNames.get(t.repo_id) ?? null }))
+        : tasks,
+      counts: {
+        open: count({ openOnly: true }),
+        backlog: count({ status: "backlog" }),
+        next: count({ status: "next" }),
+        doing: count({ status: "doing" }),
+        blocked: count({ status: "blocked" }),
+        done: count({ status: "done" }),
+      },
+    });
+  }
+
+  if (method === "POST" && pathname === "/api/tasks") {
+    const targetRepo = repo || ensurePersonalWorkspace();
+    const payload = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const title = typeof payload.title === "string" ? payload.title : "";
+    if (!title.trim()) return err(400, "title required");
+    let anchors: string[] | undefined;
+    if (Array.isArray(payload.anchors)) {
+      anchors = payload.anchors.filter((a): a is string => typeof a === "string");
+    }
+    try {
+      const task = insertTask({
+        repoId: targetRepo.id,
+        title,
+        body: typeof payload.body === "string" ? payload.body : "",
+        status: typeof payload.status === "string" ? payload.status : "backlog",
+        anchors,
+        source: typeof payload.source === "string" ? payload.source : "ui",
+      });
+      return ok({ task });
+    } catch (error) {
+      return err(400, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "PATCH" && pathname === "/api/tasks") {
+    const all =
+      searchParams.get("scope") === "all" ||
+      bodyField(body, "scope") === "all" ||
+      searchParams.get("repo") === "all";
+    if (!all && !repo) return err(400, "Repo not initialized");
+    const payload = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const id = bodyField(body, "id");
+    if (!id) return err(400, "id required");
+    // In all-memory scope the card may belong to any repo, so find its real owner.
+    const ownerId = taskOwnerRepoId(id, repo?.id, all);
+    if (!ownerId) return err(404, "Task not found");
+    let anchors: string[] | undefined;
+    if (Array.isArray(payload.anchors)) {
+      anchors = payload.anchors.filter((a): a is string => typeof a === "string");
+    }
+    try {
+      const task = updateTask(ownerId, id, {
+        title: typeof payload.title === "string" ? payload.title : undefined,
+        body: typeof payload.body === "string" ? payload.body : undefined,
+        status: typeof payload.status === "string" ? payload.status : undefined,
+        anchors,
+      });
+      if (!task) return err(404, "Task not found");
+      return ok({ task });
+    } catch (error) {
+      return err(400, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/tasks/complete") {
+    const all =
+      searchParams.get("scope") === "all" ||
+      bodyField(body, "scope") === "all" ||
+      searchParams.get("repo") === "all";
+    if (!all && !repo) return err(400, "Repo not initialized");
+    const id = bodyField(body, "id");
+    if (!id) return err(400, "id required");
+    const ownerId = taskOwnerRepoId(id, repo?.id, all);
+    if (!ownerId) return err(404, "Task not found");
+    const task = completeTask(ownerId, id);
+    if (!task) return err(404, "Task not found");
+    return ok({ task });
+  }
+
+  if (method === "DELETE" && pathname === "/api/tasks") {
+    const all =
+      searchParams.get("scope") === "all" ||
+      bodyField(body, "scope") === "all" ||
+      searchParams.get("repo") === "all";
+    if (!all && !repo) return err(400, "Repo not initialized");
+    const id = searchParams.get("id") || bodyField(body, "id");
+    if (!id) return err(400, "id required");
+    const ownerId = taskOwnerRepoId(id, repo?.id, all);
+    if (!ownerId) return err(404, "Task not found");
+    const removed = deleteTask(ownerId, id);
+    if (!removed) return err(404, "Task not found");
     return ok({ deleted: id });
   }
 

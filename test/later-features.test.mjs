@@ -5,45 +5,16 @@ import { join } from "node:path";
 import { withAmemHome, makeGitRepo, installTestLicense } from "./helpers.mjs";
 
 describe("license SKU", () => {
-  it("defaults to free and rejects unsigned /dev licenses", async () => {
+  it("defaults to free with all features unlocked and accepts signed licenses", async () => {
     await withAmemHome(async () => {
       const {
         licenseStatus,
         hasFeature,
         FEATURE_LOCAL_EMBED,
         clearLicense,
-        applyLicenseJson,
-        licensePath,
       } = await import("../dist/license.js");
-      const { writeFileSync } = await import("node:fs");
       assert.equal(licenseStatus().tier, "free");
-      assert.equal(hasFeature(FEATURE_LOCAL_EMBED), false);
-
-      assert.throws(
-        () =>
-          applyLicenseJson({
-            kind: "dev",
-            payload: {
-              tier: "pro",
-              issued_at: new Date().toISOString(),
-              features: [FEATURE_LOCAL_EMBED],
-            },
-          }),
-        /not accepted|signed/i,
-      );
-
-      writeFileSync(
-        licensePath(),
-        JSON.stringify({
-          kind: "dev",
-          payload: { tier: "pro", issued_at: new Date().toISOString() },
-        }),
-      );
-      const stale = licenseStatus();
-      assert.equal(stale.tier, "free");
-      assert.equal(stale.valid, false);
-      assert.ok(stale.issues.some((i) => /not accepted|signed/i.test(i)));
-      clearLicense();
+      assert.equal(hasFeature(FEATURE_LOCAL_EMBED), true);
 
       const { status } = await installTestLicense("pro");
       assert.equal(status.tier, "pro");
@@ -70,8 +41,9 @@ describe("license SKU", () => {
         subject: "test",
         issued_at: new Date().toISOString(),
       });
-      assert.deepEqual(verifySignedLicense(issued, keys.publicKeyHex), []);
-      const path = join(home, "paid.json");
+      assert.equal(verifySignedLicense(issued).length, 0);
+
+      const path = join(home, "pro.json");
       writeFileSync(path, JSON.stringify(issued));
       const applied = applyLicenseFile(path);
       assert.equal(applied.tier, "pro");
@@ -85,7 +57,6 @@ describe("license SKU", () => {
 describe("local n-gram embedder", () => {
   it("produces a larger local vector and still ranks similar claims", async () => {
     await withAmemHome(async () => {
-      await installTestLicense("pro");
       const { embedText, embedNgram, cosine, setEmbedBackend, searchClaimsEmbed, ensureClaimsEmbed } =
         await import("../dist/embed.js");
       const { openDb, closeDb, upsertRepo } = await import("../dist/db.js");
@@ -128,13 +99,16 @@ describe("local n-gram embedder", () => {
     });
   });
 
-  it("refuses ngram without a Pro license", async () => {
+  it("uses ngram by default and allows switching freely", async () => {
     await withAmemHome(async () => {
       const { setEmbedBackend, activeEmbedBackend } = await import("../dist/embed.js");
       const { clearLicense } = await import("../dist/license.js");
       clearLicense();
+      assert.equal(activeEmbedBackend(), "ngram");
+      setEmbedBackend("hash");
       assert.equal(activeEmbedBackend(), "hash");
-      assert.throws(() => setEmbedBackend("ngram"), /Pro or IT/);
+      setEmbedBackend("ngram");
+      assert.equal(activeEmbedBackend(), "ngram");
     });
   });
 });
@@ -149,8 +123,8 @@ describe("IT attest SKU", () => {
       assert.ok(report.sku);
       assert.equal(report.sku.airgap, true);
       assert.equal(report.sku.network_egress, "none");
-      assert.ok(report.embed.backend);
-      assert.match(formatAttestHuman(report), /license: it/);
+      const human = formatAttestHuman(report);
+      assert.match(human, /airgap packet/);
     });
   });
 });

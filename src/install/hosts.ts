@@ -88,6 +88,14 @@ Before large exploration, run:
 amem context "\${user question}" 
 \`\`\`
 
+Deferred tasks & Kanban:
+
+\`\`\`bash
+amem task list                     # list pending tasks
+amem task add "..." --body "..."   # add task to backlog
+amem task complete <id>            # mark finished task as done
+\`\`\`
+
 After durable discoveries:
 
 \`\`\`bash

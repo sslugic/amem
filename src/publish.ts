@@ -15,6 +15,7 @@ export const REQUIRED_PACK_PATHS = [
   "docs/npm-release.md",
   "skills/amem-update-working-memory/SKILL.md",
   "scripts/mdm-offboard.sh",
+  "scripts/postinstall.js",
 ] as const;
 
 export const PUBLISH_PACKAGE_NAME = "@iamem/amem";

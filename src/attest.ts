@@ -17,6 +17,8 @@ import { FEATURE_ATTEST_SKU, hasFeature, licenseStatus } from "./license.js";
 import { embedIndexIssues, embedStatus } from "./embed.js";
 import { vaultStatus } from "./vault.js";
 import { hostInstallHealth } from "./install/hosts.js";
+import { listSkillDrafts } from "./db.js";
+import { scanSkills, skillsDir } from "./skills.js";
 
 export type AttestReport = {
   tool: "amem";
@@ -54,6 +56,14 @@ export type AttestReport = {
   };
   license: ReturnType<typeof licenseStatus>;
   embed: ReturnType<typeof embedStatus>;
+  /** Procedural memory an auditor should be able to review: what agents may be told to do. */
+  skills: {
+    dir: string;
+    enabled: boolean;
+    write_approval: boolean;
+    pending_drafts: number;
+    installed: Array<{ name: string; description: string; source: string; hash: string }>;
+  };
   sku?: {
     tier: string;
     airgap: true;
@@ -162,6 +172,9 @@ export function buildAttestReport(cwd: string = process.cwd()): AttestReport {
     // Locked vault: the vault section already reports that.
   }
 
+  const skills = skillsAttestSection();
+  issues.push(...skillIssues(skills));
+
   const pkgPath = join(packageRoot(), "package.json");
   const sku = hasFeature(FEATURE_ATTEST_SKU)
     ? {
@@ -213,10 +226,51 @@ export function buildAttestReport(cwd: string = process.cwd()): AttestReport {
     },
     license,
     embed,
+    skills,
     sku,
     ok: issues.length === 0,
     issues,
   };
+}
+
+/**
+ * Inventory of procedural memory. Hashes let an auditor diff what agents are being told to
+ * do between two machines, which a bare list of names would not support.
+ */
+function skillsAttestSection(): AttestReport["skills"] {
+  const policy = loadPolicy().policy;
+  const base = {
+    dir: skillsDir(),
+    enabled: policy.skills_enabled,
+    write_approval: policy.skill_write_approval,
+  };
+  try {
+    return {
+      ...base,
+      pending_drafts: listSkillDrafts({ status: "pending", limit: 200 }).length,
+      installed: scanSkills().map((s) => ({
+        name: s.name,
+        description: s.description,
+        source: s.source,
+        hash: s.hash,
+      })),
+    };
+  } catch {
+    return { ...base, pending_drafts: 0, installed: [] };
+  }
+}
+
+function skillIssues(skills: AttestReport["skills"]): string[] {
+  const issues: string[] = [];
+  for (const skill of skills.installed) {
+    if (!skill.description.trim()) {
+      issues.push(`skill ${skill.name} has no description — agents cannot rank it`);
+    }
+  }
+  if (skills.pending_drafts > 0 && skills.write_approval) {
+    issues.push(`${skills.pending_drafts} skill write(s) awaiting approval`);
+  }
+  return issues;
 }
 
 export function formatAttestHuman(report: AttestReport): string {

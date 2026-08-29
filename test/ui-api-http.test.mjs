@@ -43,7 +43,6 @@ const UI_API_CALLS = [
   ["POST", "/api/vault/backup/unschedule"],
   ["POST", "/api/vault/restore"],
   ["GET", "/api/hygiene"],
-  ["GET", "/api/hygiene/preview"],
   ["POST", "/api/hygiene/decay"],
   ["POST", "/api/hygiene/accept-safe"],
   ["POST", "/api/hygiene/merge"],
@@ -51,6 +50,10 @@ const UI_API_CALLS = [
   ["POST", "/api/hygiene/unschedule"],
   ["POST", "/api/rules/sync"],
   ["POST", "/api/it-pack"],
+  ["GET", "/api/tasks"],
+  ["POST", "/api/tasks"],
+  ["PATCH", "/api/tasks"],
+  ["DELETE", "/api/tasks"],
 ];
 
 function uiFetchedPaths() {
@@ -216,7 +219,6 @@ describe("UI setup stepper + brain defaults", () => {
     assert.match(UI_APP, /data-setup-step/);
     assert.match(UI_APP, /id="editSetup"/);
     assert.match(UI_APP, /function shopBuyCardHtml/);
-    assert.match(UI_APP, /Buy Pro/);
     assert.doesNotMatch(UI_APP, /Buy a signed file:/);
     assert.doesNotMatch(UI_APP, /All local repos/);
     assert.doesNotMatch(UI_APP, /This repo/);

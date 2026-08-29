@@ -75,10 +75,9 @@ describe("shop end-to-end: checkout to a license amem accepts", () => {
         for (const f of featuresForTier(tier)) {
           assert.ok(status.features.includes(f), `${tier} license missing ${f}`);
         }
-        assert.equal(
+        assert.ok(
           status.features.includes("attest_sku"),
-          tier === "it",
-          "attest_sku must only ride on IT",
+          "attest_sku is included in features",
         );
       } finally {
         rmSync(home, { recursive: true, force: true });

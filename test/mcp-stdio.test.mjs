@@ -81,7 +81,7 @@ describe("MCP stdio transport", () => {
     assert.ok(messages.every((m) => m.framing === "ndjson"));
     assert.equal(messages[0].msg.result.serverInfo.name, "amem");
     const names = messages[1].msg.result.tools.map((t) => t.name);
-    for (const t of ["amem_context", "amem_remember", "amem_status"]) {
+    for (const t of ["amem_context", "amem_remember", "amem_status", "amem_task_list", "amem_task_add"]) {
       assert.ok(names.includes(t), `tools/list should expose ${t}`);
     }
   });

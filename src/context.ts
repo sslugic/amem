@@ -5,12 +5,17 @@ import {
   listConversationNotes,
   listEdges,
   listFlows,
+  listOpenTasksForContext,
+  listTasks,
   openDb,
+  type AgentTaskRow,
   type ClaimRow,
   type ComponentRow,
   type ConversationNoteRow,
   type FlowRow,
   type UsageEventRow,
+  listSkillDrafts,
+  type SkillDraftRow,
 } from "./db.js";
 import {
   assessClaimFreshness,
@@ -28,10 +33,35 @@ import {
 import { embedBoostFromScore, searchClaimsEmbed, searchClaimsEmbedLive } from "./embed.js";
 import { FEATURE_LOCAL_EMBED, hasFeature } from "./license.js";
 import { PERSONAL_SLUG } from "./personal.js";
+import { listIndexedSkills, rankSkills, type RankedSkill } from "./skills.js";
+import { loadPolicy } from "./policy.js";
+
+/** Reasons are stored as JSON; a malformed row must not break the whole packet. */
+function safeReasons(raw: string): string {
+  try {
+    const list = JSON.parse(raw) as unknown;
+    if (Array.isArray(list) && list.length > 0) {
+      return ` (${list.filter((r) => typeof r === "string").join(", ")})`;
+    }
+  } catch {
+    /* fall through */
+  }
+  return "";
+}
 
 function scoreNote(note: ConversationNoteRow, queryTokens: string[]): number {
   if (queryTokens.length === 0) return 0;
   const hay = note.text.toLowerCase();
+  let score = 0;
+  for (const token of queryTokens) {
+    if (hay.includes(token)) score += token.length > 4 ? 3 : 2;
+  }
+  return score;
+}
+
+function scoreTask(task: AgentTaskRow, queryTokens: string[]): number {
+  if (queryTokens.length === 0) return 0;
+  const hay = `${task.title} ${task.body} ${task.anchors || ""}`.toLowerCase();
   let score = 0;
   for (const token of queryTokens) {
     if (hay.includes(token)) score += token.length > 4 ? 3 : 2;
@@ -52,6 +82,12 @@ export type ContextPacket = {
   flows: FlowRow[];
   components: ComponentRow[];
   notes: Array<ConversationNoteRow & { score: number }>;
+  /** Deferred Kanban tasks (non-done), compact for agents. */
+  tasks: AgentTaskRow[];
+  /** Index-only skill matches; bodies load on demand via `amem_skill_view`. */
+  skills: RankedSkill[];
+  /** At most one pending "worth writing up" nudge from a previous session. */
+  skillDrafts: SkillDraftRow[];
 };
 
 export type BuildContextOptions = {
@@ -59,6 +95,8 @@ export type BuildContextOptions = {
   rootPath?: string;
   /** Include cross-repo personal prefs (default true). */
   includePersonal?: boolean;
+  /** Include the ranked skill index (default true). */
+  includeSkills?: boolean;
 };
 
 function rankClaims(
@@ -224,7 +262,46 @@ export function buildContext(
       ? notesRaw
       : listConversationNotes(repoId, 5).map((n) => ({ ...n, score: 0 }));
 
-  return { query, claims: selected, flows, components, notes };
+  const openTasks = listOpenTasksForContext(repoId, 8);
+  const doneTasks =
+    queryTokens.length > 0
+      ? listTasks(repoId, { status: "done", includeDone: true, limit: 20 })
+          .map((t) => ({ ...t, score: scoreTask(t, queryTokens) }))
+          .filter((t) => t.score > 0)
+          .sort((a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at))
+          .slice(0, 4)
+      : [];
+  const tasks = [...openTasks, ...doneTasks];
+  const skillsOn = opts.includeSkills !== false && loadPolicy().policy.skills_enabled;
+  const skills = skillsOn ? rankSkillsForQuery(query) : [];
+  const skillDrafts = skillsOn ? pendingSkillNudges(repoId) : [];
+
+  return { query, claims: selected, flows, components, notes, tasks, skills, skillDrafts };
+}
+
+/**
+ * amem has no model, so it cannot write a skill itself. The nudge is how a session-end
+ * detection reaches an agent that can. One at a time — this rides in every packet.
+ */
+function pendingSkillNudges(repoId: string): SkillDraftRow[] {
+  try {
+    return listSkillDrafts({ status: "pending", repoId, limit: 1 });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Progressive disclosure, level 0. Only names and descriptions reach the packet; the
+ * agent pulls a body with `amem_skill_view` if it decides the procedure applies. A skills
+ * directory that cannot be read must never break context, so this stays best-effort.
+ */
+function rankSkillsForQuery(query: string): RankedSkill[] {
+  try {
+    return rankSkills(listIndexedSkills(), query, 3);
+  } catch {
+    return [];
+  }
 }
 
 export type ShowdownClaim = {
@@ -369,7 +446,13 @@ export function decorateUsageEvents(events: UsageEventRow[]): UsageEventRow[] {
 export function renderContextMarkdown(packet: ContextPacket): string {
   const lines: string[] = ["# Agent Memory Context", "", `Query: ${packet.query}`, ""];
 
-  if (packet.claims.length === 0 && packet.notes.length === 0) {
+  if (
+    packet.claims.length === 0 &&
+    packet.notes.length === 0 &&
+    (packet.tasks?.length ?? 0) === 0 &&
+    (packet.skills?.length ?? 0) === 0 &&
+    (packet.skillDrafts?.length ?? 0) === 0
+  ) {
     lines.push("No claims stored for this repository yet.", "");
     lines.push("Seed memory with the `amem-bootstrap` skill or `amem propose apply <file>`.");
     return lines.join("\n");
@@ -377,6 +460,55 @@ export function renderContextMarkdown(packet: ContextPacket): string {
 
   if (packet.claims.length === 0) {
     lines.push("No durable claims yet — using recent conversation memory.", "");
+  }
+
+  if (packet.tasks && packet.tasks.length > 0) {
+    const hasDone = packet.tasks.some((t) => t.status === "done");
+    const hasOpen = packet.tasks.some((t) => t.status !== "done");
+    const header = hasDone && !hasOpen ? "## Completed tasks" : (hasDone ? "## Tasks (open & completed)" : "## Open tasks");
+    lines.push(header, "");
+    lines.push(
+      "_Project Kanban tasks. Use `amem_task_*` to add/update/complete._",
+      "",
+    );
+    for (const task of packet.tasks) {
+      const body = task.body ? ` — ${task.body.replace(/\s+/g, " ").slice(0, 120)}` : "";
+      lines.push(`- **[${task.status}]** ${task.title}${body} (\`${task.id}\`)`);
+    }
+    lines.push("");
+  }
+
+  if (packet.skills && packet.skills.length > 0) {
+    lines.push("## Relevant skills", "");
+    lines.push(
+      "_Procedures that may apply. Only the index is shown — call `amem_skill_view` with the name to load one before following it._",
+      "",
+    );
+    for (const skill of packet.skills) {
+      const desc = skill.description
+        ? ` — ${skill.description.replace(/\s+/g, " ").slice(0, 140)}`
+        : "";
+      lines.push(`- **${skill.name}**${desc}`);
+    }
+    lines.push("");
+  }
+
+  const nudge = packet.skillDrafts?.[0];
+  if (nudge) {
+    const why = safeReasons(nudge.reasons);
+    if (nudge.kind === "revision" && nudge.target_skill) {
+      lines.push("## Skill worth revising", "");
+      lines.push(
+        `_You followed **${nudge.target_skill}** in a recent session and the work still went sideways${why}. If you learned what it was missing, update it with \`amem_skill_save\`._`,
+        "",
+      );
+    } else {
+      lines.push("## Worth saving as a skill", "");
+      lines.push(
+        `_A recent session looked like a repeatable procedure: "${nudge.title}"${why}. If you can write it up, save it with \`amem_skill_save\` so the next agent does not rediscover it._`,
+        "",
+      );
+    }
   }
 
   const staleCount = packet.claims.filter((c) => c.freshness.status === "stale").length;

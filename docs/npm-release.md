@@ -35,4 +35,4 @@ This repo does **not** auto-publish on every push.
 
 ## Pack contents
 
-`package.json#files` includes `dist`, `ui-static`, `docs`, `skills`, and `scripts/mdm-offboard.sh`. Native code is pulled in as the `better-sqlite3` dependency — do not vendor it.
+`package.json#files` includes `dist`, `ui-static`, `docs`, `skills`, `scripts/mdm-offboard.sh`, and `scripts/postinstall.js` (anonymous install ping; opt out with `AMEM_TELEMETRY_DISABLED=1`). Native code is pulled in as the `better-sqlite3` dependency — do not vendor it.

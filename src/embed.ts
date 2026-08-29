@@ -1,6 +1,5 @@
 /**
- * On-device embeddings. Default is feature hashing (no download).
- * Pro can switch to a local n-gram encoder (still no cloud, no model fetch).
+ * On-device embeddings. Default is local n-gram semantic encoder (Pro retrieval on by default, no download, 100% private).
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -53,16 +52,12 @@ export function requestedEmbedBackend(): EmbedBackend {
   const env = (process.env.AMEM_EMBED_BACKEND || "").trim().toLowerCase();
   if (env === "hash" || env === "ngram" || env === "external") return env;
   const raw = readEmbedSettings().backend;
-  if (raw === "ngram" || raw === "external") return raw;
-  return "hash";
+  if (raw === "hash" || raw === "ngram" || raw === "external") return raw;
+  return "ngram";
 }
 
 export function activeEmbedBackend(): EmbedBackend {
-  const requested = requestedEmbedBackend();
-  if ((requested === "ngram" || requested === "external") && hasFeature(FEATURE_LOCAL_EMBED)) {
-    return requested;
-  }
-  return "hash";
+  return requestedEmbedBackend();
 }
 
 export function embedDim(backend: EmbedBackend = activeEmbedBackend()): number {
@@ -89,7 +84,7 @@ export function embedStatus(): EmbedStatus {
     backend,
     requested,
     dim: embedDim(backend),
-    licensed: hasFeature(FEATURE_LOCAL_EMBED),
+    licensed: true,
     path: embedSettingsPath(),
     command,
     args,
@@ -100,11 +95,6 @@ export function setEmbedBackend(
   backend: EmbedBackend,
   extra: { command?: string; args?: string[]; dim?: number } = {},
 ): EmbedStatus {
-  if ((backend === "ngram" || backend === "external") && !hasFeature(FEATURE_LOCAL_EMBED)) {
-    throw new Error(
-      "Local embeddings need an amem Pro or IT license. Buy at https://getamem.com then: amem license apply --file <amem-license.json>",
-    );
-  }
   if (backend === "external" && !(extra.command || process.env.AMEM_EMBED_CMD || readEmbedSettings().command)) {
     throw new Error("external embedder needs --cmd (stdin text → stdout JSON { vector: number[] })");
   }

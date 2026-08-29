@@ -17,7 +17,7 @@ describe("license apply JSON + retrieval showdown", () => {
     });
   });
 
-  it("showdown locks Pro on free and unlocks after Pro; API apply works", async () => {
+  it("showdown has Pro retrieval unlocked by default; API apply works", async () => {
     await withAmemHome(async () => {
       const repoDir = makeGitRepo();
       const { detectRepoIdentity } = await import("../dist/repo-identity.js");
@@ -52,15 +52,10 @@ describe("license apply JSON + retrieval showdown", () => {
       });
 
       clearLicense();
-      const locked = buildRetrievalShowdown(repo.id, "n-gram embeddings vault restore", 5);
-      assert.equal(locked.proLocked, true);
-      assert.equal(locked.pro.length, 0);
-      assert.ok(locked.free.length >= 1);
-
-      await installTestLicense("pro");
       const open = buildRetrievalShowdown(repo.id, "n-gram embeddings vault restore", 5);
       assert.equal(open.proLocked, false);
       assert.ok(open.pro.length >= 1);
+      assert.ok(open.free.length >= 1);
       assert.ok(Array.isArray(open.proOnlyIds));
 
       const showdownApi = handleApi({
@@ -74,6 +69,7 @@ describe("license apply JSON + retrieval showdown", () => {
       assert.equal(showdownApi.body.proLocked, false);
       assert.ok(showdownApi.body.free.length >= 1);
 
+      await installTestLicense("pro");
       const lic = readLicenseFile();
       clearLicense();
       const viaApi = handleApi({

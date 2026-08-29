@@ -3,6 +3,7 @@
  * Seller webhook + Checkout. Not part of the published `amem` CLI.
  * Memory never leaves the buyer’s machine — this process only emails a signed JSON file.
  */
+import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, extname, join, normalize, sep } from "node:path";
@@ -21,6 +22,8 @@ import {
   TIERS,
   writeIssuedLicense,
 } from "./fulfill.mjs";
+import { getHitStats, recordBeacon, recordNpmInstall, recordRawRequest, beaconScript } from "./hits.mjs";
+import { getSalesStats } from "./sales.mjs";
 import { sendLicenseMail } from "./mail.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -32,12 +35,14 @@ const PRIV_FILE = join(DATA, "license.priv");
 const SHOP_DOTENV = join(ROOT, ".env");
 
 hydrateEnv();
+process.env.AMEM_SHOP_STARTED_AT ||= new Date().toISOString();
 
 const PORT = Number(process.env.AMEM_SHOP_PORT || 8788);
 /** Loopback for local seller process; App Runner / containers use 0.0.0.0 */
 const HOST = process.env.AMEM_SHOP_HOST || "127.0.0.1";
 const PUBLIC_URL = (process.env.AMEM_SHOP_URL || `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
 const CANONICAL_HOST = (process.env.AMEM_SHOP_CANONICAL_HOST || "").toLowerCase().replace(/:\d+$/, "");
+const ADMIN_COOKIE = "amem_admin";
 
 function hydrateEnv() {
   if (existsSync(SHOP_DOTENV)) {
@@ -89,6 +94,7 @@ ${cmdScript()}`,
 }
 
 function htmlPage(title, body) {
+  const track = !String(title || "").toLowerCase().includes("admin");
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"/>
@@ -188,8 +194,309 @@ pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:
   .hero{padding:1.5rem 1rem 2rem;align-items:end}
   .hero-art img{object-position:center 18%;opacity:.35}
 }
-</style></head><body>${body}</body></html>`;
+.admin-wrap{max-width:960px;margin:0 auto;padding:2rem 1.25rem 3rem;width:100%}
+.admin-wrap h1{margin:0 0 .35rem;font-size:1.5rem;letter-spacing:-.02em}
+.admin-meta{margin:0 0 1.25rem;color:var(--muted);font-size:.85rem}
+.admin-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.75rem;margin:0 0 1.25rem}
+.admin-grid.sales{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:0}
+.admin-stat{padding:1rem;border:1px solid var(--line);border-radius:14px;background:rgba(20,27,33,.85)}
+.admin-stat.muted{opacity:.72}
+.admin-stat .k{margin:0;color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.06em}
+.admin-stat .v{margin:.25rem 0 0;font-size:1.6rem;font-weight:700;letter-spacing:-.03em}
+.admin-table{width:100%;border-collapse:collapse;font-size:.85rem}
+.admin-table th,.admin-table td{text-align:left;padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+.admin-table th{color:var(--muted);font-weight:500}
+.admin-login{max-width:360px;margin:4rem auto;padding:1.5rem;border:1px solid var(--line);border-radius:16px;background:rgba(20,27,33,.85)}
+.admin-login label{display:block;margin:0 0 .35rem;color:var(--muted);font-size:.85rem}
+.admin-login input{width:100%;margin:0 0 1rem;padding:.65rem .75rem;border-radius:10px;border:1px solid var(--line);
+  background:rgba(11,15,18,.8);color:var(--ink);font:inherit}
+.admin-split{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin:0 0 1.5rem}
+.admin-heat{border:1px solid var(--line);border-radius:16px;background:#0b0f12 url("/public/world-land.svg") center / 100% 100% no-repeat;padding:0;overflow:hidden;min-height:220px}
+.admin-heat svg{display:block;width:100%;height:auto}
+.admin-bars{margin:0;padding:0;list-style:none}
+.admin-bars li{display:grid;grid-template-columns:minmax(4.5rem,9rem) 1fr 2.5rem;gap:.5rem;align-items:center;margin:0 0 .4rem;font-size:.82rem}
+.admin-bars .bar{height:.55rem;border-radius:999px;background:rgba(46,196,182,.15);overflow:hidden}
+.admin-bars .bar > i{display:block;height:100%;background:var(--accent);border-radius:999px}
+.admin-bars .n{color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.admin-toggle{display:flex;align-items:center;gap:.55rem;margin:0 0 1rem;color:var(--muted);font-size:.85rem}
+.admin-toggle input{accent-color:var(--accent)}
+.admin-sec{margin:1.5rem 0 0;padding:1rem 1.1rem;border:1px solid var(--line);border-radius:14px;background:rgba(20,27,33,.55)}
+.admin-sec h2{margin:0 0 .35rem;font-size:1.05rem}
+.admin-sec .warn{color:#f0b429;font-size:.82rem;margin:0 0 .75rem}
+@media(max-width:800px){
+  .admin-grid,.admin-grid.sales{grid-template-columns:1fr 1fr}
+  .admin-split{grid-template-columns:1fr}
 }
+</style></head><body>${body}${track ? beaconScript() : ""}</body></html>`;
+}
+
+function adminTokenConfigured() {
+  return Boolean(String(process.env.AMEM_ADMIN_TOKEN || "").trim());
+}
+
+function tokensEqual(a, b) {
+  const left = Buffer.from(String(a || ""), "utf8");
+  const right = Buffer.from(String(b || ""), "utf8");
+  if (!left.length || left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
+
+function parseCookies(req) {
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const part of String(req.headers.cookie || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i <= 0) continue;
+    const key = part.slice(0, i).trim();
+    const value = part.slice(i + 1).trim();
+    try {
+      out[key] = decodeURIComponent(value);
+    } catch {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function adminAuthorized(req, url) {
+  const want = String(process.env.AMEM_ADMIN_TOKEN || "").trim();
+  if (!want) return false;
+  const auth = String(req.headers.authorization || "");
+  if (auth.toLowerCase().startsWith("bearer ") && tokensEqual(auth.slice(7).trim(), want)) {
+    return true;
+  }
+  const q = url.searchParams.get("token");
+  if (q && tokensEqual(q, want)) return true;
+  const cookie = parseCookies(req)[ADMIN_COOKIE];
+  if (cookie && tokensEqual(cookie, want)) return true;
+  return false;
+}
+
+function setAdminCookie(res, token) {
+  const secure = PUBLIC_URL.startsWith("https") ? "; Secure" : "";
+  res.setHeader(
+    "Set-Cookie",
+    `${ADMIN_COOKIE}=${encodeURIComponent(token)}; Path=/admin; HttpOnly; SameSite=Strict${secure}; Max-Age=2592000`,
+  );
+}
+
+function adminLoginPage(message = "") {
+  return htmlPage(
+    "amem admin",
+    `<div class="admin-login">
+  <p class="hero-kicker">Seller only</p>
+  <h1 style="margin:0 0 .75rem;font-size:1.35rem">Admin</h1>
+  ${message ? `<p class="note" style="margin:0 0 .75rem">${message}</p>` : ""}
+  <form method="get" action="/admin">
+    <label for="token">Access token</label>
+    <input id="token" name="token" type="password" autocomplete="current-password" required/>
+    <button class="btn" type="submit">Open dashboard</button>
+  </form>
+</div>`,
+  );
+}
+
+function adminDashboardPage() {
+  return htmlPage(
+    "amem admin",
+    `<div class="admin-wrap">
+  <h1>Shop analytics</h1>
+  <p class="admin-meta" id="meta">Loading…</p>
+  <label class="admin-toggle"><input type="checkbox" id="show-raw"/> Show unfiltered (includes bots / scanners / datacenter)</label>
+  <div class="admin-grid">
+    <div class="admin-stat"><p class="k">Visitors today</p><p class="v" id="vis-today">—</p></div>
+    <div class="admin-stat"><p class="k">Visitors 7-day</p><p class="v" id="vis-win">—</p></div>
+    <div class="admin-stat"><p class="k">Pageviews 7-day</p><p class="v" id="pv-win">—</p></div>
+    <div class="admin-stat"><p class="k">NPM installs 7-day</p><p class="v" id="npm-win">—</p></div>
+    <div class="admin-stat muted"><p class="k">Bot / scanner (7d)</p><p class="v" id="bots-win">—</p></div>
+  </div>
+  <h2 style="font-size:1.05rem;margin:0 0 .5rem">Sales (Stripe)</h2>
+  <p class="admin-meta" id="sales-meta" style="margin-top:-.35rem">Paid Checkout · Pro / IT</p>
+  <div class="admin-grid sales">
+    <div class="admin-stat"><p class="k">Pro (all-time)</p><p class="v" id="pro-all">—</p></div>
+    <div class="admin-stat"><p class="k">IT (all-time)</p><p class="v" id="it-all">—</p></div>
+    <div class="admin-stat"><p class="k">Pro (7-day)</p><p class="v" id="pro-win">—</p></div>
+    <div class="admin-stat"><p class="k">IT (7-day)</p><p class="v" id="it-win">—</p></div>
+  </div>
+  <p class="admin-meta" id="raw-line" style="display:none"></p>
+  <h2 style="font-size:1.05rem;margin:0 0 .5rem">Where visitors are</h2>
+  <p class="admin-meta" style="margin-top:-.35rem">JS beacons only · datacenter muted · no raw IPs stored</p>
+  <div class="admin-heat" aria-label="Visitor heat map">
+    <svg id="heat-map" viewBox="0 0 720 360" role="img">
+      <title>Visitor locations</title>
+      <g id="heat-dots"></g>
+      <g id="heat-labels" font-family="IBM Plex Sans, system-ui, sans-serif" font-size="11" fill="#e8eef2"></g>
+    </svg>
+  </div>
+  <div class="admin-split">
+    <div>
+      <h2 style="font-size:1.05rem;margin:1rem 0 .5rem">Top countries</h2>
+      <ul class="admin-bars" id="countries"></ul>
+    </div>
+    <div>
+      <h2 style="font-size:1.05rem;margin:1rem 0 .5rem">Top cities</h2>
+      <ul class="admin-bars" id="cities"></ul>
+    </div>
+  </div>
+  <h2 style="font-size:1.05rem;margin:0 0 .5rem">Top paths</h2>
+  <table class="admin-table" id="paths"><thead><tr><th>Path</th><th>Hits</th></tr></thead><tbody></tbody></table>
+  <h2 style="font-size:1.05rem;margin:1.5rem 0 .5rem">Recent humans</h2>
+  <table class="admin-table" id="recent"><thead><tr><th>Time</th><th>Path</th><th>Where</th><th>Net</th><th>Ref</th></tr></thead><tbody></tbody></table>
+  <div class="admin-sec">
+    <h2>Security — top 404 probes</h2>
+    <p class="warn" id="probe-200-warn" style="display:none"></p>
+    <p class="warn">If any of these ever return 200, investigate immediately.</p>
+    <table class="admin-table" id="probes"><thead><tr><th>Path</th><th>Count</th></tr></thead><tbody></tbody></table>
+  </div>
+</div>
+<script>
+(async () => {
+  const esc = (s) => String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+  const res = await fetch("/admin/api/stats", { credentials: "same-origin" });
+  if (!res.ok) {
+    document.getElementById("meta").textContent = "Unauthorized or stats unavailable (" + res.status + ").";
+    return;
+  }
+  const data = await res.json();
+  document.getElementById("meta").textContent =
+    "Storage: " + (data.storage || "?") + " · " + (data.note || "");
+  document.getElementById("vis-today").textContent = String(data.visitors?.today ?? data.today?.visitors ?? 0);
+  document.getElementById("vis-win").textContent = String(data.visitors?.window ?? data.window?.visitors ?? 0);
+  document.getElementById("pv-win").textContent = String(data.pageviews?.window ?? data.window?.pageviews ?? 0);
+  document.getElementById("npm-win").textContent = String(data.npmInstalls?.window ?? 0);
+  document.getElementById("bots-win").textContent = String(data.bots?.window ?? 0);
+  const sales = data.sales || {};
+  document.getElementById("pro-all").textContent = String(sales.pro?.all ?? "—");
+  document.getElementById("it-all").textContent = String(sales.it?.all ?? "—");
+  document.getElementById("pro-win").textContent = String(sales.pro?.window ?? "—");
+  document.getElementById("it-win").textContent = String(sales.it?.window ?? "—");
+  document.getElementById("sales-meta").textContent =
+    (sales.note || "Paid Checkout · Pro / IT") +
+    (sales.source ? " · source: " + sales.source : "");
+  const rawLine = document.getElementById("raw-line");
+  const uf = data.unfiltered;
+  if (uf) {
+    rawLine.textContent =
+      "Unfiltered raw: today " + (uf.today?.views ?? 0) + " hits / " + (uf.today?.uniques ?? 0) +
+      " uniques · 7d " + (uf.window?.views ?? 0) + " / " + (uf.window?.uniques ?? 0);
+  }
+
+  function fillBars(id, rows, labelKey) {
+    const el = document.getElementById(id);
+    el.innerHTML = "";
+    const max = Math.max(1, ...rows.map((r) => r.count || 0));
+    if (!rows.length) {
+      el.innerHTML = '<li><span style="color:var(--muted)">None yet</span></li>';
+      return;
+    }
+    for (const row of rows) {
+      const li = document.createElement("li");
+      const pct = Math.round((row.count / max) * 100);
+      li.innerHTML =
+        "<span>" + esc(row[labelKey]) + '</span><span class="bar"><i style="width:' + pct + '%"></i></span><span class="n">' + row.count + "</span>";
+      el.appendChild(li);
+    }
+  }
+  fillBars("countries", data.topCountries || [], "country");
+  fillBars("cities", data.topCities || [], "city");
+
+  const dots = document.getElementById("heat-dots");
+  const labels = document.getElementById("heat-labels");
+  function renderHeat(showDc) {
+    dots.innerHTML = "";
+    labels.innerHTML = "";
+    const heat = (data.heat || []).filter((p) => showDc || p.net !== "datacenter");
+    const maxH = Math.max(1, ...heat.map((h) => h.count));
+    for (const p of heat) {
+      const x = ((Number(p.lon) + 180) / 360) * 720;
+      const y = ((90 - Number(p.lat)) / 180) * 360;
+      const r = 5 + Math.sqrt(p.count / maxH) * 16;
+      const dc = p.net === "datacenter";
+      const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      c.setAttribute("cx", String(x));
+      c.setAttribute("cy", String(y));
+      c.setAttribute("r", String(r));
+      c.setAttribute("fill", dc ? "rgba(143,163,176," + (0.2 + 0.35 * (p.count / maxH)).toFixed(2) + ")" : "rgba(46,196,182," + (0.35 + 0.5 * (p.count / maxH)).toFixed(2) + ")");
+      c.setAttribute("stroke", dc ? "#8fa3b0" : "#2ec4b6");
+      c.setAttribute("stroke-width", "1.25");
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = (p.label || "") + " · " + p.count + (dc ? " · datacenter" : "");
+      c.appendChild(title);
+      dots.appendChild(c);
+    }
+    for (const p of heat.filter((h) => h.net !== "datacenter").slice(0, 12)) {
+      const x = ((Number(p.lon) + 180) / 360) * 720;
+      const y = ((90 - Number(p.lat)) / 180) * 360;
+      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      text.setAttribute("x", String(x + 8));
+      text.setAttribute("y", String(y - 8));
+      text.setAttribute("paint-order", "stroke");
+      text.setAttribute("stroke", "rgba(11,15,18,.85)");
+      text.setAttribute("stroke-width", "3");
+      text.textContent = (p.label || "") + " (" + p.count + ")";
+      labels.appendChild(text);
+    }
+    if (!heat.length) {
+      const empty = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      empty.setAttribute("x", "360");
+      empty.setAttribute("y", "180");
+      empty.setAttribute("text-anchor", "middle");
+      empty.setAttribute("fill", "#8fa3b0");
+      empty.setAttribute("font-size", "14");
+      empty.textContent = "No beacon locations yet — open the public site in a browser";
+      labels.appendChild(empty);
+    }
+  }
+  const toggle = document.getElementById("show-raw");
+  renderHeat(false);
+  toggle.addEventListener("change", () => {
+    rawLine.style.display = toggle.checked ? "block" : "none";
+    renderHeat(toggle.checked);
+  });
+
+  const paths = document.querySelector("#paths tbody");
+  for (const row of data.topPaths || []) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td><code>" + esc(row.path) + "</code></td><td>" + row.count + "</td>";
+    paths.appendChild(tr);
+  }
+  const recent = document.querySelector("#recent tbody");
+  for (const row of data.recent || []) {
+    const where = row.city && row.cc ? row.city + ", " + row.cc : row.cc || row.city || "—";
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>" + esc(row.ts) + "</td><td><code>" + esc(row.path) + "</code></td><td>" + esc(where) +
+      "</td><td>" + esc(row.net || "—") + "</td><td>" + esc(row.ref || "—") + "</td>";
+    recent.appendChild(tr);
+  }
+  const probes = document.querySelector("#probes tbody");
+  const probeRows = data.security?.topProbed404 || [];
+  if (!probeRows.length) {
+    probes.innerHTML = '<tr><td colspan="2" style="color:var(--muted)">No 404 probes in window</td></tr>';
+  } else {
+    for (const row of probeRows) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = "<td><code>" + esc(row.path) + "</code></td><td>" + row.count + "</td>";
+      probes.appendChild(tr);
+    }
+  }
+  const hit200 = data.security?.probeHits200 || [];
+  if (hit200.length) {
+    const warn = document.getElementById("probe-200-warn");
+    warn.style.display = "block";
+    warn.textContent =
+      "ALERT: probe-shaped paths returned 200: " +
+      hit200.map((r) => r.path + " (" + r.count + ")").join(", ");
+  }
+})();
+</script>`,
+  );
+}
+
 
 function cmdScript() {
   return `<script>
@@ -265,8 +572,8 @@ function landing() {
   <div class="hero-panel">
     <p class="hero-kicker">Local agent memory</p>
     <p class="hero-brand">amem</p>
-    <h1>Get started for free</h1>
-    <p class="hero-lead">Facts stay in <code>~/.amem</code> on your machine. One command — then open the UI. Upgrade to Pro later inside the app if you want richer retrieval and hygiene.</p>
+    <h1>Everything is free</h1>
+    <p class="hero-lead">Memory, skills, tasks, and the desktop app — all of it. Facts stay in <code>~/.amem</code> on your machine. One command, then open the UI.</p>
     ${installCommands()}
   </div>
 </main>`,
@@ -570,6 +877,60 @@ async function onRequest(req, res) {
       });
       return;
     }
+    if (req.method === "GET" && url.pathname === "/admin") {
+      if (!adminTokenConfigured()) {
+        html(res, 503, adminLoginPage("AMEM_ADMIN_TOKEN is not configured on this shop."));
+        return;
+      }
+      const qToken = url.searchParams.get("token");
+      if (qToken && tokensEqual(qToken, process.env.AMEM_ADMIN_TOKEN)) {
+        setAdminCookie(res, qToken);
+        res.writeHead(302, { Location: "/admin" });
+        res.end();
+        return;
+      }
+      if (!adminAuthorized(req, url)) {
+        html(res, 401, adminLoginPage("Enter the admin token to continue."));
+        return;
+      }
+      html(res, 200, adminDashboardPage());
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/admin/api/stats") {
+      if (!adminTokenConfigured() || !adminAuthorized(req, url)) {
+        json(res, 401, { error: "unauthorized" });
+        return;
+      }
+      const days = Number(url.searchParams.get("days") || 7);
+      const [hits, sales] = await Promise.all([getHitStats({ days }), getSalesStats({ days })]);
+      json(res, 200, { ...hits, sales });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/beacon") {
+      let body = {};
+      try {
+        const raw = await readRaw(req);
+        if (raw.length) body = JSON.parse(raw.toString("utf8"));
+      } catch {
+        body = {};
+      }
+      recordBeacon(req, body && typeof body === "object" ? body : {});
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/beacon/npm-install") {
+      let body = {};
+      try {
+        const raw = await readRaw(req);
+        if (raw.length) body = JSON.parse(raw.toString("utf8"));
+      } catch {
+        body = {};
+      }
+      recordNpmInstall(req, body && typeof body === "object" ? body : {});
+      json(res, 200, { ok: true });
+      return;
+    }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       html(res, 200, landing());
       return;
@@ -644,6 +1005,14 @@ if (!licensePrivKey()) {
 }
 
 const server = createServer((req, res) => {
+  const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);
+  res.on("finish", () => {
+    try {
+      recordRawRequest(req, url.pathname, res.statusCode || 0, req.method || "GET");
+    } catch (err) {
+      console.warn("[shop/hits]", err instanceof Error ? err.message : err);
+    }
+  });
   onRequest(req, res);
 });
 
@@ -656,5 +1025,8 @@ server.listen(PORT, HOST, () => {
   if (!process.env.MAILTRAP_TOKEN) console.warn("[shop] MAILTRAP_TOKEN missing");
   if (!process.env.STRIPE_WEBHOOK_SECRET) {
     console.warn("[shop] STRIPE_WEBHOOK_SECRET missing — set a live Stripe webhook for /webhook");
+  }
+  if (!process.env.AMEM_ADMIN_TOKEN) {
+    console.warn("[shop] AMEM_ADMIN_TOKEN missing — /admin disabled until set");
   }
 });

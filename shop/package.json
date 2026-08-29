@@ -10,6 +10,8 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1116.0",
+    "geoip-lite": "^1.4.10",
     "mailtrap": "^3.4.0",
     "stripe": "^18.5.0"
   }

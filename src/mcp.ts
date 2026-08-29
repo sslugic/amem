@@ -107,6 +107,129 @@ const TOOLS = [
       properties: { workspace: { type: "string" } },
     },
   },
+  {
+    name: "amem_skill_list",
+    description:
+      "List stored skills (procedures the agent learned) as an index of names and descriptions only. Cheap — call this first, then amem_skill_view to load the one you need. Skills are longer procedures; use amem_context for small durable facts.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Optional: rank the index against this task description",
+        },
+      },
+    },
+  },
+  {
+    name: "amem_skill_view",
+    description:
+      "Load the full body of one skill by name, or a supporting file inside it. Call this only after amem_skill_list (or the 'Relevant skills' section of an amem context packet) shows a skill worth following.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Skill name from amem_skill_list" },
+        file: {
+          type: "string",
+          description: "Optional supporting file, e.g. references/api.md",
+        },
+        sessionId: {
+          type: "string",
+          description:
+            "Optional conversation id, so amem can tell whether this procedure actually worked out",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "amem_skill_save",
+    description:
+      "Save a non-trivial multi-step procedure you just worked out as a reusable skill. Use after solving something worth repeating — a workflow, a dead end you found the way past, or a correction the user gave you. Provide a full SKILL.md in `content`, or a description plus body.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Short slug, e.g. deploy-staging",
+        },
+        description: {
+          type: "string",
+          description: "One line on when to use this skill",
+        },
+        content: {
+          type: "string",
+          description: "Full SKILL.md, or the markdown body to wrap",
+        },
+        sessionId: {
+          type: "string",
+          description: "Optional conversation id, so amem can clear the nudge that prompted this",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "amem_task_list",
+    description:
+      "List deferred agent tasks (Kanban) for a workspace/repo. Use for work to do later — not durable facts (use amem_remember for those). Default excludes done tasks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace: { type: "string" },
+        status: {
+          type: "string",
+          description: "backlog | next | doing | blocked | done",
+        },
+        include_done: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "amem_task_add",
+    description:
+      "Create a deferred agent task on the project Kanban (default backlog). Use for work that should not get lost in chat. Durable facts still go through amem_remember.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        body: { type: "string", description: "Why / notes" },
+        workspace: { type: "string" },
+        status: { type: "string", description: "backlog | next | doing | blocked | done" },
+        anchors: { type: "array", items: { type: "string" } },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "amem_task_update",
+    description:
+      "Update a task title, notes, anchors, or move its Kanban status (backlog/next/doing/blocked/done).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        workspace: { type: "string" },
+        title: { type: "string" },
+        body: { type: "string" },
+        status: { type: "string" },
+        anchors: { type: "array", items: { type: "string" } },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "amem_task_complete",
+    description: "Mark a deferred agent task as done on the Kanban board.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        workspace: { type: "string" },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
 function textResult(text: string, isError = false) {
@@ -155,6 +278,27 @@ function parseDays(value: unknown, fallback = 30): string {
   const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : fallback;
   if (!Number.isFinite(n) || n <= 0) return String(fallback);
   return String(Math.min(365, Math.floor(n)));
+}
+
+/**
+ * Keep the skill index at level 0. Returning bodies here would defeat the point of having
+ * a separate view call, so this hands back names and descriptions only.
+ */
+function compactSkillIndex(body: unknown, ranked: boolean) {
+  const source = (body ?? {}) as {
+    skills?: Array<Record<string, unknown>>;
+    matches?: Array<Record<string, unknown>>;
+  };
+  const list = ranked ? (source.matches ?? []) : (source.skills ?? []);
+  return {
+    skills: list.map((s) => ({
+      name: s.name,
+      description: s.description,
+      tags: s.tags,
+      uses: s.uses,
+    })),
+    hint: "Call amem_skill_view with a name to load the full procedure.",
+  };
 }
 
 function compactGraph(body: unknown) {
@@ -297,6 +441,94 @@ function callTool(name: string, args: Record<string, unknown>, fallbackWorkspace
     }
     const result = api("GET", "/api/status", null, { workspace });
     return apiResult(result);
+  }
+  if (name === "amem_skill_list") {
+    const query: Record<string, string> = {};
+    if (typeof args.query === "string" && args.query.trim()) query.q = args.query.trim();
+    const result = api("GET", "/api/skills", null, { query });
+    if (result.status >= 400) return apiResult(result);
+    return jsonResult(compactSkillIndex(result.body, Boolean(query.q)));
+  }
+  if (name === "amem_skill_view") {
+    const skillName = typeof args.name === "string" ? args.name.trim() : "";
+    if (!skillName) return textResult("name is required", true);
+    const query: Record<string, string> = { name: skillName };
+    if (typeof args.file === "string" && args.file.trim()) query.file = args.file.trim();
+    if (typeof args.sessionId === "string" && args.sessionId.trim()) {
+      query.session_id = args.sessionId.trim();
+    }
+    const result = api("GET", "/api/skills/view", null, { query });
+    if (result.status >= 400) return apiResult(result);
+    const body = result.body as { content?: string };
+    // The body is markdown the agent should read as-is, not JSON to re-parse.
+    return textResult(typeof body?.content === "string" ? body.content : JSON.stringify(body));
+  }
+  if (name === "amem_skill_save") {
+    const skillName = typeof args.name === "string" ? args.name.trim() : "";
+    if (!skillName) return textResult("name is required", true);
+    const result = api(
+      "POST",
+      "/api/skills",
+      {
+        name: skillName,
+        description: typeof args.description === "string" ? args.description : "",
+        content: typeof args.content === "string" ? args.content : "",
+        session_id: typeof args.sessionId === "string" ? args.sessionId : undefined,
+      },
+      { workspace },
+    );
+    return apiResult(result);
+  }
+  if (name === "amem_task_list") {
+    const query: Record<string, string> = {};
+    if (typeof args.status === "string" && args.status.trim()) query.status = args.status.trim();
+    if (args.include_done === true) query.include_done = "1";
+    const result = api("GET", "/api/tasks", null, { workspace, query });
+    if (result.status >= 400) return apiResult(result);
+    return jsonResult(result.body);
+  }
+  if (name === "amem_task_add") {
+    const title = typeof args.title === "string" ? args.title : "";
+    if (!title.trim()) return textResult("title is required", true);
+    const result = api(
+      "POST",
+      "/api/tasks",
+      {
+        title,
+        body: typeof args.body === "string" ? args.body : "",
+        status: typeof args.status === "string" ? args.status : "backlog",
+        anchors: args.anchors,
+        source: "mcp",
+      },
+      { workspace },
+    );
+    if (result.status >= 400) return textResult(JSON.stringify(result.body), true);
+    return textResult(JSON.stringify(result.body));
+  }
+  if (name === "amem_task_update") {
+    const id = typeof args.id === "string" ? args.id : "";
+    if (!id.trim()) return textResult("id is required", true);
+    const result = api(
+      "PATCH",
+      "/api/tasks",
+      {
+        id,
+        title: typeof args.title === "string" ? args.title : undefined,
+        body: typeof args.body === "string" ? args.body : undefined,
+        status: typeof args.status === "string" ? args.status : undefined,
+        anchors: args.anchors,
+      },
+      { workspace },
+    );
+    if (result.status >= 400) return textResult(JSON.stringify(result.body), true);
+    return textResult(JSON.stringify(result.body));
+  }
+  if (name === "amem_task_complete") {
+    const id = typeof args.id === "string" ? args.id : "";
+    if (!id.trim()) return textResult("id is required", true);
+    const result = api("POST", "/api/tasks/complete", { id }, { workspace });
+    if (result.status >= 400) return textResult(JSON.stringify(result.body), true);
+    return textResult(JSON.stringify(result.body));
   }
   return textResult(`Unknown tool: ${name}`, true);
 }

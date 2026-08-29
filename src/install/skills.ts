@@ -22,14 +22,19 @@ export function copyBundledSkills(targetSkillsDir: string): string[] {
   mkdirSync(targetSkillsDir, { recursive: true });
   const source = skillsSourceDir();
   const installed: string[] = [];
-  for (const name of ["amem-bootstrap", "amem-update-working-memory"]) {
+  const skillNames = [
+    "amem-bootstrap",
+    "amem-update-working-memory",
+    "amem-tasks",
+    "amem-write-skill",
+  ];
+  for (const name of skillNames) {
     const from = join(source, name);
     const to = join(targetSkillsDir, name);
-    if (!existsSync(from)) {
-      throw new Error(`Missing bundled skill: ${from}`);
+    if (existsSync(from)) {
+      cpSync(from, to, { recursive: true });
+      installed.push(to);
     }
-    cpSync(from, to, { recursive: true });
-    installed.push(to);
   }
   return installed;
 }

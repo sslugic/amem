@@ -11,6 +11,17 @@ import {
   listClaims,
   listComponents,
   listFlows,
+  listRepos,
+  listTasks,
+  listTasksAll,
+  insertTask,
+  updateTask,
+  completeTask,
+  deleteTask,
+  getTask,
+  findTaskAnyRepo,
+  normalizeTaskStatus,
+  type AgentTaskStatus,
   requireRepo,
   setReportedOnLatest,
   setReportedTokensSaved,
@@ -42,6 +53,7 @@ import {
   validateProposal,
 } from "./proposal.js";
 import { detectRepoIdentity, parseWorkspaceSlug, workspaceIdentity } from "./repo-identity.js";
+import { runDesktopApp } from "./app-shell.js";
 import {
   startUiServer,
   buildUiLandingUrl,
@@ -95,6 +107,20 @@ import {
   writeHygieneHelperScript,
 } from "./hygiene-schedule.js";
 import { syncPinnedRules } from "./rules-sync.js";
+import { listSkillDrafts } from "./db.js";
+import {
+  deleteSkill,
+  findSkillOnDisk,
+  importSkillFromPath,
+  isValidSkillName,
+  listIndexedSkills,
+  readSkillBody,
+  renderSkillMarkdown,
+  skillsDir,
+  slugifySkillName,
+  syncSkillIndex,
+  writeSkill,
+} from "./skills.js";
 import { buildSbom, writeItPack } from "./it-pack.js";
 
 function usage(): never {
@@ -111,6 +137,11 @@ Usage:
   amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna]
   amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>]
   amem recipe [--json]
+  amem task [list] [--status <backlog|next|doing|blocked|done>] [--include-done] [--all] [--json]
+  amem task add <title> [--body <notes>] [--status <status>] [--anchor <file>]
+  amem task update <id> [--title <title>] [--body <notes>] [--status <status>]
+  amem task complete <id>
+  amem task delete <id>
   amem propose validate <file.json>
   amem propose diff <file.json>
   amem propose apply <file.json>
@@ -128,6 +159,8 @@ Usage:
   amem hygiene schedule [--hour <0-23>]
   amem hygiene unschedule
   amem rules sync
+  amem skills list|show <name>|new <name> [--desc <text>]|rm <name>|sync|import <path>
+  amem skills drafts|approve <id>|dismiss <id>
   amem it-pack [--out <dir>]
   amem doctor [--attest] [--sbom] [--json]
   amem session touch --platform cursor|claude [--session-id <id>]
@@ -135,6 +168,7 @@ Usage:
   amem usage report --saved <n> [--platform cursor|claude] [--event-id <id>]
   amem usage export [--format json|md|pdf] [--days 30] [--scope current|all] [--out <file>]
   amem ui [--port 7843] [--no-open]
+  amem app [--port 7843]
   amem service install|uninstall|status
   amem mcp [--print-config] [--workspace <name>]
   amem license status|apply|clear|issue|keys
@@ -732,6 +766,213 @@ async function main(): Promise<void> {
         console.log("Keep this file out of shared git if it contains personal notes.");
         break;
       }
+      case "task":
+      case "tasks": {
+        const sub = positional[1] || "list";
+        if (sub === "list") {
+          const isAll = Boolean(flags.get("all"));
+          const statusRaw = flagString(flags, "status");
+          const status = statusRaw ? (normalizeTaskStatus(statusRaw) ?? undefined) : undefined;
+          const includeDone = Boolean(flags.get("include-done") || flags.get("all") || status === "done");
+          let tasks;
+          if (isAll) {
+            tasks = listTasksAll({ status, includeDone });
+          } else {
+            let repo;
+            try {
+              repo = resolveBinding(flags);
+            } catch {
+              repo = getRepoByCwd() || ensurePersonalWorkspace();
+            }
+            tasks = listTasks(repo.id, { status, includeDone });
+          }
+          if (flags.get("json")) {
+            console.log(JSON.stringify({ tasks }, null, 2));
+            break;
+          }
+          if (tasks.length === 0) {
+            console.log("No tasks found.");
+            break;
+          }
+          const repoMap = new Map(listRepos().map((r) => [r.id, r.repo_name]));
+          for (const t of tasks) {
+            const repoLabel = isAll ? ` [${repoMap.get(t.repo_id) || "repo"}]` : "";
+            const body = t.body ? ` — ${t.body}` : "";
+            console.log(`[${t.status}] ${t.title}${body}${repoLabel} (${t.id})`);
+          }
+          break;
+        }
+        if (sub === "add") {
+          const title = positional.slice(2).join(" ") || flagString(flags, "title");
+          if (!title || !title.trim()) {
+            throw new Error("Usage: amem task add <title> [--body <notes>] [--status <status>] [--anchor <file>]");
+          }
+          let repo;
+          try {
+            repo = resolveBinding(flags);
+          } catch {
+            repo = getRepoByCwd() || ensurePersonalWorkspace();
+          }
+          const body = flagString(flags, "body") || "";
+          const status = flagString(flags, "status") || "backlog";
+          const anchor = flagString(flags, "anchor");
+          const anchors = anchor ? [anchor] : undefined;
+          const task = insertTask({
+            repoId: repo.id,
+            title: title.trim(),
+            body,
+            status,
+            anchors,
+            source: "cli",
+          });
+          console.log(`Created task ${task.id} [${task.status}]: ${task.title}`);
+          break;
+        }
+        if (sub === "update") {
+          const id = positional[2];
+          if (!id) throw new Error("Usage: amem task update <id> [--title <title>] [--body <notes>] [--status <status>]");
+          const found = findTaskAnyRepo(id);
+          if (!found) throw new Error(`Task not found: ${id}`);
+          const title = flagString(flags, "title");
+          const body = flagString(flags, "body");
+          const status = flagString(flags, "status");
+          const anchor = flagString(flags, "anchor");
+          const anchors = anchor ? [anchor] : undefined;
+          const updated = updateTask(found.repo_id, id, {
+            title,
+            body,
+            status,
+            anchors,
+          });
+          if (!updated) throw new Error(`Task not found: ${id}`);
+          console.log(`Updated task ${updated.id} [${updated.status}]: ${updated.title}`);
+          break;
+        }
+        if (sub === "complete" || sub === "done") {
+          const id = positional[2];
+          if (!id) throw new Error("Usage: amem task complete <id>");
+          const found = findTaskAnyRepo(id);
+          if (!found) throw new Error(`Task not found: ${id}`);
+          const completed = completeTask(found.repo_id, id);
+          if (!completed) throw new Error(`Task not found: ${id}`);
+          console.log(`Completed task ${completed.id}: ${completed.title}`);
+          break;
+        }
+        if (sub === "rm" || sub === "delete") {
+          const id = positional[2];
+          if (!id) throw new Error("Usage: amem task delete <id>");
+          const found = findTaskAnyRepo(id);
+          if (!found) throw new Error(`Task not found: ${id}`);
+          const ok = deleteTask(found.repo_id, id);
+          if (!ok) throw new Error(`Task not found: ${id}`);
+          console.log(`Deleted task ${id}`);
+          break;
+        }
+        throw new Error("Usage: amem task list|add|update|complete|delete");
+      }
+      case "skills": {
+        const sub = positional[1] || "list";
+        if (sub === "list") {
+          const skills = listIndexedSkills();
+          if (skills.length === 0) {
+            console.log(`No skills yet. Create one with: amem skills new <name>`);
+            console.log(`Skills live in ${skillsDir()}`);
+            break;
+          }
+          for (const s of skills) {
+            const flag = s.modified ? " (edited)" : "";
+            const used = s.uses > 0 ? ` · used ${s.uses}×` : "";
+            console.log(`${s.name}${flag}${used}`);
+            if (s.description) console.log(`  ${s.description}`);
+          }
+          console.log(`\n${skills.length} skill(s) in ${skillsDir()}`);
+          break;
+        }
+        if (sub === "show") {
+          const name = positional[2];
+          if (!name) throw new Error("Usage: amem skills show <name>");
+          const body = readSkillBody(name);
+          if (body === null) throw new Error(`Skill not found: ${name}`);
+          console.log(body);
+          break;
+        }
+        if (sub === "new") {
+          const name = positional[2];
+          if (!name) throw new Error("Usage: amem skills new <name> [--desc <text>]");
+          const slug = slugifySkillName(name);
+          if (!isValidSkillName(slug)) throw new Error(`Invalid skill name: ${name}`);
+          if (findSkillOnDisk(slug)) throw new Error(`Skill already exists: ${slug}`);
+          const markdown = renderSkillMarkdown({
+            name: slug,
+            description: flagString(flags, "desc") || `Procedure: ${slug.replace(/[-_]+/g, " ")}`,
+          });
+          const written = writeSkill(slug, markdown);
+          syncSkillIndex();
+          console.log(`Created ${written.path}`);
+          console.log("Edit it, then agents will see it in their skill index.");
+          break;
+        }
+        if (sub === "rm") {
+          const name = positional[2];
+          if (!name) throw new Error("Usage: amem skills rm <name>");
+          if (!deleteSkill(name)) throw new Error(`Skill not found: ${name}`);
+          syncSkillIndex();
+          console.log(`Deleted skill ${slugifySkillName(name)}`);
+          break;
+        }
+        if (sub === "sync") {
+          const skills = syncSkillIndex();
+          console.log(`Indexed ${skills.length} skill(s) from ${skillsDir()}`);
+          const edited = skills.filter((s) => s.modified);
+          if (edited.length > 0) {
+            console.log(`${edited.length} locally edited: ${edited.map((s) => s.name).join(", ")}`);
+          }
+          break;
+        }
+        if (sub === "drafts") {
+          const drafts = listSkillDrafts({ status: "pending", limit: 50 });
+          if (drafts.length === 0) {
+            console.log("No pending skill drafts.");
+            break;
+          }
+          for (const d of drafts) {
+            const label =
+              d.kind === "revision" ? `revise ${d.target_skill}` : d.kind === "create" ? "staged" : "suggestion";
+            console.log(`${d.id}  [${label}]  ${d.title}`);
+            const why = JSON.parse(d.reasons || "[]");
+            if (Array.isArray(why) && why.length) console.log(`  why: ${why.join(", ")}`);
+          }
+          console.log(`\n${drafts.length} pending · approve with: amem skills approve <id>`);
+          break;
+        }
+        if (sub === "approve" || sub === "dismiss") {
+          const id = positional[2];
+          if (!id) throw new Error(`Usage: amem skills ${sub} <draft-id>`);
+          const path = sub === "approve" ? "/api/skills/drafts/apply" : "/api/skills/drafts/dismiss";
+          const result = handleApi({
+            method: "POST",
+            pathname: path,
+            searchParams: new URLSearchParams(),
+            body: { id },
+            cwd: process.cwd(),
+          });
+          if (result.status >= 400) {
+            throw new Error(String((result.body as { error?: string })?.error || "Failed"));
+          }
+          console.log(sub === "approve" ? `Applied ${id}` : `Dismissed ${id}`);
+          break;
+        }
+        if (sub === "import") {
+          const src = positional[2];
+          if (!src) throw new Error("Usage: amem skills import <path-to-skill-dir>");
+          const result = importSkillFromPath(src, flagString(flags, "name"));
+          syncSkillIndex();
+          console.log(`Imported ${result.name} → ${result.path}`);
+          console.log("Review it before trusting: skills are instructions agents follow.");
+          break;
+        }
+        throw new Error("Usage: amem skills list|show|new|rm|sync|import");
+      }
       case "it-pack": {
         const out = resolve(flagString(flags, "out") || join(amemHome(), "it-pack"));
         const result = writeItPack(out);
@@ -889,6 +1130,20 @@ async function main(): Promise<void> {
         }
         break;
       }
+      case "app": {
+        assertUiAllowed();
+        const port = Number(flagString(flags, "port") ?? "7843");
+        try {
+          await runDesktopApp({ port, cwd: process.cwd() });
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : String(error));
+          closeDb();
+          process.exitCode = 1;
+          break;
+        }
+        closeDb();
+        break;
+      }
       case "service": {
         const sub = positional[1];
         if (sub === "status") {
@@ -942,9 +1197,8 @@ async function main(): Promise<void> {
           break;
         }
         if (sub === "activate") {
-          throw new Error(
-            "Self-activate is disabled. Buy Pro/IT at https://getamem.com then: amem license apply --file <amem-license.json>",
-          );
+          console.log("amem is 100% free and open — all features are already unlocked.");
+          break;
         }
         if (sub === "clear") {
           clearLicense();

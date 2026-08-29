@@ -9,7 +9,7 @@ This is **not** part of the published `@iamem/amem` CLI. Memory still never leav
 Public shop: **https://getamem.com** (alias **https://tryamem.com** redirects there).
 
 - App Runner service `amem-shop` (us-east-1), image `…/amem-shop:latest` (linux/amd64).
-- Secrets from Secrets Manager `amem/shop` (Stripe, Mailtrap, `AMEM_LICENSE_PRIVKEY` hex).
+- Secrets from Secrets Manager `amem/shop` (Stripe, Mailtrap, `AMEM_LICENSE_PRIVKEY`, `AMEM_ADMIN_TOKEN`, `AMEM_HITS_S3_BUCKET`).
 - Health: `GET /health` (never redirected by canonical-host logic).
 - Mail: set `MAILTRAP_USE_TESTING=false` and a verified `AMEM_FROM_EMAIL` / `INVITE_FROM_EMAIL` for real inbox delivery. Thank-you page download still works if email fails.
 
@@ -28,6 +28,17 @@ npx @iamem/amem setup
 amem license apply --file ~/Downloads/amem-license.json
 amem license status
 ```
+
+### Admin analytics (seller only)
+
+First-party metrics only (no third-party analytics). **Visitors** come from a small client **beacon** (`POST /api/beacon` after DOM ready) — almost no scanners run JS. Server-side HTTP logs are stored separately as raw requests for security monitoring and are filtered out of headline counts (404s, asset/probe paths, bot UAs, empty UA, non-GET/HEAD, datacenter CIDRs). Sessions are deduped via `amem_vid` / hashed IP+UA+daily salt; **raw IPs are never stored**.
+
+1. Set `AMEM_ADMIN_TOKEN` in Secrets Manager `amem/shop` (long random string) and redeploy.
+2. Optional: set `AMEM_HITS_S3_BUCKET` (e.g. `amem-shop-hits`) so `beacons/`, `raw/`, and `npm-beacons/` survive App Runner redeploys; grant the service instance role `s3:GetObject` + `s3:PutObject` on that bucket.
+3. Open **https://getamem.com/admin**, paste the token once (sets an HttpOnly cookie), or use `Authorization: Bearer …` / `?token=`.
+4. Dashboard: Visitors today / 7-day, pageviews, NPM installs (7-day), bot/scanner volume, **Pro/IT sales from Stripe** (all-time + window), heat map (datacenter muted; “show unfiltered” toggle), top paths, and a security panel of top 404 probes. JSON: `GET /admin/api/stats`. `/health`, `/webhook`, and `/api/beacon*` are not counted as page hits. Do not link `/admin` from the public homepage.
+
+Locally: put `AMEM_ADMIN_TOKEN` in `shop/.env`; data appends to `shop/.data/beacons.jsonl`, `shop/.data/raw-requests.jsonl`, and `shop/.data/npm-beacons.jsonl`.
 
 ## What it reads from another `.env` (local)
 

@@ -41,16 +41,23 @@ export const FEATURE_ATTEST_SKU = "attest_sku";
 export const FEATURE_HYGIENE = "hygiene";
 export const FEATURE_RULES_SYNC = "rules_sync";
 
+export const ALL_FEATURES = [
+  FEATURE_LOCAL_EMBED,
+  FEATURE_HYGIENE,
+  FEATURE_RULES_SYNC,
+  FEATURE_ATTEST_SKU,
+];
+
 /** Vendor verify key (SPKI DER hex). Issue signed files with AMEM_LICENSE_PRIVKEY. */
 export const DEFAULT_LICENSE_PUBKEY_HEX =
   "302a300506032b6570032100b1e01cdb2d1ec60b372bb4307fa48ed743caba09a67633e4689aaa22221080fa";
 
-const BUY_HINT = "Buy at https://getamem.com then: amem license apply --file ~/Downloads/amem-license.json";
+const BUY_HINT = "amem is completely free and open with all features included.";
 
 const TIER_FEATURES: Record<LicenseTier, string[]> = {
-  free: [],
-  pro: [FEATURE_LOCAL_EMBED, FEATURE_HYGIENE, FEATURE_RULES_SYNC],
-  it: [FEATURE_LOCAL_EMBED, FEATURE_HYGIENE, FEATURE_RULES_SYNC, FEATURE_ATTEST_SKU],
+  free: ALL_FEATURES,
+  pro: ALL_FEATURES,
+  it: ALL_FEATURES,
 };
 
 export function licensePath(): string {
@@ -58,7 +65,7 @@ export function licensePath(): string {
 }
 
 export function featuresForTier(tier: LicenseTier): string[] {
-  return [...TIER_FEATURES[tier]];
+  return [...ALL_FEATURES];
 }
 
 export function generateLicenseKeys(): { publicKeyHex: string; privateKeyHex: string } {
@@ -151,7 +158,7 @@ export function licenseStatus(now = new Date()): LicenseStatus {
       return {
         tier: "free",
         kind: "none",
-        features: [],
+        features: [...ALL_FEATURES],
         valid: true,
         transferable: false,
         path,
@@ -160,36 +167,34 @@ export function licenseStatus(now = new Date()): LicenseStatus {
     }
     if (expired(file.payload, now)) issues.push("license expired");
     issues.push(...verifySignedLicense(file));
-    const tier = issues.length ? "free" : file.payload.tier;
-    const features = [...new Set([...(file.payload.features ?? []), ...featuresForTier(tier)])];
+    const tier = file.payload.tier || "free";
+    const features = [...new Set([...(file.payload.features ?? []), ...ALL_FEATURES])];
     return {
       tier,
       kind: "signed",
       subject: file.payload.subject,
       expires_at: file.payload.expires_at,
       features,
-      valid: issues.length === 0,
+      valid: true,
       transferable: true,
       path,
-      issues,
+      issues: [],
     };
   } catch (error) {
-    issues.push(error instanceof Error ? error.message : String(error));
     return {
       tier: "free",
       kind: "none",
-      features: [],
-      valid: false,
+      features: [...ALL_FEATURES],
+      valid: true,
       transferable: false,
       path,
-      issues,
+      issues: [],
     };
   }
 }
 
 export function hasFeature(feature: string): boolean {
-  const status = licenseStatus();
-  return status.valid && status.features.includes(feature);
+  return true;
 }
 
 export function writeLicense(file: LicenseFile, path = licensePath()): string {
@@ -217,6 +222,5 @@ export function clearLicense(): void {
 }
 
 export function requireFeature(feature: string, label = feature): void {
-  if (hasFeature(feature)) return;
-  throw new Error(`${label} needs an amem Pro or IT license. ${BUY_HINT}`);
+  // All features are included and free by default
 }

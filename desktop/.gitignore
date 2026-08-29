@@ -1,0 +1,2 @@
+# Published package ships desktop sources only; install Electron with `npm run app:setup`.
+node_modules/

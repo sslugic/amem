@@ -20,3 +20,11 @@ allowed_platforms = ["cursor", "claude"]
 # Optional: auto-apply low-risk draft kinds without Memory approve (empty = never).
 # Prefer leaving this empty on managed fleets.
 # auto_apply_kinds = ["structure"]
+
+# Skills — reusable procedures agents load on demand from ~/.amem/skills.
+# These are instructions an agent will follow, so treat them like code, not notes.
+skills_enabled = true
+# true = agent writes are staged for review instead of hitting disk.
+skill_write_approval = false
+# false = stop suggesting skills at session end.
+skill_capture = true

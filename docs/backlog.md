@@ -4,6 +4,7 @@ Updated after completing the Feature Map **Later** phase (local embedding model 
 
 ## Shipped recently
 
+- **Agent Tasks Kanban** — per-project board + MCP `amem_task_*` + open tasks in context packets (complement to Memory facts)
 - FTS retrieval, claim staleness, supersede/conflict
 - Session-end **draft capture** + Memory approve/dismiss
 - Memory **edit / delete / pin / search**
@@ -37,6 +38,14 @@ Updated after completing the Feature Map **Later** phase (local embedding model 
 
 ## Open
 
+- **Skills in backup/restore** — `createBackup` copies only the DB file, so `~/.amem/skills/`
+  is lost on restore. Now sharper than before: the `skills` index, `skill_drafts`, and
+  `skill_uses` tables all survive a restore while the SKILL.md bodies they point at do not,
+  so a restored machine gets an index of skills that no longer exist. Needs a decision:
+  make backups an archive (DB + skills dir), or keep backups DB-only, prune the index on
+  restore, and document skills as separately versioned.
+- **Skill drafts have no retention policy** — dismissed and applied rows accumulate. Memory
+  drafts have hygiene sweeps; skill drafts do not yet.
 - Prompt-pack before/after Stats benchmark; restore wizard polish; IT seat pack.
 - Decide one-time vs subscription (offline files cannot revoke on cancel unless you add `expires_at` and re-issue).
 - Optional vendored ONNX/MiniLM weights in a paid pack (external command is the local hook today).

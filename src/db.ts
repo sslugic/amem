@@ -118,6 +118,36 @@ export type SetupStateRow = {
   updated_at: string;
 };
 
+export type AgentTaskStatus = "backlog" | "next" | "doing" | "blocked" | "done";
+
+export type AgentTaskRow = {
+  repo_id: string;
+  id: string;
+  title: string;
+  body: string;
+  status: AgentTaskStatus;
+  anchors: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+export const AGENT_TASK_STATUSES: readonly AgentTaskStatus[] = [
+  "backlog",
+  "next",
+  "doing",
+  "blocked",
+  "done",
+] as const;
+
+export function normalizeTaskStatus(raw: unknown): AgentTaskStatus | null {
+  const s = String(raw || "")
+    .trim()
+    .toLowerCase();
+  return (AGENT_TASK_STATUSES as readonly string[]).includes(s) ? (s as AgentTaskStatus) : null;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS repos (
   id TEXT PRIMARY KEY,
@@ -228,6 +258,61 @@ CREATE TABLE IF NOT EXISTS proposal_drafts (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agent_tasks (
+  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'backlog',
+  anchors TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'ui',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  PRIMARY KEY(repo_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS skills (
+  name TEXT PRIMARY KEY,
+  path TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  version TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
+  repo_id TEXT REFERENCES repos(id) ON DELETE SET NULL,
+  content_hash TEXT NOT NULL,
+  origin_hash TEXT,
+  source TEXT NOT NULL DEFAULT 'local',
+  uses INTEGER NOT NULL DEFAULT 0,
+  last_used_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS skill_drafts (
+  id TEXT PRIMARY KEY,
+  repo_id TEXT REFERENCES repos(id) ON DELETE CASCADE,
+  name TEXT,
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  content TEXT,
+  kind TEXT NOT NULL DEFAULT 'suggestion',
+  target_skill TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  source TEXT NOT NULL DEFAULT 'session-end',
+  session_id TEXT,
+  reasons TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS skill_uses (
+  id TEXT PRIMARY KEY,
+  skill_name TEXT NOT NULL,
+  repo_id TEXT,
+  session_id TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS claims_repo_idx ON claims(repo_id);
 CREATE INDEX IF NOT EXISTS edges_repo_idx ON edges(repo_id);
 CREATE INDEX IF NOT EXISTS components_repo_idx ON components(repo_id);
@@ -239,6 +324,11 @@ CREATE INDEX IF NOT EXISTS conversation_notes_repo_idx ON conversation_notes(rep
 CREATE INDEX IF NOT EXISTS conversation_notes_created_idx ON conversation_notes(created_at);
 CREATE INDEX IF NOT EXISTS proposal_drafts_repo_idx ON proposal_drafts(repo_id);
 CREATE INDEX IF NOT EXISTS proposal_drafts_status_idx ON proposal_drafts(status);
+CREATE INDEX IF NOT EXISTS agent_tasks_repo_idx ON agent_tasks(repo_id);
+CREATE INDEX IF NOT EXISTS agent_tasks_status_idx ON agent_tasks(repo_id, status);
+CREATE INDEX IF NOT EXISTS skills_repo_idx ON skills(repo_id);
+CREATE INDEX IF NOT EXISTS skill_drafts_status_idx ON skill_drafts(status);
+CREATE INDEX IF NOT EXISTS skill_uses_session_idx ON skill_uses(session_id);
 `;
 
 let cached: Database.Database | null = null;
@@ -266,6 +356,7 @@ export function openDb(): Database.Database {
   ensureClaimsFts(db);
   migrateClaimsFtsBootstrap(db);
   ensureProposalDrafts(db);
+  ensureAgentTasks(db);
   ensureClaimsEmbed(db);
   cached = db;
   return db;
@@ -311,6 +402,26 @@ function ensureProposalDrafts(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS proposal_drafts_repo_idx ON proposal_drafts(repo_id);
     CREATE INDEX IF NOT EXISTS proposal_drafts_status_idx ON proposal_drafts(status);
+  `);
+}
+
+function ensureAgentTasks(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_tasks (
+      repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+      id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'backlog',
+      anchors TEXT NOT NULL DEFAULT '[]',
+      source TEXT NOT NULL DEFAULT 'ui',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      PRIMARY KEY(repo_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS agent_tasks_repo_idx ON agent_tasks(repo_id);
+    CREATE INDEX IF NOT EXISTS agent_tasks_status_idx ON agent_tasks(repo_id, status);
   `);
 }
 
@@ -981,6 +1092,499 @@ export function setProposalDraftStatus(
     .prepare(`UPDATE proposal_drafts SET status = ?, updated_at = ? WHERE id = ?`)
     .run(status, ts, id);
   return getProposalDraft(id);
+}
+
+function encodeTaskAnchors(anchors?: string[] | null): string {
+  const list = (anchors ?? [])
+    .filter((a): a is string => typeof a === "string" && Boolean(a.trim()))
+    .map((a) => a.trim().slice(0, 200))
+    .slice(0, 20);
+  return JSON.stringify(list);
+}
+
+const TASK_STATUS_ORDER: Record<AgentTaskStatus, number> = {
+  doing: 0,
+  next: 1,
+  blocked: 2,
+  backlog: 3,
+  done: 4,
+};
+
+export type SkillRow = {
+  name: string;
+  path: string;
+  description: string;
+  version: string | null;
+  tags: string;
+  repo_id: string | null;
+  content_hash: string;
+  origin_hash: string | null;
+  source: string;
+  uses: number;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export function listSkillRows(): SkillRow[] {
+  return openDb().prepare(`SELECT * FROM skills ORDER BY name`).all() as SkillRow[];
+}
+
+export function getSkillRow(name: string): SkillRow | null {
+  return (
+    (openDb().prepare(`SELECT * FROM skills WHERE name = ?`).get(name) as SkillRow | undefined) ??
+    null
+  );
+}
+
+/**
+ * Index one skill found on disk. Disk is the source of truth, so this only ever refreshes
+ * derived columns — it must not clobber the repo tag or usage counters a user built up.
+ */
+export function upsertSkillRow(input: {
+  name: string;
+  path: string;
+  description?: string;
+  version?: string | null;
+  tags?: string[];
+  contentHash: string;
+  source?: string;
+  repoId?: string | null;
+}): SkillRow {
+  const ts = nowIso();
+  const existing = getSkillRow(input.name);
+  const tags = JSON.stringify(input.tags ?? []);
+  if (existing) {
+    openDb()
+      .prepare(
+        `UPDATE skills SET path = ?, description = ?, version = ?, tags = ?,
+         content_hash = ?, source = ?, updated_at = ? WHERE name = ?`,
+      )
+      .run(
+        input.path,
+        input.description ?? "",
+        input.version ?? null,
+        tags,
+        input.contentHash,
+        input.source ?? existing.source,
+        ts,
+        input.name,
+      );
+    if (input.repoId !== undefined) setSkillRepo(input.name, input.repoId);
+    return getSkillRow(input.name)!;
+  }
+  openDb()
+    .prepare(
+      `INSERT INTO skills (name, path, description, version, tags, repo_id, content_hash,
+        origin_hash, source, uses, last_used_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
+    )
+    .run(
+      input.name,
+      input.path,
+      input.description ?? "",
+      input.version ?? null,
+      tags,
+      input.repoId ?? null,
+      input.contentHash,
+      input.contentHash,
+      input.source ?? "local",
+      ts,
+      ts,
+    );
+  return getSkillRow(input.name)!;
+}
+
+/** Optional memory tag. Skills are a global library; the tag is only a filter hint. */
+export function setSkillRepo(name: string, repoId: string | null): void {
+  openDb()
+    .prepare(`UPDATE skills SET repo_id = ?, updated_at = ? WHERE name = ?`)
+    .run(repoId, nowIso(), name);
+}
+
+export function deleteSkillRow(name: string): boolean {
+  const info = openDb().prepare(`DELETE FROM skills WHERE name = ?`).run(name);
+  return Number(info.changes || 0) > 0;
+}
+
+/** Drop index rows whose skill is no longer on disk. */
+export function pruneSkillRows(keepNames: string[]): number {
+  const keep = new Set(keepNames);
+  let removed = 0;
+  for (const row of listSkillRows()) {
+    if (!keep.has(row.name)) {
+      deleteSkillRow(row.name);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+export function recordSkillUse(
+  name: string,
+  ctx: { repoId?: string | null; sessionId?: string | null } = {},
+): void {
+  openDb()
+    .prepare(`UPDATE skills SET uses = uses + 1, last_used_at = ? WHERE name = ?`)
+    .run(nowIso(), name);
+  // Per-session trail so session-end can tell which procedures were actually followed.
+  openDb()
+    .prepare(
+      `INSERT INTO skill_uses (id, skill_name, repo_id, session_id, created_at) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(newId("skilluse"), name, ctx.repoId ?? null, ctx.sessionId ?? null, nowIso());
+}
+
+/**
+ * Skills used recently in a repo. MCP clients do not always carry a session id, so
+ * recency in the same memory is the fallback for correlating a view to a session.
+ */
+export function listRecentSkillUses(repoId: string, minutes = 120, limit = 5): string[] {
+  const since = new Date(Date.now() - minutes * 60_000).toISOString();
+  const rows = openDb()
+    .prepare(
+      `SELECT skill_name, MAX(created_at) AS last FROM skill_uses
+       WHERE repo_id = ? AND created_at >= ? GROUP BY skill_name ORDER BY last DESC LIMIT ?`,
+    )
+    .all(repoId, since, limit) as Array<{ skill_name: string }>;
+  return rows.map((r) => r.skill_name);
+}
+
+export function listSkillsUsedInSession(sessionId: string, limit = 5): string[] {
+  if (!sessionId) return [];
+  const rows = openDb()
+    .prepare(
+      `SELECT skill_name, MAX(created_at) AS last FROM skill_uses
+       WHERE session_id = ? GROUP BY skill_name ORDER BY last DESC LIMIT ?`,
+    )
+    .all(sessionId, limit) as Array<{ skill_name: string }>;
+  return rows.map((r) => r.skill_name);
+}
+
+export type SkillDraftRow = {
+  id: string;
+  repo_id: string | null;
+  name: string | null;
+  title: string;
+  summary: string;
+  content: string | null;
+  kind: string;
+  target_skill: string | null;
+  status: string;
+  source: string;
+  session_id: string | null;
+  reasons: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export function insertSkillDraft(input: {
+  repoId?: string | null;
+  name?: string | null;
+  title: string;
+  summary?: string;
+  content?: string | null;
+  kind?: "suggestion" | "create" | "revision";
+  targetSkill?: string | null;
+  source?: string;
+  sessionId?: string | null;
+  reasons?: string[];
+}): SkillDraftRow {
+  const id = newId("skilldraft");
+  const ts = nowIso();
+  openDb()
+    .prepare(
+      `INSERT INTO skill_drafts (id, repo_id, name, title, summary, content, kind, target_skill,
+        status, source, session_id, reasons, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      id,
+      input.repoId ?? null,
+      input.name ?? null,
+      input.title,
+      input.summary ?? "",
+      input.content ?? null,
+      input.kind ?? "suggestion",
+      input.targetSkill ?? null,
+      input.source ?? "session-end",
+      input.sessionId ?? null,
+      JSON.stringify(input.reasons ?? []),
+      ts,
+      ts,
+    );
+  return getSkillDraft(id)!;
+}
+
+export function getSkillDraft(id: string): SkillDraftRow | null {
+  return (
+    (openDb().prepare(`SELECT * FROM skill_drafts WHERE id = ?`).get(id) as
+      | SkillDraftRow
+      | undefined) ?? null
+  );
+}
+
+export function listSkillDrafts(
+  opts: { status?: string; repoId?: string; limit?: number } = {},
+): SkillDraftRow[] {
+  const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
+  const where: string[] = [];
+  const args: unknown[] = [];
+  if (opts.status) {
+    where.push("status = ?");
+    args.push(opts.status);
+  }
+  if (opts.repoId) {
+    where.push("repo_id = ?");
+    args.push(opts.repoId);
+  }
+  const sql = `SELECT * FROM skill_drafts ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT ?`;
+  return openDb()
+    .prepare(sql)
+    .all(...args, limit) as SkillDraftRow[];
+}
+
+export function setSkillDraftStatus(id: string, status: string): SkillDraftRow | null {
+  openDb()
+    .prepare(`UPDATE skill_drafts SET status = ?, updated_at = ? WHERE id = ?`)
+    .run(status, nowIso(), id);
+  return getSkillDraft(id);
+}
+
+export function skillDraftExists(source: string): boolean {
+  const row = openDb()
+    .prepare(`SELECT 1 AS hit FROM skill_drafts WHERE source = ? LIMIT 1`)
+    .get(source) as { hit: number } | undefined;
+  return Boolean(row);
+}
+
+export function getTask(repoId: string, id: string): AgentTaskRow | null {
+  return (
+    (openDb()
+      .prepare(`SELECT * FROM agent_tasks WHERE repo_id = ? AND id = ?`)
+      .get(repoId, id) as AgentTaskRow | undefined) ?? null
+  );
+}
+
+export function listTasks(
+  repoId: string,
+  opts: { status?: AgentTaskStatus; includeDone?: boolean; limit?: number } = {},
+): AgentTaskRow[] {
+  const limit = Math.min(200, Math.max(1, opts.limit ?? 100));
+  let rows: AgentTaskRow[];
+  if (opts.status) {
+    rows = openDb()
+      .prepare(
+        `SELECT * FROM agent_tasks WHERE repo_id = ? AND status = ?
+         ORDER BY updated_at DESC LIMIT ?`,
+      )
+      .all(repoId, opts.status, limit) as AgentTaskRow[];
+  } else if (opts.includeDone) {
+    rows = openDb()
+      .prepare(
+        `SELECT * FROM agent_tasks WHERE repo_id = ?
+         ORDER BY updated_at DESC LIMIT ?`,
+      )
+      .all(repoId, limit) as AgentTaskRow[];
+  } else {
+    rows = openDb()
+      .prepare(
+        `SELECT * FROM agent_tasks WHERE repo_id = ? AND status != 'done'
+         ORDER BY updated_at DESC LIMIT ?`,
+      )
+      .all(repoId, limit) as AgentTaskRow[];
+  }
+  return rows.sort(
+    (a, b) =>
+      (TASK_STATUS_ORDER[a.status] ?? 9) - (TASK_STATUS_ORDER[b.status] ?? 9) ||
+      b.updated_at.localeCompare(a.updated_at),
+  );
+}
+
+/**
+ * Tasks across every memory. The UI's "All memory" scope needs this because agents file
+ * tasks against whatever repo they were working in, which is often not the repo the UI
+ * was launched from — without it those tasks are invisible.
+ */
+export function listTasksAll(
+  opts: { status?: AgentTaskStatus; includeDone?: boolean; limit?: number } = {},
+): AgentTaskRow[] {
+  const limit = Math.min(500, Math.max(1, opts.limit ?? 200));
+  let rows: AgentTaskRow[];
+  if (opts.status) {
+    rows = openDb()
+      .prepare(`SELECT * FROM agent_tasks WHERE status = ? ORDER BY updated_at DESC LIMIT ?`)
+      .all(opts.status, limit) as AgentTaskRow[];
+  } else if (opts.includeDone) {
+    rows = openDb()
+      .prepare(`SELECT * FROM agent_tasks ORDER BY updated_at DESC LIMIT ?`)
+      .all(limit) as AgentTaskRow[];
+  } else {
+    rows = openDb()
+      .prepare(`SELECT * FROM agent_tasks WHERE status != 'done' ORDER BY updated_at DESC LIMIT ?`)
+      .all(limit) as AgentTaskRow[];
+  }
+  return rows.sort(
+    (a, b) =>
+      (TASK_STATUS_ORDER[a.status] ?? 9) - (TASK_STATUS_ORDER[b.status] ?? 9) ||
+      b.updated_at.localeCompare(a.updated_at),
+  );
+}
+
+export function countTasksAll(opts: { status?: AgentTaskStatus; openOnly?: boolean } = {}): number {
+  if (opts.status) {
+    const row = openDb()
+      .prepare(`SELECT COUNT(*) AS n FROM agent_tasks WHERE status = ?`)
+      .get(opts.status) as { n: number };
+    return Number(row?.n || 0);
+  }
+  if (opts.openOnly) {
+    const row = openDb()
+      .prepare(`SELECT COUNT(*) AS n FROM agent_tasks WHERE status != 'done'`)
+      .get() as { n: number };
+    return Number(row?.n || 0);
+  }
+  const row = openDb().prepare(`SELECT COUNT(*) AS n FROM agent_tasks`).get() as { n: number };
+  return Number(row?.n || 0);
+}
+
+/** Find a task without knowing its repo, so all-memory edits can resolve their owner. */
+export function findTaskAnyRepo(id: string): AgentTaskRow | null {
+  return (
+    (openDb().prepare(`SELECT * FROM agent_tasks WHERE id = ?`).get(id) as
+      | AgentTaskRow
+      | undefined) ?? null
+  );
+}
+
+/** Open tasks for context injection — prefer doing/next/blocked, then backlog. */
+export function listOpenTasksForContext(repoId: string, limit = 8): AgentTaskRow[] {
+  const rows = openDb()
+    .prepare(
+      `SELECT * FROM agent_tasks WHERE repo_id = ? AND status != 'done'
+       ORDER BY updated_at DESC LIMIT ?`,
+    )
+    .all(repoId, Math.max(limit * 3, 24)) as AgentTaskRow[];
+  return rows
+    .sort(
+      (a, b) =>
+        (TASK_STATUS_ORDER[a.status] ?? 9) - (TASK_STATUS_ORDER[b.status] ?? 9) ||
+        b.updated_at.localeCompare(a.updated_at),
+    )
+    .slice(0, limit);
+}
+
+export function countTasks(
+  repoId: string,
+  opts: { status?: AgentTaskStatus; openOnly?: boolean } = {},
+): number {
+  if (opts.status) {
+    const row = openDb()
+      .prepare(`SELECT COUNT(*) AS n FROM agent_tasks WHERE repo_id = ? AND status = ?`)
+      .get(repoId, opts.status) as { n: number };
+    return Number(row?.n || 0);
+  }
+  if (opts.openOnly) {
+    const row = openDb()
+      .prepare(`SELECT COUNT(*) AS n FROM agent_tasks WHERE repo_id = ? AND status != 'done'`)
+      .get(repoId) as { n: number };
+    return Number(row?.n || 0);
+  }
+  const row = openDb()
+    .prepare(`SELECT COUNT(*) AS n FROM agent_tasks WHERE repo_id = ?`)
+    .get(repoId) as { n: number };
+  return Number(row?.n || 0);
+}
+
+export function insertTask(input: {
+  repoId: string;
+  title: string;
+  body?: string;
+  status?: AgentTaskStatus | string;
+  anchors?: string[];
+  source?: string;
+}): AgentTaskRow {
+  const title = String(input.title || "")
+    .trim()
+    .slice(0, 200);
+  if (!title) throw new Error("title is required");
+  const status = normalizeTaskStatus(input.status) || "backlog";
+  const id = newId("task");
+  const ts = nowIso();
+  const completed = status === "done" ? ts : null;
+  openDb()
+    .prepare(
+      `INSERT INTO agent_tasks (
+         repo_id, id, title, body, status, anchors, source, created_at, updated_at, completed_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.repoId,
+      id,
+      title,
+      String(input.body || "").slice(0, 4000),
+      status,
+      encodeTaskAnchors(input.anchors),
+      String(input.source || "ui").slice(0, 80),
+      ts,
+      ts,
+      completed,
+    );
+  return getTask(input.repoId, id)!;
+}
+
+export function updateTask(
+  repoId: string,
+  id: string,
+  patch: {
+    title?: string;
+    body?: string;
+    status?: AgentTaskStatus | string;
+    anchors?: string[];
+  },
+): AgentTaskRow | null {
+  const existing = getTask(repoId, id);
+  if (!existing) return null;
+  const ts = nowIso();
+  let title = existing.title;
+  let body = existing.body;
+  let status = existing.status;
+  let anchors = existing.anchors;
+  let completedAt = existing.completed_at;
+
+  if (typeof patch.title === "string") {
+    const t = patch.title.trim().slice(0, 200);
+    if (!t) throw new Error("title cannot be empty");
+    title = t;
+  }
+  if (typeof patch.body === "string") body = patch.body.slice(0, 4000);
+  if (patch.status !== undefined) {
+    const next = normalizeTaskStatus(patch.status);
+    if (!next) throw new Error("invalid status");
+    status = next;
+    if (status === "done") completedAt = completedAt || ts;
+    else completedAt = null;
+  }
+  if (patch.anchors !== undefined) anchors = encodeTaskAnchors(patch.anchors);
+
+  openDb()
+    .prepare(
+      `UPDATE agent_tasks SET title = ?, body = ?, status = ?, anchors = ?,
+       updated_at = ?, completed_at = ? WHERE repo_id = ? AND id = ?`,
+    )
+    .run(title, body, status, anchors, ts, completedAt, repoId, id);
+  return getTask(repoId, id);
+}
+
+export function completeTask(repoId: string, id: string): AgentTaskRow | null {
+  return updateTask(repoId, id, { status: "done" });
+}
+
+export function deleteTask(repoId: string, id: string): boolean {
+  const info = openDb()
+    .prepare(`DELETE FROM agent_tasks WHERE repo_id = ? AND id = ?`)
+    .run(repoId, id);
+  return Number(info.changes || 0) > 0;
 }
 
 export { nowIso };

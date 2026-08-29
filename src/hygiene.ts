@@ -1,7 +1,6 @@
 /**
  * Local memory hygiene: decay unused facts, find near-duplicates, review inbox.
- * Apply/schedule is Pro/IT only. Preview counts are free (soft paywall).
- * Nothing is uploaded.
+ * Completely free and open — runs on-device, nothing uploaded.
  */
 import {
   getClaim,

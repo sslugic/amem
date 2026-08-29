@@ -3,8 +3,10 @@
  * another project's env (AWS, GitHub, Slack, OpenAI, …) into this process.
  */
 export const SHOP_ENV_KEYS = Object.freeze([
+  "AMEM_ADMIN_TOKEN",
   "AMEM_FROM_EMAIL",
   "AMEM_FROM_NAME",
+  "AMEM_HITS_S3_BUCKET",
   "AMEM_LICENSE_PRIVKEY",
   "AMEM_LICENSE_PUBKEY",
   "AMEM_SHOP_ENV",

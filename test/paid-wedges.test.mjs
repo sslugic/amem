@@ -63,14 +63,13 @@ describe("restore backup", () => {
 });
 
 describe("hygiene", () => {
-  it("finds duplicates and refuses the feature on free", async () => {
+  it("finds duplicates and merges them", async () => {
     await withAmemHome(async () => {
       const repoDir = makeGitRepo();
       const { detectRepoIdentity } = await import("../dist/repo-identity.js");
       const { upsertRepo } = await import("../dist/db.js");
       const { applyProposal } = await import("../dist/proposal.js");
       const { hygieneReport, mergeDuplicate } = await import("../dist/hygiene.js");
-      const { clearLicense } = await import("../dist/license.js");
       const repo = upsertRepo(detectRepoIdentity(repoDir), "cursor");
       applyProposal(repo.id, {
         claims: [
@@ -88,9 +87,6 @@ describe("hygiene", () => {
           },
         ],
       });
-      clearLicense();
-      assert.throws(() => hygieneReport(repo.id), /Pro or IT/);
-      await installTestLicense("pro");
       const report = hygieneReport(repo.id, 90);
       assert.ok(report.duplicates.length >= 1);
       const merged = mergeDuplicate(repo.id, "claim.one", "claim.two");

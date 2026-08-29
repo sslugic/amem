@@ -18,3 +18,8 @@ allowed_platforms = ["cursor", "claude"]
 
 # Empty = Memory must approve every draft. Do not auto-apply on managed fleets.
 auto_apply_kinds = []
+
+# Skills are instructions agents follow, so nothing reaches disk without a human.
+skills_enabled = true
+skill_write_approval = true
+skill_capture = true

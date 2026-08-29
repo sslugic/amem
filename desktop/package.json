@@ -1,0 +1,16 @@
+{
+  "name": "amem-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Electron shell for local amem Brain UI (localhost only).",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "electron": "^33.2.1"
+  }
+}

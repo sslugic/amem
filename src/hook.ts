@@ -15,6 +15,7 @@ import {
   type RepoRow,
 } from "./db.js";
 import { detectRepoIdentity } from "./repo-identity.js";
+import { captureSkillRevision, captureSkillSuggestion } from "./skill-capture.js";
 
 export type HookPayload = {
   hook_event_name?: string;
@@ -87,7 +88,9 @@ function injectPacket(repo: RepoRow, query: string, session: string, platform: s
     sessionId: session,
     query: query || "(session start)",
   });
-  if (packet.claims.length === 0 && packet.notes.length === 0) return null;
+  if (packet.claims.length === 0 && packet.notes.length === 0 && (packet.tasks?.length ?? 0) === 0) {
+    return null;
+  }
   return cap(markdown);
 }
 
@@ -199,6 +202,11 @@ function handleHookPayloadInner(raw: string): HookResponse {
         notes: recent.slice(0, 8).map((n) => ({ role: n.role, text: n.text })),
       });
     }
+    // Procedural memory: was this session a workflow worth writing up, or evidence that a
+    // skill we already followed is wrong? Chronological order matters to the heuristics.
+    const ordered = [...recent].reverse().map((n) => ({ role: n.role, text: n.text }));
+    captureSkillRevision({ repo, sessionId: sid, notes: ordered }) ??
+      captureSkillSuggestion({ repo, sessionId: sid, notes: ordered });
     return {};
   }
 

@@ -1,0 +1,5 @@
+# Electron binary is installed locally via `npm run app:setup` — never publish it.
+node_modules/
+package-lock.json
+*.log
+.DS_Store

@@ -52,7 +52,8 @@ Guarantees:
 
 - `~/.amem` is created with mode `0700`
 - Local UI binds to `127.0.0.1` only
-- No telemetry, no managed sync, no “share with org” mode
+- Memory never leaves the machine — no managed sync, no “share with org” mode
+- Optional anonymous install ping only (see [Telemetry](#telemetry)); opt out anytime
 - Agents are instructed to store **repo facts**, not proprietary prompting strategy
 - Optional AES-256-GCM lock and encrypted local backups — still no cloud
 
@@ -86,6 +87,22 @@ amem setup
 See [docs/npm-release.md](docs/npm-release.md). CI runs `npm test` and `npm run pack:check`. `better-sqlite3` uses its own prebuilds — no extra native step on common macOS/Linux + Node 20/22.
 
 If `npm install` fails compiling native code, install Xcode CLT (macOS) or `build-essential` (Linux) and retry, or use a Node 20/22 official binary that matches the prebuild matrix.
+
+### Telemetry
+
+On `npm install` / `npx` (outside CI and tests), amem may send a single anonymous POST to `https://getamem.com/api/beacon/npm-install` with:
+
+- package name and version
+- Node.js version
+- OS platform and CPU architecture
+
+No code, paths, usernames, emails, IPs, or memory contents are included. Opt out:
+
+```bash
+AMEM_TELEMETRY_DISABLED=1 npm i -g @iamem/amem
+```
+
+Memory under `~/.amem` still never leaves your machine.
 
 ### Quick paths
 
@@ -142,6 +159,17 @@ amem ui
 
 That opens `http://127.0.0.1:7843` on the **Setup** tab. It scans your home folder for git repos (skips `Library`, `node_modules`, `Downloads`, and similar noise). Check the ones you want, pick clients (Cursor, Claude Code, Windsurf, Continue, Aider, Zed, …), then **Start tracking selected**. Each pick is bound in `~/.amem` and gets the matching installer when available.
 
+Prefer a desktop window instead of a browser tab (same localhost server, same privacy):
+
+```bash
+# once per machine/checkout (downloads Electron — not included in npm i -g)
+npm run app:setup
+
+amem app
+```
+
+`amem ui` keeps opening the browser; `amem app` opens Electron. Both talk to `127.0.0.1` only. If the UI server is already running, `amem app` attaches to it. Global installs: run `npm run app:setup` from the package directory (or clone), then `amem app`.
+
 The header has a **Personal** switcher (cross-repo prefs) and **Lock / backup** chrome — lock status, last backup, and a daily local schedule. Memory shows the same lock/backup chips. The Setup tab includes a copyable **remember contract** for any MCP host (`amem recipe`).
 
 Optional: check **Start amem ui when this computer logs in** so the localhost server comes back after a reboot:
@@ -156,7 +184,8 @@ Tabs after setup:
 
 1. **Setup** — scan/select repos, platforms, login auto-start, bootstrap proposal  
 2. **Memory** — facts by file, scored drafts (approve / replace older / dismiss / reject noisy), edit/pin/delete, search, recent hits/misses  
-3. **Stats** — estimated tokens saved per LLM, plus JSON / markdown / PDF export (proxies, not a bill)
+3. **Tasks** — per-project Kanban for deferred agent work (Backlog → Next → Doing → Blocked → Done). MCP: `amem_task_add` / `amem_task_update` / `amem_task_complete`. Open tasks appear in `amem_context`. Use Memory for durable facts; Tasks for “do later.”  
+4. **Stats** — estimated tokens saved per LLM, plus JSON / markdown / PDF export (proxies, not a bill)
 
 Server-only (no browser open):
 
@@ -225,6 +254,8 @@ Memory is a small local graph in SQLite:
 | **Claim** | A durable fact with file anchors (may be `active` or `superseded`; optional pin) |
 | **Edge** | Links (claim → flow → component); `kind: "supersedes"` archives the target claim |
 | **Draft** | Pending session / miss→learn proposals waiting for Memory approve |
+| **Task** | Deferred work on the project Kanban (Backlog / Next / Doing / Blocked / Done) — not a durable fact |
+| **Skill** | A reusable multi-step procedure, stored as a `SKILL.md` file (see below) |
 | **Usage event** | Each `amem context` hit + token estimate |
 
 Claims are the retrieval unit. Ranking combines:
@@ -249,6 +280,60 @@ Example claim:
 ```
 
 `supersedes` (or an edge with `kind: "supersedes"`) marks older claim ids as archived so they leave retrieval.
+
+---
+
+## Skills (procedural memory)
+
+Claims answer *what is true*. Skills answer *how we do this here* — a deploy sequence, a
+migration dance, a debugging path someone already walked. They are too long to sit in every
+prompt, so they load on demand.
+
+Skills live as `SKILL.md` files under `~/.amem/skills/`, indexed in SQLite for ranking:
+
+```
+~/.amem/skills/deploy-staging/SKILL.md
+~/.amem/skills/deploy-staging/references/runbook.md
+```
+
+**Progressive disclosure.** A context packet carries only names and descriptions. The agent
+calls `amem_skill_view` to pull a body once it decides the procedure applies, so an unused
+library of skills costs almost no tokens.
+
+**The learning loop.** amem ships no model, so it never writes a skill itself. At session end
+it looks for the shape of a hard-won procedure — enumerated steps or real commands, plus an
+error it recovered from or a correction you gave. When several signals line up it queues one
+suggestion, which reaches your agent as a nudge in the next context packet. The agent writes
+the skill; you approve it. If a skill was loaded during a session that still went sideways,
+amem queues a revision instead of a duplicate.
+
+The bar is deliberately high, and a session can queue at most one suggestion.
+
+```bash
+amem skills list                # index of what is stored
+amem skills show deploy-staging # full body
+amem skills new deploy-staging --desc "Deploy staging and verify health"
+amem skills import ./some-skill # bring in an agentskills.io skill
+amem skills drafts              # pending suggestions and staged writes
+amem skills approve <draft-id>
+```
+
+Skills are also a Skills tab in `amem ui`.
+
+**Safety.** Skills are instructions an agent will follow, so content is scanned for
+credentials and prompt-injection patterns before any write. Three policy keys control them:
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `skills_enabled` | `true` | Master switch for storage, ranking, and injection |
+| `skill_write_approval` | `false` | Stage agent writes for review instead of writing to disk |
+| `skill_capture` | `true` | Allow session-end skill suggestions |
+
+An unreadable `policy.toml` forces `skill_write_approval` on. `amem doctor --attest` reports
+every installed skill with a content hash, so you can diff what agents are being told to do.
+
+> Backups currently copy the database only — `~/.amem/skills/` is not included yet. Keep
+> skills you care about in version control until that lands.
 
 ---
 
@@ -352,6 +437,9 @@ MCP tools (stdio or HTTP):
 | `amem_context` | Ranked memory packet for the current question |
 | `amem_remember` | Store a durable fact after an outcome |
 | `amem_recipe` | Generic read-then-write contract (any MCP host) |
+| `amem_skill_list` | Cheap index of stored procedures (names + descriptions only) |
+| `amem_skill_view` | Load one skill body, after the index says it applies |
+| `amem_skill_save` | Store a multi-step procedure you just worked out |
 | `amem_repos` | What is monitored (git repos + named workspaces) |
 | `amem_stats` | Lookup time, estimated tokens/ms saved, hit rate |
 | `amem_graph` | Claims / components / flows stored for a workspace or repo |
@@ -372,6 +460,8 @@ amem doctor [--attest] [--json]
 amem context "<query>" [--workspace <name>] [--platform …]
 amem remember "<text>" [--workspace <name>] [--kind …] [--anchor <path>]
 amem recipe [--json]
+amem skills list|show <name>|new <name> [--desc <text>]|rm <name>|sync|import <path>
+amem skills drafts|approve <draft-id>|dismiss <draft-id>
 amem mcp [--print-config] [--workspace <name>]
 amem propose validate|diff|apply <file.json>
 amem export [--out <file.json>]
@@ -388,6 +478,7 @@ amem usage export [--format json|md|pdf] [--days 30] [--scope current|all] [--ou
 amem license status|apply|activate|clear|issue|keys
 amem embed status|use hash|use ngram|reindex
 amem ui [--port 7843] [--no-open]
+amem app [--port 7843]
 amem service install|uninstall|status
 ```
 
@@ -399,11 +490,13 @@ amem service install|uninstall|status
 | `context` | Retrieve a Markdown packet; log usage |
 | `remember` | Store one local fact |
 | `mcp` | Stdio MCP tools; HTTP MCP at `http://127.0.0.1:7843/mcp` while UI runs |
+| `skills` | Manage procedural memory (`list`, `show`, `new`, `import`, `drafts`, `approve`) |
 | `propose diff` | Preview claim/component/flow changes before apply |
 | `propose apply` | Upsert structured memory locally |
 | `lock` / `unlock` | Optional AES-256-GCM encrypt-at-rest for `graph.db` |
 | `backup` | Local snapshot (optionally encrypted); `schedule` for daily timer |
-| `ui` | Setup wizard + Memory + Stats on localhost |
+| `ui` | Setup wizard + Memory + Stats in the browser (localhost) |
+| `app` | Same UI in an Electron window (`npm run app:setup` once) |
 | `service` | Login item so `amem ui` starts after reboot |
 | `doctor --attest` | Privacy/policy attestation for IT tickets |
 | `export` / `wipe` | Personal backup or delete (still local) |
@@ -490,7 +583,8 @@ IT / DevEx can govern the **fleet**: approved install, policy, attestation, offb
 
 Hard guarantees (not configurable away):
 
-- No telemetry  
+- No memory telemetry or claim upload — `~/.amem` stays local  
+- Optional anonymous npm install ping only (opt out: `AMEM_TELEMETRY_DISABLED=1`)  
 - UI binds to loopback only (`127.0.0.1`)  
 - Memory stays under `~/.amem` (mode `0700`)  
 

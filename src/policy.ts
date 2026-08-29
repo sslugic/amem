@@ -15,6 +15,12 @@ export type AmemPolicy = {
   deny_claim_patterns: string[];
   /** Draft kinds that may auto-apply without Memory approve (still local). */
   auto_apply_kinds: string[];
+  /** Master switch for procedural memory (store, index, injection). */
+  skills_enabled: boolean;
+  /** Stage agent-authored skills for review instead of writing them straight to disk. */
+  skill_write_approval: boolean;
+  /** Let session-end suggest skills worth writing up. */
+  skill_capture: boolean;
 };
 
 export type PolicySource = {
@@ -49,6 +55,9 @@ export const DEFAULT_POLICY: AmemPolicy = {
   allowed_remote_hosts: [],
   deny_claim_patterns: [],
   auto_apply_kinds: [],
+  skills_enabled: true,
+  skill_write_approval: false,
+  skill_capture: true,
 };
 
 let cached: LoadedPolicy | null = null;
@@ -90,6 +99,9 @@ export function parsePolicyToml(raw: string): Partial<AmemPolicy> {
       case "telemetry":
       case "ui_enabled":
       case "allow_export":
+      case "skills_enabled":
+      case "skill_write_approval":
+      case "skill_capture":
         out[key] = parseBool(valueRaw, key, i + 1);
         break;
       case "ui_bind":
@@ -158,6 +170,9 @@ function mergePolicy(base: AmemPolicy, overlay: Partial<AmemPolicy>): AmemPolicy
     allowed_remote_hosts: overlay.allowed_remote_hosts ?? base.allowed_remote_hosts,
     deny_claim_patterns: overlay.deny_claim_patterns ?? base.deny_claim_patterns,
     auto_apply_kinds: overlay.auto_apply_kinds ?? base.auto_apply_kinds,
+    skills_enabled: overlay.skills_enabled ?? base.skills_enabled,
+    skill_write_approval: overlay.skill_write_approval ?? base.skill_write_approval,
+    skill_capture: overlay.skill_capture ?? base.skill_capture,
   };
 }
 
@@ -225,7 +240,13 @@ export function loadPolicy(forceReload = false): LoadedPolicy {
   // Clamp only the exfiltration-relevant knobs — blanking allowed_platforms here would
   // brick every host instead of protecting anything.
   if (sources.some((s) => s.error)) {
-    policy = { ...policy, allow_export: false, auto_apply_kinds: [] };
+    policy = {
+      ...policy,
+      allow_export: false,
+      auto_apply_kinds: [],
+      // Skills are instructions the agent follows, so an unreadable policy means review.
+      skill_write_approval: true,
+    };
   }
 
   cached = { policy, sources };
