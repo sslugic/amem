@@ -52,7 +52,12 @@ import {
   loadProposalFile,
   validateProposal,
 } from "./proposal.js";
-import { detectRepoIdentity, parseWorkspaceSlug, workspaceIdentity } from "./repo-identity.js";
+import {
+  detectRepoIdentity,
+  parseWorkspaceSlug,
+  unbindableRootReason,
+  workspaceIdentity,
+} from "./repo-identity.js";
 import { runDesktopApp } from "./app-shell.js";
 import {
   startUiServer,
@@ -98,7 +103,14 @@ import {
   reindexAllEmbeds,
   setEmbedBackend,
 } from "./embed.js";
-import { acceptSafeCleanups, decayStaleClaims, hygieneReport, mergeDuplicate, runScheduledHygiene } from "./hygiene.js";
+import {
+  acceptSafeCleanups,
+  decayStaleClaims,
+  hygieneReport,
+  mergeDuplicate,
+  purgeNonFactClaims,
+  runScheduledHygiene,
+} from "./hygiene.js";
 import {
   hygieneSchedulePath,
   installHygieneSchedule,
@@ -128,7 +140,7 @@ function usage(): never {
 
 Usage:
   amem setup [--personal] [--platform <host>]
-  amem init --platform cursor|claude|windsurf|continue|aider|zed
+  amem init --platform cursor|claude|claude-desktop|windsurf|continue|aider|zed
   amem init --workspace <name> [--path <dir>] [--platform …]
   amem init --personal
   amem rename "<display name>" --workspace <slug>
@@ -155,6 +167,7 @@ Usage:
   amem backup unschedule
   amem restore --file <backup.db|backup.db.enc> [--passphrase <secret>]
   amem hygiene [--days 90] [--decay] [--accept-safe] [--merge <keepId> <dropId>]
+  amem hygiene --purge-nonfacts [--all] [--apply]   # default is a dry run
   amem hygiene --scheduled
   amem hygiene schedule [--hour <0-23>]
   amem hygiene unschedule
@@ -318,12 +331,32 @@ async function main(): Promise<void> {
         const platform = flagString(flags, "platform");
         if (!platform) {
           throw new Error(
-            "amem init requires --platform cursor|claude|windsurf|continue|aider|zed, --workspace <name>, or --personal",
+            "amem init requires --platform cursor|claude|claude-desktop|windsurf|continue|aider|zed, --workspace <name>, or --personal",
           );
         }
         const policy = loadPolicy().policy;
         assertPlatformAllowed(platform, policy);
+
+        // Claude Desktop, Windsurf, Continue and Zed read a single machine-wide
+        // MCP config. There is nothing repo-specific to bind, and binding the
+        // cwd here is exactly how running this from a home directory
+        // registered the whole home as a repo.
+        if (HOST_INSTALL_IDS.has(platform) && platform !== "aider") {
+          const hostInfo = installHost(platform, { workspace: PERSONAL_SLUG });
+          console.log(`Configured ${hostInfo.host} (machine-wide, no repo binding)`);
+          for (const cfgPath of hostInfo.paths) console.log(`Config: ${cfgPath}`);
+          for (const note of hostInfo.notes) console.log(`Note: ${note}`);
+          break;
+        }
+
         const identity = detectRepoIdentity();
+        const unbindable = unbindableRootReason(identity.rootPath);
+        if (unbindable) {
+          throw new Error(
+            `Refusing to bind ${unbindable} (${identity.rootPath}) as a repo. ` +
+              "cd into a project first, or use: amem init --workspace <name>",
+          );
+        }
         assertRemoteAllowed(identity.remoteUrl, policy);
         const repo = upsertRepo(identity, platform);
         let installInfo: { skills?: string[]; rulePath?: string; hooksPath?: string; settingsPath?: string; paths?: string[]; notes?: string[]; host?: string } = { skills: [] };
@@ -720,6 +753,35 @@ async function main(): Promise<void> {
             if (row.error) console.log(`${row.name}: error — ${row.error}`);
             else console.log(`${row.name}: decayed ${row.decayed}, merged ${row.merged}`);
           }
+          break;
+        }
+        if (flags.get("purge-nonfacts")) {
+          const all = Boolean(flags.get("all"));
+          const scope = all ? {} : { repoId: resolveBinding(flags).id };
+          // Dry run unless --apply is passed: deletion is not reversible.
+          const preview = purgeNonFactClaims({ ...scope, dryRun: true });
+          const byReason = new Map<string, number>();
+          for (const row of preview.matched) {
+            byReason.set(row.reason, (byReason.get(row.reason) ?? 0) + 1);
+          }
+          console.log(
+            `Scanned ${preview.scanned} claim(s)${all ? " across every repo" : ""}; ${preview.matched.length} look like clear junk.`,
+          );
+          for (const [reason, n] of [...byReason].sort((a, b) => b[1] - a[1])) {
+            console.log(`  ${reason}: ${n}`);
+          }
+          for (const row of preview.matched.slice(0, 8)) {
+            console.log(`  - [${row.repoName}] ${row.reason}: ${row.preview}`);
+          }
+          if (preview.matched.length > 8) {
+            console.log(`  … and ${preview.matched.length - 8} more`);
+          }
+          if (!flags.get("apply")) {
+            console.log("Dry run. Re-run with --apply to delete. Back up first: amem backup");
+            break;
+          }
+          const result = purgeNonFactClaims({ ...scope, dryRun: false });
+          console.log(`Deleted ${result.deleted} claim(s).`);
           break;
         }
         const repo = resolveBinding(flags);

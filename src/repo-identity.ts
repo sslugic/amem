@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { parse as parsePath, resolve } from "node:path";
 
 export type RepoIdentity = {
   rootPath: string;
@@ -69,6 +70,23 @@ export function detectRepoIdentity(cwd: string = process.cwd()): RepoIdentity {
     repoName,
     defaultBranch,
   };
+}
+
+/**
+ * Why this directory must not become a repo binding, or null if it is fine.
+ *
+ * detectRepoIdentity falls back to the cwd when there is no git root, so
+ * running an init from a home directory would otherwise register the entire
+ * home as a "repo" — a binding that matches everything and can never be the
+ * right answer. Workspace roots under ~/.amem are created deliberately and are
+ * not affected: they are built by workspaceIdentity, not by cwd detection.
+ */
+export function unbindableRootReason(rootPath: string): string | null {
+  const resolved = resolve(rootPath);
+  const parsed = parsePath(resolved);
+  if (resolved === parsed.root) return "the filesystem root";
+  if (resolved === resolve(homedir())) return "your home directory";
+  return null;
 }
 
 export function slugifyWorkspace(name: string): string {
