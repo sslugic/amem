@@ -1,7 +1,12 @@
 import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { createHash } from "node:crypto";
-import { estimateUsdSaved, metricsFromPacket, USD_PER_MILLION_INPUT_TOKENS } from "../estimate.js";
+import {
+  estimateUsdSaved,
+  metricsFromPacket,
+  savingsBasis,
+  USD_PER_MILLION_INPUT_TOKENS,
+} from "../estimate.js";
 import { buildActivityGraph, speedForEvent } from "../activity.js";
 import {
   getRepoByCwd,
@@ -522,10 +527,14 @@ function aggregateUsage(events: UsageEventRow[], windowDays = 30) {
 
   const queries = events.length;
   const estimatedTokensSaved = events.reduce((s, e) => s + e.estimated_tokens_saved, 0);
+  const reportedTokensSaved = events.reduce((s, e) => s + (e.reported_tokens_saved ?? 0), 0);
   return {
     pricing: {
       usdPerMillionInputTokens: USD_PER_MILLION_INPUT_TOKENS,
       basis: "input",
+      // How much to trust the numbers below. Until reported savings exist,
+      // every "saved" figure is a model, and callers must say so.
+      ...savingsBasis(reportedTokensSaved),
     },
     byPlatform: Object.values(byPlatform).map((p) => ({
       ...p,
@@ -542,7 +551,7 @@ function aggregateUsage(events: UsageEventRow[], windowDays = 30) {
       queries,
       estimatedTokensSaved,
       estimatedUsdSaved: estimateUsdSaved(estimatedTokensSaved),
-      reportedTokensSaved: events.reduce((s, e) => s + (e.reported_tokens_saved ?? 0), 0),
+      reportedTokensSaved,
       estimatedMsSaved,
       localHits,
       serverTrips,

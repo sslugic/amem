@@ -12,12 +12,14 @@ import { checkProposalAgainstPolicy } from "../dist/proposal.js";
 import { loadPolicy, DEFAULT_POLICY } from "../dist/policy.js";
 
 describe("estimate", () => {
-  it("estimates tokens and savings floors at zero", () => {
+  it("estimates tokens and reports a net loss instead of flooring at zero", () => {
     assert.equal(estimateTokensFromText(""), 1);
     assert.ok(estimateTokensFromText("abcd") >= 1);
+    // A packet that returns nothing still costs input tokens. That is a loss,
+    // and the metric must be able to report it rather than clamping to 0.
     assert.equal(
       estimateTokensSaved({ anchorsCount: 0, claimsCount: 0, packetTokens: 999 }),
-      0,
+      -999,
     );
     assert.ok(
       estimateTokensSaved({ anchorsCount: 1, claimsCount: 1, packetTokens: 10 }) >

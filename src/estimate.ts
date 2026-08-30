@@ -6,18 +6,55 @@ export function estimateTokensFromText(text: string): number {
 }
 
 /**
- * Proxy for exploration avoided:
+ * Assumed cost of one file the agent did not have to open. This is a MODELLED
+ * constant, not a measurement: it credits a saving whether or not the agent
+ * would actually have read that file. It dominates the headline number, so
+ * treat any total built from it as an upper bound until calibrated against
+ * real reported savings (`amem usage report --saved <n>`).
+ */
+export const ASSUMED_TOKENS_PER_FILE = 4000;
+export const ASSUMED_TOKENS_PER_CLAIM = 200;
+
+/**
+ * Proxy for exploration avoided, net of what the packet itself cost:
  * anchors_returned * 4000 + claims_returned * 200 - packet_tokens
+ *
+ * Deliberately NOT clamped at zero. A packet that returns little and still
+ * costs input tokens is a net loss, and the metric has to be able to say so —
+ * clamping made the dashboard structurally incapable of reporting that amem
+ * ever cost anything, which is not a property you want in your own numbers.
  */
 export function estimateTokensSaved(input: {
   anchorsCount: number;
   claimsCount: number;
   packetTokens: number;
 }): number {
-  return Math.max(
-    0,
-    input.anchorsCount * 4000 + input.claimsCount * 200 - input.packetTokens,
+  return (
+    input.anchorsCount * ASSUMED_TOKENS_PER_FILE +
+    input.claimsCount * ASSUMED_TOKENS_PER_CLAIM -
+    input.packetTokens
   );
+}
+
+/**
+ * How a savings figure should be presented. "measured" only once real reported
+ * savings exist; until then the number is a model and must be labelled as one.
+ */
+export function savingsBasis(reportedTokensSaved: number): {
+  savingsBasis: "measured" | "modelled";
+  calibrated: boolean;
+  assumedTokensPerFile: number;
+  assumedTokensPerClaim: number;
+} {
+  const calibrated = Number(reportedTokensSaved) > 0;
+  return {
+    // Distinct from pricing.basis ("input"), which is about which side of the
+    // token bill is being priced, not about how trustworthy the figure is.
+    savingsBasis: calibrated ? "measured" : "modelled",
+    calibrated,
+    assumedTokensPerFile: ASSUMED_TOKENS_PER_FILE,
+    assumedTokensPerClaim: ASSUMED_TOKENS_PER_CLAIM,
+  };
 }
 
 /** Typical Cursor/Claude tool round-trip to read a file (~1.2s) plus a little per claim. */
@@ -35,7 +72,9 @@ export function estimateUsdSaved(
   tokens: number,
   usdPerMillion = USD_PER_MILLION_INPUT_TOKENS,
 ): number {
-  return Math.max(0, (Number(tokens) / 1_000_000) * usdPerMillion);
+  // Unclamped for the same reason as estimateTokensSaved: a negative here is
+  // real information, not an error to be hidden.
+  return (Number(tokens) / 1_000_000) * usdPerMillion;
 }
 
 export function eventKind(claimsCount: number, notesCount = 0): "local_hit" | "server_trip" {

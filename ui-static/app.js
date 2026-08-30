@@ -3108,9 +3108,26 @@ function formatPct(n) {
 
 function formatUsd(n) {
   const v = Number(n);
-  if (!Number.isFinite(v) || v <= 0) return "$0";
-  if (v < 0.01) return `~$${v.toFixed(3)}`;
-  return `~$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (!Number.isFinite(v) || v === 0) return "$0";
+  // Savings can be negative now (a packet that returned little still cost
+  // input tokens). Rendering that as "$0" would hide exactly the case worth
+  // seeing, so show the sign.
+  const sign = v < 0 ? "-" : "~";
+  const abs = Math.abs(v);
+  if (abs < 0.01) return `${sign}$${abs.toFixed(3)}`;
+  return `${sign}$${abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * How much to trust the savings figures. Until a real reported saving exists
+ * these are model output, and the UI should say so rather than implying the
+ * number was measured.
+ */
+function savingsCaveat(agg) {
+  const p = agg?.pricing;
+  if (p?.calibrated) return "calibrated against reported savings";
+  const perFile = p?.assumedTokensPerFile ?? 4000;
+  return `modelled, never calibrated · assumes ${formatTokens(perFile)} tok per file avoided`;
 }
 
 function formatChartDay(iso) {
@@ -3556,7 +3573,7 @@ function renderDashboard() {
           <b>${esc(String(tier))}</b><span>License</span>
         </div>
         <div class="dash-kpi static">
-          <b>${formatUsd(totals.estimatedUsdSaved)}</b><span>Est. $ saved (proxy)</span>
+          <b>${formatUsd(totals.estimatedUsdSaved)}</b><span>Est. $ saved · ${esc(savingsCaveat(agg))}</span>
         </div>
       </div>
 
@@ -3727,7 +3744,7 @@ function renderAnalytics() {
   const speedCards = $("#speedCards");
   speedCards.innerHTML = `
     <div class="platform-card"><div class="label">Estimated time saved</div><div class="value">~${formatDuration(totals.estimatedMsSaved)}</div><div class="meta">proxy vs tool round-trips · not model latency</div></div>
-    <div class="platform-card"><div class="label">Estimated money saved</div><div class="value">${formatUsd(totals.estimatedUsdSaved)}</div><div class="meta">at $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input tokens · proxy, not a bill</div></div>
+    <div class="platform-card"><div class="label">Estimated money saved</div><div class="value">${formatUsd(totals.estimatedUsdSaved)}</div><div class="meta">at $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input tokens · ${esc(savingsCaveat(agg))}</div></div>
     <div class="platform-card"><div class="label">Local lookup</div><div class="value">${totals.avgLocalMs != null ? formatDuration(totals.avgLocalMs) : "—"}</div><div class="meta">measured SQLite / localhost avg</div></div>
     <div class="platform-card"><div class="label">Hit rate</div><div class="value">${formatPct(totals.hitRate)}</div><div class="meta">${totals.localHits ?? 0} keyword hits · ${totals.serverTrips ?? 0} misses · not model API calls</div></div>
     <div class="platform-card"><div class="label">Avoided file reads</div><div class="value">${formatTokens(totals.anchorsAvoided ?? 0)}</div><div class="meta">unique anchors returned in packets</div></div>`;
@@ -3737,7 +3754,7 @@ function renderAnalytics() {
   const trend = monthly.trendDays || 0;
   monthlyCards.innerHTML = `
     <div class="platform-card accented"><div class="label">Est. tokens / month</div><div class="value">~${formatTokens(monthly.estimatedTokensSaved ?? 0)}</div><div class="meta">${trend ? `from ${monthly.sampleQueries} calls over ${trend} day${trend === 1 ? "" : "s"} × 30` : "no usage yet"} · proxy, not a bill</div></div>
-    <div class="platform-card accented"><div class="label">Est. $ / month</div><div class="value">${formatUsd(monthly.estimatedUsdSaved)}</div><div class="meta">same token proxy at $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input</div></div>
+    <div class="platform-card accented"><div class="label">Est. $ / month</div><div class="value">${formatUsd(monthly.estimatedUsdSaved)}</div><div class="meta">same token proxy at $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input · ${esc(savingsCaveat(agg))}</div></div>
     <div class="platform-card accented"><div class="label">Est. time / month</div><div class="value">~${formatDuration(monthly.estimatedMsSaved)}</div><div class="meta">avoided tool round-trips at current pace</div></div>
     <div class="platform-card accented"><div class="label">Est. calls / month</div><div class="value">${formatTokens(monthly.queries ?? 0)}</div><div class="meta">amem context hits if this rate holds</div></div>
     <div class="platform-card accented"><div class="label">Est. file reads / month</div><div class="value">${formatTokens(monthly.anchorsAvoided ?? 0)}</div><div class="meta">anchors that would be skipped</div></div>`;
