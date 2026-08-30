@@ -1126,7 +1126,9 @@ a.btn {
 .orbit-host {
   position: relative;
   min-height: 320px;
-  height: 100%;
+  /* No height here: .viz-host's clamp() bounds the canvas. A height:100% (or a
+     fr unit) resolves against the fact list, which can be thousands of rows,
+     and starves the list's grid track down to 0. */
   border-bottom: 1px solid var(--line);
   background:
     radial-gradient(ellipse at 50% 40%, rgba(46, 196, 182, 0.1), transparent 55%),
@@ -1169,6 +1171,13 @@ a.btn {
   color: var(--ink);
   border-color: var(--line);
   background: var(--bg2);
+}
+
+.brain-v2 {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .brain-body {
@@ -2348,6 +2357,7 @@ button.linkish:hover code {
     display: none;
   }
   .brain-v2 {
+    flex: 0 0 auto;
     height: auto;
     min-height: 0;
   }
