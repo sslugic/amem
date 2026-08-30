@@ -9,6 +9,12 @@ export type KnownPlatform = {
 export const KNOWN_PLATFORMS: KnownPlatform[] = [
   { id: "cursor", label: "Cursor", hint: "Rules, skills, hooks", installs: "cursor" },
   { id: "claude", label: "Claude Code", hint: "Skills and settings hooks", installs: "claude" },
+  {
+    id: "claude-desktop",
+    label: "Claude Desktop",
+    hint: "MCP config installer",
+    installs: "host",
+  },
   { id: "copilot", label: "GitHub Copilot", hint: "MCP / HTTP API" },
   { id: "codex", label: "ChatGPT / Codex", hint: "MCP / HTTP API" },
   { id: "gemini", label: "Gemini", hint: "MCP / HTTP API" },

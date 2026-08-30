@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { mcpClientConfig } from "../mcp.js";
-import { resolveAmemBin, writeJson, readJsonObject } from "./skills.js";
+import { dirname, join } from "node:path";
+import { mcpClientConfig, stdioMcpLaunch } from "../mcp.js";
+import { getPackageRoot, resolveAmemBin, writeJson, readJsonObject } from "./skills.js";
 
 export type HostInstallResult = {
   host: string;
@@ -146,6 +146,81 @@ export function installZed(workspace = "personal"): HostInstallResult {
   };
 }
 
+/** Absolute path to the POSIX launcher shipped with the package. */
+export function mcpLauncherPath(): string {
+  return join(getPackageRoot(), "scripts", "mcp-launch.sh");
+}
+
+/** Claude Desktop stores MCP config here (also read by Cowork). */
+export function claudeDesktopConfigPath(): string {
+  if (process.platform === "darwin") {
+    return join(
+      homedir(),
+      "Library",
+      "Application Support",
+      "Claude",
+      "claude_desktop_config.json",
+    );
+  }
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || join(homedir(), "AppData", "Roaming");
+    return join(appData, "Claude", "claude_desktop_config.json");
+  }
+  return join(homedir(), ".config", "Claude", "claude_desktop_config.json");
+}
+
+/**
+ * Claude Desktop / Cowork: stdio MCP entry in claude_desktop_config.json.
+ *
+ * GUI apps are not launched from a login shell, so they inherit a minimal PATH
+ * with no Homebrew and no nvm. A bare `amem` — or even `node` — registers as a
+ * connector but never completes tool discovery, and the host reports no reason.
+ * Point at the launcher, which re-resolves node at spawn time; fall back to an
+ * absolute node + cli.js pair where a shell script cannot run (Windows).
+ */
+export function installClaudeDesktop(workspace = "personal"): HostInstallResult {
+  const path = claudeDesktopConfigPath();
+  ensureDir(dirname(path));
+  const existing = readJsonObject(path);
+  const servers = (existing.mcpServers as Record<string, unknown>) ?? {};
+  const launcher = mcpLauncherPath();
+  const usable = process.platform !== "win32" && existsSync(launcher);
+  if (usable) {
+    try {
+      chmodSync(launcher, 0o755);
+    } catch {
+      // npm preserves the exec bit; a read-only install is not fatal here
+    }
+  }
+  const stdio = stdioMcpLaunch(workspace);
+  servers.amem = usable
+    ? { command: launcher, args: [], env: { AMEM_WORKSPACE: workspace } }
+    : {
+        command: stdio.command,
+        args: stdio.args,
+        env: { ...stdio.env, AMEM_WORKSPACE: workspace },
+      };
+  writeJson(path, { ...existing, mcpServers: servers });
+  const shown = usable ? launcher : `${stdio.command} ${stdio.args.join(" ")}`;
+  return {
+    host: "claude-desktop",
+    paths: [path],
+    notes: [
+      `Claude Desktop MCP amem \u2192 ${shown} (workspace ${workspace}).`,
+      "Quit Claude Desktop fully (Cmd+Q) and relaunch \u2014 config is read at startup, closing the window is not enough.",
+      "stdio needs no daemon: amem ui does not have to be running.",
+    ],
+  };
+}
+
+export function claudeDesktopInstallHealth(): string[] {
+  const path = claudeDesktopConfigPath();
+  if (!fileMentionsAmem(path)) {
+    return ["Claude Desktop has no amem MCP entry \u2014 run amem init --platform claude-desktop"];
+  }
+  return [];
+}
+
 function fileMentionsAmem(path: string): boolean {
   if (!existsSync(path)) return false;
   try {
@@ -186,6 +261,8 @@ export function windsurfInstallHealth(): string[] {
 
 export function hostInstallHealth(host: string): string[] {
   switch (host) {
+    case "claude-desktop":
+      return claudeDesktopInstallHealth();
     case "continue":
       return continueInstallHealth();
     case "zed":
@@ -203,6 +280,8 @@ export function installHost(
 ): HostInstallResult {
   const ws = opts.workspace || "personal";
   switch (host) {
+    case "claude-desktop":
+      return installClaudeDesktop(ws);
     case "windsurf":
       return installWindsurf(ws);
     case "continue":

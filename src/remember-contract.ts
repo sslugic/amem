@@ -85,11 +85,17 @@ Generic MCP host recipe. Same tools for every client — do not fork per product
 
 ## Connect
 
-Keep \`amem ui\` running, then attach:
+Two supported transports. Either is fine — pick one.
+
+**stdio (no daemon).** The host spawns amem itself. Let amem write the config:
+
+\`amem init --platform claude-desktop\`
+
+**HTTP (shared daemon).** Keep \`amem ui\` running, then attach:
 
 \`${MCP_URL_TEMPLATE}\`
 
-GUI hosts often cannot see Homebrew on PATH. Prefer the HTTP URL over a bare \`amem\` command.
+Whichever you pick, never configure a GUI host with a bare \`amem\` or \`node\` command. GUI apps are not launched from a login shell, so they inherit a minimal PATH with no Homebrew and no nvm: the connector registers but tool discovery never completes, and the host reports no reason. An absolute path — to the launcher or to the node binary — is what makes stdio work.
 
 ## Tools
 
@@ -110,8 +116,11 @@ ${ruleLines}
 function renderPaste(): string {
   return `amem remember contract v${REMEMBER_CONTRACT_VERSION}
 
-Connect (any MCP host): ${MCP_URL_TEMPLATE}
-Keep amem ui running. Do not use a bare amem command from GUI apps.
+Connect (any MCP host), either:
+- stdio, no daemon: amem init --platform claude-desktop (or point the host at an absolute launcher path)
+- HTTP, needs amem ui running: ${MCP_URL_TEMPLATE}
+
+Never give a GUI host a bare amem or node command — no login PATH, so tool discovery silently fails.
 
 Every task:
 1. amem_context — read local memory first (pass workspace=<slug>)

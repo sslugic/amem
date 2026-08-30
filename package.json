@@ -21,6 +21,7 @@
     "templates",
     "docs",
     "ui-static",
+    "scripts/mcp-launch.sh",
     "scripts/mdm-offboard.sh",
     "scripts/postinstall.js"
   ],
