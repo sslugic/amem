@@ -108,3 +108,25 @@ describe("nonFactReason catches what the first purge missed", () => {
     assert.equal(nonFactReason("What the loader caches is the handle returned by src/db.ts on startup."), null);
   });
 });
+
+describe("short-answer capture", () => {
+  it("leads with the answer, not the question", async () => {
+    const { compactClaimText, isFactLike } = await import("../dist/kinds.js");
+    // A short answer used to be discarded in favour of the prompt, so the
+    // stored "fact" was the question — the exact shape that filled the DB
+    // with junk, and which the capture gate now (correctly) rejects.
+    const text = compactClaimText(
+      "What should I know about webhook retries in src/api.ts?",
+      "Retry with backoff on 5xx",
+    );
+    assert.ok(text.startsWith("Retry with backoff on 5xx"), `answer leads: ${text}`);
+    assert.ok(!text.includes("?"), "no question mark survives into the claim");
+    assert.ok(text.includes("src/api.ts"), "prompt kept as context for the anchor");
+    assert.equal(isFactLike(text), true, "so the capture is no longer dropped");
+  });
+
+  it("still refuses when there is no answer at all", async () => {
+    const { compactClaimText, isFactLike } = await import("../dist/kinds.js");
+    assert.equal(isFactLike(compactClaimText("so should we delete src/db.ts and start over?", "")), false);
+  });
+});

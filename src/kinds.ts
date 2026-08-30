@@ -53,8 +53,13 @@ export function compactClaimText(prompt: string, answer?: string): string {
     const head = sentences.slice(0, 2).join(" ").slice(0, 400);
     return head || takeaway.slice(0, 400);
   }
-  const q = prompt.replace(/\s+/g, " ").trim().slice(0, 280);
-  return takeaway ? `${q}\n\nPrior outcome: ${takeaway.slice(0, 200)}` : q.slice(0, 400);
+  // Short answer: the fact is still in the ANSWER, so lead with it and keep the
+  // prompt only as trailing context. Leading with the prompt is how questions
+  // ended up stored as durable claims; the trailing "?" is dropped so the
+  // result reads as a statement rather than tripping the question filter.
+  const q = prompt.replace(/\s+/g, " ").trim().replace(/\?+\s*$/, "").slice(0, 280);
+  if (!takeaway) return q.slice(0, 400);
+  return `${takeaway.slice(0, 200)}${q ? ` (context: ${q})` : ""}`.slice(0, 400);
 }
 
 /** Multi-turn: fold several notes into one compact fact string. */
