@@ -82,9 +82,75 @@ function isUsefulish(text: string): boolean {
 function scrubCodeNoise(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`[^`]+`/g, " ")
+    // Keep what is INSIDE an inline span. Deleting it removed the file paths
+    // and identifiers that make a claim worth storing ("lives in `src/x.ts`"
+    // became "lives in and"), and it ran before pickFactSentences, which
+    // scores sentences on exactly those paths.
+    .replace(/`([^`]+)`/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+const QUESTION_LEAD =
+  /^(can|could|would|should|is|are|was|were|do|does|did|how|what|why|when|where|who|which|will|shall|may|might|am|have|has|had)\b/i;
+const CHAT_LEAD =
+  /^(so|ok|okay|and|but|also|im|i'm|let's|lets|please|thanks|thx|yeah|yep|nope|hmm|wait|actually|btw|oh|hey)\b/i;
+/** Residue of an earlier scrub: "lives in and is", "wired via and included". */
+const DANGLING = /\b(in|at|from|to|via|inside|under|with|into)\s+(and|is|was|the file|what)\b/i;
+/** Interrogative opener plus a subject — a question missing its "?". */
+const QUESTION_SHAPE =
+  /^(can|could|should|would|do|does|did|is|are|will|shall|how|what|why|when|where|who|which)\s+(?:(?:do|does|did|can|could|should|would|is|are|will|shall)\s+)?(we|you|i|amem)\b/i;
+/** Preposition running into punctuation or end of string: the object was deleted. */
+const TRAILING_PREPOSITION = /\b(in|at|from|to|via|inside|under|with|into|through)\s*([.,;:]|$)/i;
+
+/** A leading token that looks like code (path, dotted or snake_case name). */
+const CODE_LEAD = /^[\w@./-]*[._/][\w@./-]*(\s|$)/;
+
+/**
+ * Is this a durable statement about the code, or conversational residue?
+ *
+ * Auto-capture previously accepted any sentence >= 48 chars that mentioned a
+ * path, which stored the user's own questions as facts ("so use luna mcp to
+ * connect to amem and that will do the trick?"). A question is a request, not
+ * a fact, however many files it names.
+ */
+/**
+ * Why an ALREADY STORED claim is clear junk, or null to keep it.
+ *
+ * Deliberately narrower than isFactLike: that gate decides what to admit and
+ * can afford false negatives, this one decides what to DELETE and a false
+ * positive destroys memory. Short, lowercase or oddly-formatted claims are
+ * kept here even though capture would now reject them.
+ */
+export function nonFactReason(text: string): string | null {
+  const t = (text ?? "").replace(/\s+/g, " ").trim();
+  if (t.length === 0) return "empty";
+  // A question is a request someone typed, not a fact about the code.
+  if (t.includes("?")) return "question";
+  // ...and plenty were typed without the question mark ("can we expose amem
+  // data via mcp"). Require an interrogative opener FOLLOWED by a subject, so
+  // this cannot swallow a declarative sentence that merely starts with "Is".
+  if (QUESTION_SHAPE.test(t)) return "question";
+  // Left behind by the old scrub that deleted inline code spans.
+  if (DANGLING.test(t)) return "scrub-residue";
+  // Same damage, different shape: the span sat at the end of the clause, so a
+  // preposition now runs straight into punctuation ("memory lives under .").
+  if (TRAILING_PREPOSITION.test(t)) return "scrub-residue";
+  if (CHAT_LEAD.test(t)) return "chat-fragment";
+  return null;
+}
+
+export function isFactLike(text: string): boolean {
+  const t = (text ?? "").replace(/\s+/g, " ").trim();
+  if (t.length < 40) return false;
+  if (t.includes("?")) return false;
+  if (QUESTION_LEAD.test(t)) return false;
+  if (CHAT_LEAD.test(t)) return false;
+  if (DANGLING.test(t)) return false;
+  // Mid-thought lowercase openings are transcript fragments — unless the
+  // sentence opens on an identifier, which is normal for a real fact.
+  if (/^[a-z]/.test(t) && !CODE_LEAD.test(t)) return false;
+  return true;
 }
 
 function pickFactSentences(text: string): string | null {

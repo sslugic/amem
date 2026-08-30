@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { PLACEHOLDER_ANCHOR } from "./freshness.js";
 import {
   insertProposalDraft,
   listProposalDrafts,
@@ -11,7 +12,13 @@ import {
   type RepoRow,
   type UsageEventRow,
 } from "./db.js";
-import { compactClaimText, compactFromNotes, inferClaimKind, isDurableCapture } from "./kinds.js";
+import {
+  compactClaimText,
+  compactFromNotes,
+  inferClaimKind,
+  isDurableCapture,
+  isFactLike,
+} from "./kinds.js";
 import { loadPolicy } from "./policy.js";
 import { applyProposal, type Proposal } from "./proposal.js";
 import { scoreProposal } from "./draft-quality.js";
@@ -70,11 +77,18 @@ function buildClaimDraft(input: {
   );
   const kind = input.forceKind ?? inferClaimKind(input.prompt, input.answer ?? "");
   const usableAnchors =
-    anchors.length > 0 ? anchors : kind === "constraint" || kind === "gotcha" ? ["README.md"] : [];
+    anchors.length > 0
+      ? anchors
+      : kind === "constraint" || kind === "gotcha"
+        ? [PLACEHOLDER_ANCHOR]
+        : [];
   if (!isDurableCapture(input.prompt, input.answer, usableAnchors.length)) {
     if (usableAnchors.length === 0) return null;
   }
   const text = compactClaimText(input.prompt, input.answer);
+  // Single choke point for every capture path. Conversational residue never
+  // becomes a durable claim, however many file paths it happens to mention.
+  if (!isFactLike(text)) return null;
   const id = `${input.idPrefix}_${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
   return {
     id,
@@ -104,7 +118,7 @@ export function shouldAutoApplyProposal(proposal: Proposal): boolean {
   const claim = proposal.claims?.[0];
   if (!claim) return false;
   if (!DURABLE_AUTO_KINDS.has((claim.kind || "").toLowerCase())) return false;
-  const anchors = (claim.code_anchors ?? []).filter((a) => a && a !== "README.md");
+  const anchors = (claim.code_anchors ?? []).filter((a) => a && a !== PLACEHOLDER_ANCHOR);
   return anchors.length > 0;
 }
 
@@ -239,7 +253,7 @@ function extraSessionFacts(
   const sentences = answer
     .split(/(?<=[.!?])\s+/)
     .map((s) => s.replace(/\s+/g, " ").trim())
-    .filter((s) => s.length >= 48 && [...s.matchAll(PATH_RE)].length > 0);
+    .filter((s) => s.length >= 48 && [...s.matchAll(PATH_RE)].length > 0 && isFactLike(s));
   const out: Array<{ proposal: Proposal; kind: string; anchors: string[]; id: string }> = [];
   for (const sentence of sentences.slice(0, 3)) {
     const built = buildClaimDraft({
@@ -297,7 +311,7 @@ export function captureMissLearnDraft(input: {
     forceKind: inferClaimKind(prompt, input.answer) === "session" ? "gotcha" : undefined,
   });
   if (!built) return null;
-  const realAnchors = built.anchors.filter((a) => a !== "README.md");
+  const realAnchors = built.anchors.filter((a) => a !== PLACEHOLDER_ANCHOR);
   if (realAnchors.length === 0) return null;
   built.proposal.claims![0]!.code_anchors = realAnchors;
   if (scoreProposal(built.proposal).reject) return null;

@@ -3,8 +3,10 @@
  * Completely free and open — runs on-device, nothing uploaded.
  */
 import {
+  deleteClaim,
   getClaim,
   listClaims,
+  listClaimsAll,
   listProposalDrafts,
   listRepos,
   listUsageEvents,
@@ -15,6 +17,7 @@ import { FEATURE_HYGIENE, hasFeature, requireFeature } from "./license.js";
 import { applyProposal, applySupersedes } from "./proposal.js";
 import { tokenJaccard } from "./search.js";
 import { parseAnchors } from "./freshness.js";
+import { nonFactReason } from "./kinds.js";
 
 export type HygieneDuplicate = {
   keepId: string;
@@ -312,4 +315,53 @@ export function runScheduledHygiene(unusedDays = 90): {
     }
   }
   return { repos };
+}
+
+export type NonFactClaim = {
+  repoId: string;
+  repoName: string;
+  id: string;
+  kind: string;
+  reason: string;
+  preview: string;
+};
+
+/** Stored claims that are clear junk. Pinned claims are never included. */
+export function findNonFactClaims(opts: { repoId?: string } = {}): NonFactClaim[] {
+  const names = new Map(listRepos().map((r) => [r.id, r.repo_name]));
+  const claims = opts.repoId ? listClaims(opts.repoId) : listClaimsAll();
+  const out: NonFactClaim[] = [];
+  for (const claim of claims) {
+    if (claim.pinned) continue;
+    const reason = nonFactReason(claim.text);
+    if (!reason) continue;
+    out.push({
+      repoId: claim.repo_id,
+      repoName: names.get(claim.repo_id) ?? claim.repo_id,
+      id: claim.id,
+      kind: claim.kind,
+      reason,
+      preview: claim.text.replace(/\s+/g, " ").slice(0, 120),
+    });
+  }
+  return out;
+}
+
+/**
+ * Delete clear-junk claims. Always run with dryRun first — deletion is not
+ * reversible from inside amem, only from a backup.
+ */
+export function purgeNonFactClaims(
+  opts: { repoId?: string; dryRun?: boolean } = {},
+): { scanned: number; matched: NonFactClaim[]; deleted: number; dryRun: boolean } {
+  const dryRun = opts.dryRun !== false;
+  const scanned = (opts.repoId ? listClaims(opts.repoId) : listClaimsAll()).length;
+  const matched = findNonFactClaims({ repoId: opts.repoId });
+  let deleted = 0;
+  if (!dryRun) {
+    for (const row of matched) {
+      if (deleteClaim(row.repoId, row.id)) deleted += 1;
+    }
+  }
+  return { scanned, matched, deleted, dryRun };
 }

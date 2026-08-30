@@ -10,6 +10,14 @@ export type ClaimFreshness = {
   missingAnchors: string[];
 };
 
+/**
+ * capture.ts falls back to this when it cannot extract a real file anchor.
+ * README churns constantly, so honouring it as a real anchor marks those claims
+ * stale forever and drowns the genuine staleness signal. Treat it as no anchor.
+ * (capture.ts already filters it out of "does this claim have real anchors".)
+ */
+export const PLACEHOLDER_ANCHOR = "README.md";
+
 export function parseAnchors(codeAnchorsJson: string): string[] {
   try {
     const parsed = JSON.parse(codeAnchorsJson) as unknown;
@@ -30,7 +38,7 @@ function resolveAnchorPath(rootPath: string, anchor: string): string {
  * Missing paths → missing_anchor; any newer file → stale.
  */
 export function assessClaimFreshness(rootPath: string | undefined, claim: ClaimRow): ClaimFreshness {
-  const anchors = parseAnchors(claim.code_anchors);
+  const anchors = parseAnchors(claim.code_anchors).filter((a) => a !== PLACEHOLDER_ANCHOR);
   if (anchors.length === 0) {
     return { status: "unanchored", staleAnchors: [], missingAnchors: [] };
   }
