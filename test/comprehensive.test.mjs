@@ -38,19 +38,46 @@ describe("repo-identity helpers", () => {
 
 describe("platforms", () => {
   it("normalizes known platforms and exposes host installers", async () => {
-    const { normalizePlatforms, isKnownPlatform, HOST_INSTALL_IDS, KNOWN_PLATFORMS } =
-      await import("../dist/platforms.js");
+    const {
+      normalizePlatforms,
+      isKnownPlatform,
+      resolvePlatformId,
+      usesGenericMcp,
+      HOST_INSTALL_IDS,
+      KNOWN_PLATFORMS,
+      PICKABLE_PLATFORMS,
+    } = await import("../dist/platforms.js");
     assert.equal(isKnownPlatform("cursor"), true);
     assert.equal(isKnownPlatform("nope"), false);
     assert.deepEqual(normalizePlatforms(["Cursor", "cursor", "zed", "bogus", 1]), [
       "cursor",
       "zed",
     ]);
+    // Aliases: clients name themselves in their own spelling.
+    assert.equal(resolvePlatformId("claude-code"), "claude");
+    assert.equal(resolvePlatformId("Claude_Code"), "claude");
+    assert.equal(resolvePlatformId("vscode"), "copilot");
+    assert.equal(resolvePlatformId("PyCharm"), "jetbrains");
+    assert.equal(resolvePlatformId("nope"), "nope");
+    assert.equal(isKnownPlatform("claude-code"), true);
+    assert.deepEqual(normalizePlatforms(["claude-code", "claude", "junie"]), [
+      "claude",
+      "jetbrains",
+    ]);
+    // Clients with no local installer connect over the MCP recipe.
+    assert.equal(usesGenericMcp("codex"), true);
+    assert.equal(usesGenericMcp("cursor"), false);
+    assert.equal(usesGenericMcp("nope"), false);
+    // Internal ids stay allowed but out of the Setup picker.
+    assert.ok(KNOWN_PLATFORMS.some((p) => p.id === "app" && p.hidden));
+    assert.ok(!PICKABLE_PLATFORMS.some((p) => p.hidden));
+    assert.ok(PICKABLE_PLATFORMS.length >= 25);
+    assert.ok(KNOWN_PLATFORMS.every((p) => p.group && p.label && p.hint));
     assert.ok(HOST_INSTALL_IDS.has("windsurf"));
     assert.ok(HOST_INSTALL_IDS.has("continue"));
     assert.ok(HOST_INSTALL_IDS.has("aider"));
     assert.ok(HOST_INSTALL_IDS.has("zed"));
-    assert.ok(KNOWN_PLATFORMS.length >= 8);
+    assert.ok(KNOWN_PLATFORMS.length >= 30);
   });
 });
 

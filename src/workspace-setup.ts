@@ -36,13 +36,15 @@ export function provisionWorkspace(repo: RepoRow, platform = repo.platform || "a
   const started = Date.now();
   const packet = buildContext(repo.id, query, { rootPath: repo.root_path });
   const markdown = renderContextMarkdown(packet);
-  const metrics = metricsFromPacket(packet, markdown);
+  const metrics = metricsFromPacket(packet, markdown, repo.root_path);
   insertUsageEvent({
     repoId: repo.id,
     platform,
     query,
     claimIds: metrics.claimIds,
     anchorsCount: metrics.anchorsCount,
+    anchors: metrics.anchors,
+    anchorTokens: metrics.anchorTokens,
     claimsCount: metrics.claimsCount,
     packetTokens: metrics.packetTokens,
     estimatedTokensSaved: metrics.estimatedTokensSaved,

@@ -7,13 +7,24 @@ const MEMORY_VIZ_STORAGE = "amem.memory.viz";
 const TABS = ["setup", "dashboard", "brain", "analytics", "stats", "tasks", "skills"];
 const VIZ_MODES = ["map", "blocks", "orbit"];
 const FALLBACK_CLIENTS = [
-  { id: "cursor", label: "Cursor", hint: "Rules, skills, hooks" },
-  { id: "claude", label: "Claude Code", hint: "Skills and settings hooks" },
-  { id: "copilot", label: "GitHub Copilot", hint: "MCP / HTTP API" },
-  { id: "codex", label: "ChatGPT / Codex", hint: "MCP / HTTP API" },
-  { id: "gemini", label: "Gemini", hint: "MCP / HTTP API" },
-  { id: "windsurf", label: "Windsurf", hint: "MCP / HTTP API" },
-  { id: "grok", label: "Grok", hint: "MCP / HTTP API" },
+  { id: "cursor", label: "Cursor", hint: "Rules, skills, hooks", group: "ide", popular: true },
+  { id: "claude", label: "Claude Code", hint: "Skills and settings hooks", group: "cli", popular: true },
+  { id: "claude-desktop", label: "Claude Desktop", hint: "MCP config installer", group: "desktop", popular: true },
+  { id: "copilot", label: "GitHub Copilot", hint: "VS Code / CLI, MCP", group: "ide", popular: true },
+  { id: "codex", label: "OpenAI Codex", hint: "MCP / HTTP API", group: "cli", popular: true },
+  { id: "gemini", label: "Gemini CLI", hint: "MCP / HTTP API", group: "cli", popular: true },
+  { id: "windsurf", label: "Windsurf", hint: "MCP config installer", group: "ide", popular: true },
+  { id: "continue", label: "Continue", hint: "MCP config installer", group: "ide", popular: true },
+  { id: "aider", label: "Aider", hint: "CLI hint file in repo", group: "cli", popular: true },
+  { id: "zed", label: "Zed", hint: "context_servers MCP", group: "ide", popular: true },
+  { id: "grok", label: "Grok", hint: "MCP / HTTP API", group: "cli", popular: true },
+];
+
+const CLIENT_GROUPS = [
+  { id: "cli", label: "Command-line agents" },
+  { id: "ide", label: "Editors & IDE extensions" },
+  { id: "desktop", label: "Desktop apps" },
+  { id: "cloud", label: "Cloud agents" },
 ];
 
 function parsePlatformList(raw) {
@@ -58,8 +69,8 @@ function hydratePlatforms(status) {
 
 function knownClients() {
   const fromStatus = state.status?.clients;
-  if (Array.isArray(fromStatus) && fromStatus.length) return fromStatus;
-  return FALLBACK_CLIENTS;
+  const list = Array.isArray(fromStatus) && fromStatus.length ? fromStatus : FALLBACK_CLIENTS;
+  return list.filter((c) => c && !c.hidden);
 }
 
 const initialUrl = new URLSearchParams(location.search);
@@ -226,6 +237,7 @@ const state = {
   brainError: null,
   setupStep: 1,
   setupEdit: false,
+  showAllClients: false,
   statsDays: 30,
   showdown: null,
   showdownQuery: "",
@@ -842,17 +854,35 @@ function setupContext() {
   };
 }
 
-function clientsBlockHtml() {
-  return `<div class="platform-row">
-    ${knownClients()
-      .map(
-        (p) => `<button class="chip ${state.selected.has(p.id) ? "selected" : ""}" data-platform="${esc(p.id)}" type="button">
+function clientChipHtml(p) {
+  return `<button class="chip ${state.selected.has(p.id) ? "selected" : ""}" data-platform="${esc(p.id)}" type="button">
       <strong>${esc(p.label)}</strong>
       <span>${esc(p.hint)}</span>
-    </button>`,
-      )
-      .join("")}
-  </div>`;
+    </button>`;
+}
+
+function clientsBlockHtml() {
+  const all = knownClients();
+  const showAll = Boolean(state.showAllClients);
+  const shortlist = all.filter((p) => p.popular || state.selected.has(p.id));
+  const hiddenCount = all.length - shortlist.length;
+  const body = showAll
+    ? CLIENT_GROUPS.map((g) => {
+        const rows = all.filter((p) => (p.group || "ide") === g.id);
+        if (!rows.length) return "";
+        return `<div class="platform-group">
+      <div class="platform-group-label">${esc(g.label)}</div>
+      <div class="platform-row">${rows.map(clientChipHtml).join("")}</div>
+    </div>`;
+      }).join("")
+    : `<div class="platform-row">${(shortlist.length ? shortlist : all).map(clientChipHtml).join("")}</div>`;
+  const toggle =
+    hiddenCount > 0 || showAll
+      ? `<button class="btn secondary small" id="toggleClients" type="button">${
+          showAll ? "Show popular only" : `Show all ${all.length} clients`
+        }</button>`
+      : "";
+  return `${body}${toggle ? `<div class="platform-toggle">${toggle}</div>` : ""}`;
 }
 
 function autostartBlockHtml() {
@@ -1394,6 +1424,10 @@ function bindSetupEvents(main, ctx) {
     state.setupEdit = false;
     renderSetup();
   });
+  $("#toggleClients")?.addEventListener("click", () => {
+    state.showAllClients = !state.showAllClients;
+    renderSetup();
+  });
   main.querySelectorAll("[data-platform]").forEach((el) => {
     el.addEventListener("click", () => {
       const p = el.dataset.platform;
@@ -1917,31 +1951,6 @@ async function runRetrievalShowdown() {
   }
 }
 
-function softPaywallDismissed() {
-  try {
-    return sessionStorage.getItem("amem.softPaywall.dismissed") === "1";
-  } catch {
-    return false;
-  }
-}
-
-function dismissSoftPaywall() {
-  try {
-    sessionStorage.setItem("amem.softPaywall.dismissed", "1");
-  } catch {
-    /* ignore */
-  }
-  $("#softPaywall")?.classList.add("hidden");
-}
-
-async function loadSoftPaywall() {
-  const el = $("#softPaywall");
-  if (el) {
-    el.classList.add("hidden");
-    el.innerHTML = "";
-  }
-}
-
 function maybeNudgeShowdown() {
   if (isPaidLicense() || state.showdownOpen) return;
   try {
@@ -2041,7 +2050,6 @@ function renderBrain() {
         ${vizToggleHtml()}
       </div>
       <p class="brain-filter-help">${esc(filterHelp)}</p>
-      <div id="softPaywall" class="soft-paywall hidden"></div>
       <div class="showdown-panel ${showdownOpen ? "open" : "closed"}" id="showdownPanel">
         <div class="showdown-run">
           <input id="showdownQuery" type="search" placeholder="Same query · free hash vs Pro n-gram…" value="${esc(state.showdownQuery || "")}" />
@@ -2056,7 +2064,6 @@ function renderBrain() {
     </div>`;
 
   renderBrainRight();
-  loadSoftPaywall();
 
   $("#showdownBtn")?.addEventListener("click", () => runRetrievalShowdown());
   $("#showdownClearTop")?.addEventListener("click", () => clearRetrievalShowdown());
@@ -3125,9 +3132,29 @@ function formatUsd(n) {
  */
 function savingsCaveat(agg) {
   const p = agg?.pricing;
-  if (p?.calibrated) return "calibrated against reported savings";
-  const perFile = p?.assumedTokensPerFile ?? 4000;
-  return `modelled, never calibrated · assumes ${formatTokens(perFile)} tok per file avoided`;
+  if (!p?.calibrated) {
+    const perFile = p?.assumedTokensPerFile ?? 4000;
+    const n = p?.attestedEvents ?? 0;
+    const need = p?.calibrationMinEvents ?? 30;
+    const progress = n > 0 ? `${n} of ${need} attestations needed to calibrate` : "nothing attested yet";
+    return `modelled · assumes ${formatTokens(perFile)} tok per file avoided · ${progress}`;
+  }
+  const n = p.attestedEvents ?? 0;
+  const share = p.attestedShare ?? 0;
+  const ratio = p.calibrationRatio;
+  const parts = [`calibrated on ${n} attested ${n === 1 ? "event" : "events"}`];
+  if (share > 0 && share < 1) parts.push(`${Math.round(share * 100)}% of queries attested`);
+  // A ratio under 1 means agents opened the files anyway — the model was
+  // over-crediting. Worth showing plainly rather than burying.
+  if (typeof ratio === "number" && Number.isFinite(ratio)) {
+    parts.push(`model runs ${ratio >= 1 ? "under" : "over"} by ${formatRatioGap(ratio)}`);
+  }
+  return parts.join(" · ");
+}
+
+function formatRatioGap(ratio) {
+  const pct = Math.abs(1 - ratio) * 100;
+  return pct >= 10 ? `${Math.round(pct)}%` : `${pct.toFixed(1)}%`;
 }
 
 function formatChartDay(iso) {

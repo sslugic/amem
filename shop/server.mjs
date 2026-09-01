@@ -788,6 +788,26 @@ function whatPage() {
     <li>Optional anonymous install ping (package version, Node, OS). Opt out with <code>AMEM_TELEMETRY_DISABLED=1</code>.</li>
   </ul>
 
+  <h2>Security &amp; Architecture FAQ</h2>
+  <div class="what-grid">
+    <article class="what-card">
+      <h3>Anti-poisoning &amp; injection defenses</h3>
+      <p>How does amem prevent poisoned chat or malicious prompt injections from corrupting memory? Ingestion runs through syntactic fact filters (<code>isFactLike</code>), secret deny patterns, quality scoring, and a default staged review queue (<code>ProposalDraft</code>) before anything is applied.</p>
+    </article>
+    <article class="what-card">
+      <h3>Scope isolation &amp; anti-bleed</h3>
+      <p>Every claim, task, and note is strictly partitioned by repository (<code>repo_id</code>). Context packets are tightly ranked via hybrid BM25 + vector search and hard-capped at 2.4KB to avoid prompt stuffing and cross-project leaks.</p>
+    </article>
+    <article class="what-card">
+      <h3>Staleness &amp; code drift</h3>
+      <p>Claims are tied to file anchors. If anchored files are edited or deleted, amem automatically marks claims stale, applies a ranking penalty, and warns the model to verify before trusting.</p>
+    </article>
+    <article class="what-card">
+      <h3>Localhost &amp; zero egress</h3>
+      <p>The daemon strictly binds to <code>127.0.0.1</code>, telemetry is forced off, and local databases use <code>0700</code> permissions with optional AES-256-GCM encryption at rest.</p>
+    </article>
+  </div>
+
   <h2>Not this</h2>
   <ul class="what-list">
     <li>Not a company wiki or a hosted RAG product.</li>
@@ -805,51 +825,29 @@ function whatPage() {
 }
 
 function pricingPage() {
-  const pro = dollars(amountFor("pro"));
-  const it = dollars(amountFor("it"));
   return siteChrome(
     "pricing",
     `<main class="plans-wrap">
-  <h1>Free · Pro · IT</h1>
-  <p class="plans-lead">Free already remembers. Pro is the agent upgrade (better local ranking + cleanup + rules sync). IT is paperwork for security/DevEx — not “more IQ.” Memory never leaves the laptop.</p>
+  <h1>Everything is free</h1>
+  <p class="plans-lead">amem has no plans, no tiers, and nothing held back. Every feature — local embeddings, memory hygiene and its schedule, rules sync, the attestation packet — is included for everyone. Memory never leaves the laptop.</p>
   <div class="plan-grid">
-    <article class="plan-card">
-      <h2>Free</h2>
+    <article class="plan-card featured">
+      <h2>amem</h2>
       <p class="plan-price">$0</p>
       <ul>
         <li>Memory UI, MCP, Stats</li>
+        <li>Local embeddings and ranking</li>
+        <li>Automatic memory hygiene</li>
+        <li>Pin facts &rarr; Cursor rules</li>
         <li>Lock + local backup</li>
-        <li>Hash embedder (no download)</li>
-        <li>IT pack folder (unsigned templates)</li>
+        <li><code>amem doctor --attest</code> packet</li>
       </ul>
-      <a class="btn secondary" href="/">Get started</a>
-    </article>
-    <article class="plan-card featured">
-      <h2>Pro</h2>
-      <p class="plan-price">${pro} <span>once</span></p>
-      <ul>
-        <li>Everything in Free</li>
-        <li>Local n-gram / external embedder</li>
-        <li>Hygiene apply + weekly schedule</li>
-        <li>Pin facts → Cursor rules</li>
-      </ul>
-      <a class="btn" href="/buy/pro">Buy Pro</a>
-    </article>
-    <article class="plan-card">
-      <h2>IT</h2>
-      <p class="plan-price">${it} <span>once</span></p>
-      <ul>
-        <li>Everything in Pro</li>
-        <li>Richer <code>amem doctor --attest</code> packet</li>
-        <li>Solo agents usually stop at Pro</li>
-        <li>Buy when someone asks for host attestation</li>
-      </ul>
-      <a class="btn secondary" href="/buy/it">Buy IT</a>
+      <a class="btn" href="/">Get started</a>
     </article>
   </div>
-  <p class="fine">After pay, download <code>amem-license.json</code> on the thank-you page and apply it in <code>amem ui</code>. Offline signed file — no license server, no telemetry.</p>
+  <p class="fine">No license file, no license server, no telemetry beyond the optional anonymous install ping.</p>
 </main>`,
-    "amem — pricing",
+    "amem — free",
   );
 }
 

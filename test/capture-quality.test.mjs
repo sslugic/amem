@@ -48,15 +48,35 @@ describe("isFactLike", () => {
 });
 
 describe("savings basis", () => {
-  it("is modelled until real reported savings exist", async () => {
+  it("is modelled until agents attest to what they opened", async () => {
     const { savingsBasis } = await import("../dist/estimate.js");
-    const cold = savingsBasis(0);
+    const cold = savingsBasis({ attestedEvents: 0, totalEvents: 100 });
     assert.equal(cold.savingsBasis, "modelled");
     assert.equal(cold.calibrated, false);
     assert.equal(cold.assumedTokensPerFile, 4000);
-    const warm = savingsBasis(12345);
-    assert.equal(warm.savingsBasis, "measured");
-    assert.equal(warm.calibrated, true);
+
+    // Below the minimum sample, attestations are progress but not calibration.
+    const early = savingsBasis({ attestedEvents: 5, totalEvents: 100 });
+    assert.equal(early.savingsBasis, "modelled");
+    assert.equal(early.calibrated, false);
+    assert.equal(early.attestedEvents, 5);
+
+    const partial = savingsBasis({ attestedEvents: 50, totalEvents: 100 });
+    assert.equal(partial.savingsBasis, "partially-measured");
+    assert.equal(partial.calibrated, true);
+    assert.equal(partial.attestedShare, 0.5);
+
+    const full = savingsBasis({ attestedEvents: 100, totalEvents: 100 });
+    assert.equal(full.savingsBasis, "measured");
+  });
+
+  it("keys the label on attestation count, not on the total being positive", async () => {
+    const { savingsBasis } = await import("../dist/estimate.js");
+    // Honest attestations that net out negative are still measurements.
+    // Labelling only good news as "measured" would rig the metric.
+    const negative = savingsBasis({ attestedEvents: 40, totalEvents: 40, calibrationRatio: -0.2 });
+    assert.equal(negative.savingsBasis, "measured");
+    assert.equal(negative.calibrated, true);
   });
 
   it("usd tracks a negative token figure rather than hiding it", async () => {

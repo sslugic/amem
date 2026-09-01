@@ -111,7 +111,11 @@ Memory under `~/.amem` still never leaves your machine.
 amem init --platform cursor    # or: claude
 
 # Other hosts (thin installers, same local DB)
-amem init --platform windsurf|continue|aider|zed
+amem init --platform windsurf|continue|aider|zed|claude-desktop
+
+# Any other MCP client — binds the repo and prints the endpoint to paste
+amem init --platform codex|copilot|gemini|cline|roo|jetbrains|opencode|goose|…
+amem platforms                  # every id amem accepts (aliases included)
 
 # Cross-repo “how I work” prefs (blended into project context)
 amem init --personal
@@ -130,24 +134,106 @@ amem backup unschedule
 
 While locked, set `AMEM_PASSPHRASE` (or unlock) before any command that opens the DB.
 
-### License SKU + local embeddings
+### Embeddings and the rest of the toolkit
 
-Free includes the hashing embedder (no download). Pro/IT can switch to a **local n-gram model** or an **external local command** (stdin text → JSON vector). Still no cloud embed API.
+Everything is free. There are no tiers and nothing is held back — local embeddings, memory hygiene and its schedule, rules sync and the attestation packet are all included.
 
 ```bash
-amem license apply --file ~/Downloads/amem-license.json   # after checkout on getamem.com
-amem embed use ngram
+amem embed use ngram                     # local n-gram model, or `external` for your own command
 amem embed reindex
 amem restore --file ~/.amem/backups/amem-….db.enc
 amem hygiene
 amem rules sync
 amem it-pack --out ~/.amem/it-pack
-amem doctor --attest                     # IT tier adds a vault/host SKU packet
+amem doctor --attest
 ```
 
-See [docs/license.md](docs/license.md). Only vendor-signed license files unlock Pro/IT (verified offline). Nothing is uploaded.
+The embedder ships as a hashing model by default (no download); `ngram` and `external` (stdin text → JSON vector) are local too. Still no cloud embed API, and nothing is uploaded.
 
 Checkout + email delivery is a **separate** seller process (`npm run shop`) that is not published with the CLI. It can whitelist Mailtrap and Stripe names from another project’s `.env` — see [shop/README.md](shop/README.md).
+
+---
+
+## Teaching every client how to use amem
+
+Wiring a host to the MCP endpoint tells it amem *exists*; it does not tell it to
+check the task board or query memory before exploring. `amem init` and
+`amem setup` now write instructions into whatever file the host actually reads,
+and one command covers everything else:
+
+```bash
+amem instructions                 # the client(s) bound to this repo
+amem instructions --all           # every supported client
+amem instructions --check         # CI-friendly: exits 1 if missing or stale
+amem instructions --platform roo  # just one
+```
+
+One canonical text ([src/instructions.ts](src/instructions.ts)) renders per host,
+so guidance cannot drift between clients:
+
+| File | Clients |
+| --- | --- |
+| `.cursor/rules/amem.mdc` | Cursor |
+| `CLAUDE.md` | Claude Code |
+| `AGENTS.md` | Codex, Grok, OpenCode, Crush, Amp, Qwen, Droid, OpenHands, Warp, Zed, Cody, Antigravity, Neovim, Claude Desktop, Devin, Jules |
+| `GEMINI.md` | Gemini CLI |
+| `.github/copilot-instructions.md` | GitHub Copilot |
+| `.windsurf/rules/amem.md` · `.continue/rules/amem.md` · `.clinerules/amem.md` · `.roo/rules/amem.md` · `.kilocode/rules/amem.md` · `.augment/rules/amem.md` · `.kiro/steering/amem.md` · `.trae/rules/amem.md` · `.amazonq/rules/amem.md` | Windsurf, Continue, Cline, Roo, Kilo, Augment, Kiro, Trae, Amazon Q |
+| `.junie/guidelines.md` · `.goosehints` · `.aider.amem.md` | Junie, Goose, Aider |
+
+Hosts sharing a file are written **once**, so `--all` produces 17 files, not 30.
+Shared files (`CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`) get a
+marked block that is replaced in place — anything you wrote around it survives:
+
+```markdown
+# My Project
+Use pnpm, not npm.
+
+<!-- BEGIN amem (generated) -->
+…
+<!-- END amem -->
+```
+
+Aider has no MCP, so it receives CLI commands instead of tool names. Every file
+is guidance only — no memory contents — and safe to commit. `amem doctor` says
+so when a bound client's instructions are missing or out of date.
+
+---
+
+## Memory that curates itself
+
+Memory rots if nothing retires it. amem cleans up on a schedule rather than waiting to be asked:
+
+```bash
+amem hygiene schedule          # daily; amem doctor warns when it is not installed
+```
+
+Each run takes a safety backup, then, per repo:
+
+| Signal | What it means | Action |
+| --- | --- | --- |
+| **Non-fact** | Chat filler stored as a claim | Deleted (held back if it exceeds 25% of the repo — a heuristic matching most of a corpus is a broken heuristic) |
+| **Anchor rot** | Every file the claim points at is gone | Decayed. Tag-style anchors and source-less workspaces are exempt |
+| **Unhelpful** | Attested 3+ times and never once answered the question | Decayed |
+| **Unused** | Not returned and not touched inside the window | Decayed |
+| **Near-duplicate** | Same content, overlapping anchors | Merged |
+
+A claim is only ever retired on *positive* evidence. Missing attestation never counts against it — otherwise shipping this would decay everything at once. Pinned claims never decay.
+
+### Savings you can check
+
+`amem context` records what it handed over; the agent (or the stop hook, from the host transcript) records what it still had to open. The saving is then computed from the real size of the files that were avoided:
+
+```
+saved = Σ(measured tokens of anchors returned but not opened) − packet_tokens
+```
+
+Nothing asks a model to estimate its own value, and a packet that avoided nothing reports a loss. The dashboard says `modelled` until 30 events have been attested, then switches to `measured` and corrects the total by the observed ratio.
+
+```bash
+amem usage attest --opened "src/db.ts"   # or let the stop hook do it
+amem usage recompute --scope all --apply # re-measure historical events
+```
 
 ---
 
@@ -451,7 +537,8 @@ MCP tools (stdio or HTTP):
 
 ```text
 amem setup [--personal] [--platform <host>]
-amem init --platform cursor|claude|windsurf|continue|aider|zed
+amem init --platform <client>      # amem platforms lists every id
+amem platforms [--json]
 amem init --workspace <name> [--path <dir>] [--platform …]
 amem init --personal
 amem rename "<display name>" --workspace <slug>
@@ -531,6 +618,45 @@ Reload Cursor if skills/rules do not appear immediately.
 | Continue | `~/.continue/config.json` MCP servers |
 | Aider | `.aider.amem.md` CLI hints in the repo |
 | Zed | `settings.json` `context_servers` / HTTP hint |
+| Claude Desktop | `claude_desktop_config.json` stdio MCP entry |
+
+Every other client in `amem platforms` — Codex, Copilot, Gemini CLI, Grok, Cline,
+Roo, Kilo, Cody, Augment, JetBrains, Kiro, Trae, Antigravity, Neovim, OpenCode,
+Goose, Crush, Amp, Qwen Code, Factory Droid, OpenHands, Amazon Q, Warp, Devin,
+Jules — has no local installer: `amem init --platform <id>` binds the repo and
+prints the MCP endpoint to paste (`amem recipe` for the full config).
+
+Client ids are alias-folded, so `claude-code`, `vscode`, `pycharm` and
+`chatgpt` resolve to `claude`, `copilot`, `jetbrains` and `codex` rather than
+tripping `policy.allowed_platforms`.
+
+---
+
+## Security & Architecture FAQ
+
+### How does amem prevent tool-poisoning and prompt injection?
+Unconstrained memory tools that blindly record chat transcripts are vulnerable to storing conversational residue, adversarial instructions, or poisoned context. amem enforces multiple defensive gates:
+1. **Fact vs. Noise Syntax Filtering (`isFactLike`):** Transcript sentences, questions, chat pleasantries, and user prompt fragments are automatically rejected before becoming claims, even if they mention real file paths.
+2. **Built-in & Custom Secret Deny Lists (`BUILTIN_DENY_CLAIM_PATTERNS`):** Built-in regexes drop passwords, API keys, tokens, and private keys. Administrators can enforce additional regex deny patterns via system policy.
+3. **Quality & Specificity Scoring (`scoreProposal`):** Proposals are scored based on anchor presence, durable vocabulary (`constraint`, `gotcha`, `must`), and specificity. Thin or low-scoring entries below the rejection threshold are dropped.
+4. **Staged Ingestion Queue by Default (`ProposalDraft`):** Background captures and session-end deductions are staged as proposals in SQLite for human review in the UI. Auto-apply is disabled by default (`auto_apply_kinds = []`).
+5. **Conflict & Supersede Tracking:** When new claims share anchors with existing facts, amem computes similarity and raises conflict warnings, requiring explicit superseding rather than allowing silent overwrites.
+
+### How does amem prevent context bloat and cross-project memory leakage?
+1. **Per-Repository Partitioning:** Every memory claim, task, component, and note is keyed by `repo_id` (derived from git remote URL / workspace path). Queries in one project cannot retrieve or leak memory from another repository.
+2. **Hybrid Retrieval & Strict Limits:** Rather than dumping the graph, `amem_context` uses hybrid BM25 full-text search, on-device embeddings, keyword match, and freshness multipliers to rank and select only the top relevant facts (default limit: 12).
+3. **Hard Character Caps:** Automatic hook injections are hard-capped at 2,400 characters to prevent prompt bloat and token exhaustion attacks.
+4. **Progressive Disclosure for Skills:** Context packets inject only a Level-0 index (skill names and one-line descriptions). Full procedural bodies are never injected unless the model explicitly requests them via `amem_skill_view`.
+
+### How does amem handle code changes without serving stale memory?
+Every claim is grounded with file anchors (`code_anchors`). During context generation, `amem` verifies file existence and compares file modification timestamps against claim creation times:
+- If anchored files have changed, the claim is marked **stale** and penalized in ranking.
+- Context packets explicitly inject a warning into the agent's prompt: `"_X claim(s) marked stale — anchored files changed after the claim was written. Verify before trusting._"`
+
+### Does amem expose an unauthenticated network server or upload code?
+- **Strict Loopback Binding:** The local HTTP UI / MCP daemon binds exclusively to `127.0.0.1`. Non-loopback bindings are blocked by hardcoded policy rules.
+- **Zero External Egress:** Telemetry is hardcoded off (`telemetry: false`). All SQLite databases (`graph.db`), vectors, and logs stay under `~/.amem` with `0700` local filesystem permissions.
+- **Optional At-Rest Encryption:** The local database can be encrypted using AES-256-GCM (`amem lock --passphrase '...'`).
 
 ---
 

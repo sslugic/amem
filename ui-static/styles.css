@@ -896,6 +896,22 @@ main.tab-brain {
   margin-bottom: 1.25rem;
 }
 
+.platform-group {
+  margin-bottom: 0.25rem;
+}
+
+.platform-group-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted, #8a8f98);
+  margin: 0 0 0.5rem;
+}
+
+.platform-toggle {
+  margin: -0.5rem 0 1.25rem;
+}
+
 .chip {
   flex: 1 1 9.5rem;
   min-width: 9.5rem;

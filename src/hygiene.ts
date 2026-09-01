@@ -12,12 +12,21 @@ import {
   listUsageEvents,
   setClaimStatus,
   type ClaimRow,
+  type RepoRow,
 } from "./db.js";
-import { FEATURE_HYGIENE, hasFeature, requireFeature } from "./license.js";
+import { createBackup } from "./crypto.js";
 import { applyProposal, applySupersedes } from "./proposal.js";
 import { tokenJaccard } from "./search.js";
 import { parseAnchors } from "./freshness.js";
 import { nonFactReason } from "./kinds.js";
+import {
+  claimUtility,
+  findAnchorRot,
+  isUnhelpful,
+  looksLikeFilePath,
+  repoRootUsable,
+} from "./utility.js";
+import { isHygieneScheduleInstalled } from "./hygiene-schedule.js";
 
 export type HygieneDuplicate = {
   keepId: string;
@@ -39,18 +48,12 @@ export type HygienePreview = {
   pendingDrafts: number;
   /** Estimated active count after decay + merge */
   afterCleanup: number;
-  softPaywall: boolean;
   /** Active claims with kind=session (chat noise indicator). */
   sessionCount: number;
   /** sessionCount / active, 0 when empty. */
   sessionRatio: number;
 };
 
-export const SOFT_PAYWALL_FACTS = 200;
-export const SOFT_PAYWALL_NOISE = 15;
-/** Soft-paywall when session chat takeaways dominate the graph. */
-export const SOFT_PAYWALL_SESSION_RATIO = 0.55;
-export const SOFT_PAYWALL_SESSION_MIN = 25;
 /** Unused unpinned session claims become decay candidates sooner than durable kinds. */
 export const SESSION_UNUSED_DAYS = 14;
 
@@ -68,15 +71,24 @@ function usedClaimIds(repoId: string, days: number): Set<string> {
   return ids;
 }
 
-/** Shared heuristics — no license gate (used by free preview + Pro report). */
+/** Shared heuristics behind both the preview and the full report. */
 function computeHygiene(repoId: string, unusedDays = 90): HygieneReport {
   const claims = listClaims(repoId);
   const used = usedClaimIds(repoId, unusedDays);
   const usedSessions = usedClaimIds(repoId, SESSION_UNUSED_DAYS);
+  const utility = claimUtility(repoId, unusedDays);
+  // Anchors that all vanished: deterministic rot, independent of attestation.
+  const rotted = new Set(findAnchorRot(repoId, claims).map((r) => r.claimId));
   const cutoff = Date.now() - unusedDays * 86_400_000;
   const sessionCutoff = Date.now() - SESSION_UNUSED_DAYS * 86_400_000;
   const stale = claims.filter((c) => {
     if (Number(c.pinned || 0) > 0) return false;
+    // Every anchor is gone — the claim cannot be describing this tree any more.
+    if (rotted.has(c.id)) return true;
+    // Repeatedly handed over and the agent still had to explore. Being returned
+    // used to make a claim immune here, which protected exactly the noise that
+    // ranks well. Positive evidence of unhelpfulness now overrides that.
+    if (isUnhelpful(utility.get(c.id))) return true;
     const updated = Date.parse(c.updated_at);
     if (!Number.isFinite(updated)) return false;
     const isSession = (c.kind || "").toLowerCase() === "session";
@@ -122,26 +134,7 @@ function sessionStats(repoId: string): { sessionCount: number; sessionRatio: num
   return { sessionCount, sessionRatio, active };
 }
 
-function softPaywallFrom(preview: {
-  active: number;
-  staleCount: number;
-  duplicateCount: number;
-  sessionCount: number;
-  sessionRatio: number;
-}): boolean {
-  if (hasFeature(FEATURE_HYGIENE)) return false;
-  const noise = preview.staleCount + preview.duplicateCount;
-  if (preview.active >= SOFT_PAYWALL_FACTS || noise >= SOFT_PAYWALL_NOISE) return true;
-  if (
-    preview.sessionCount >= SOFT_PAYWALL_SESSION_MIN &&
-    preview.sessionRatio >= SOFT_PAYWALL_SESSION_RATIO
-  ) {
-    return true;
-  }
-  return false;
-}
-
-/** Free: counts only for soft paywall / banners. Never applies changes. */
+/** Counts only, for banners and the Memory view. Never applies changes. */
 export function hygienePreview(repoId: string, unusedDays = 90): HygienePreview {
   const report = computeHygiene(repoId, unusedDays);
   const { sessionCount, sessionRatio } = sessionStats(repoId);
@@ -149,20 +142,12 @@ export function hygienePreview(repoId: string, unusedDays = 90): HygienePreview 
   const duplicateCount = report.duplicates.length;
   const removable = Math.min(report.active, staleCount + duplicateCount);
   const afterCleanup = Math.max(0, report.active - removable);
-  const softPaywall = softPaywallFrom({
-    active: report.active,
-    staleCount,
-    duplicateCount,
-    sessionCount,
-    sessionRatio,
-  });
   return {
     active: report.active,
     staleCount,
     duplicateCount,
     pendingDrafts: report.pendingDrafts,
     afterCleanup,
-    softPaywall,
     sessionCount,
     sessionRatio,
   };
@@ -186,32 +171,22 @@ export function hygienePreviewAll(unusedDays = 90): HygienePreview {
   const removable = Math.min(active, staleCount + duplicateCount);
   const afterCleanup = Math.max(0, active - removable);
   const sessionRatio = active > 0 ? sessionCount / active : 0;
-  const softPaywall = softPaywallFrom({
-    active,
-    staleCount,
-    duplicateCount,
-    sessionCount,
-    sessionRatio,
-  });
   return {
     active,
     staleCount,
     duplicateCount,
     pendingDrafts,
     afterCleanup,
-    softPaywall,
     sessionCount,
     sessionRatio,
   };
 }
 
 export function hygieneReport(repoId: string, unusedDays = 90): HygieneReport {
-  requireFeature(FEATURE_HYGIENE, "Memory hygiene");
   return computeHygiene(repoId, unusedDays);
 }
 
 export function decayStaleClaims(repoId: string, unusedDays = 90): { decayed: string[] } {
-  requireFeature(FEATURE_HYGIENE, "Memory hygiene");
   const decayed: string[] = [];
   for (const claim of computeHygiene(repoId, unusedDays).stale) {
     if (setClaimStatus(repoId, claim.id, "decayed")) decayed.push(claim.id);
@@ -220,7 +195,6 @@ export function decayStaleClaims(repoId: string, unusedDays = 90): { decayed: st
 }
 
 export function mergeDuplicate(repoId: string, keepId: string, dropId: string): { keepId: string; dropId: string } {
-  requireFeature(FEATURE_HYGIENE, "Memory hygiene");
   const keep = getClaim(repoId, keepId);
   const drop = getClaim(repoId, dropId);
   if (!keep || !drop) throw new Error("Both claims must exist to merge");
@@ -244,12 +218,11 @@ export function mergeDuplicate(repoId: string, keepId: string, dropId: string): 
   return { keepId: keep.id, dropId: drop.id };
 }
 
-/** Decay unused + merge near-duplicates in one step (Pro/IT). */
+/** Decay unused + merge near-duplicates in one step. */
 export function acceptSafeCleanups(
   repoId: string,
   unusedDays = 90,
 ): { decayed: string[]; merged: Array<{ keepId: string; dropId: string; similarity: number }> } {
-  requireFeature(FEATURE_HYGIENE, "Memory hygiene");
   const report = computeHygiene(repoId, unusedDays);
   const decayed: string[] = [];
   for (const claim of report.stale) {
@@ -273,48 +246,80 @@ export function acceptSafeCleanups(
   return { decayed, merged };
 }
 
-/** Scheduled job: clean every tracked repo when licensed. */
+/**
+ * If clear junk is more than this share of a repo's claims, do not delete it
+ * unattended. A heuristic that suddenly matches most of the corpus is far more
+ * likely to be a broken heuristic than a genuinely rotten memory, and deletion
+ * is only reversible from a backup.
+ */
+export const PURGE_SAFETY_FRACTION = 0.25;
+
+export type ScheduledRepoResult = {
+  repoId: string;
+  name: string;
+  purged: number;
+  decayed: number;
+  merged: number;
+  /** Junk found but left alone because it tripped the safety fraction. */
+  purgeHeld: number;
+  error?: string;
+};
+
+/**
+ * Scheduled job: clean every tracked repo without anyone asking.
+ *
+ * Order matters. Junk is deleted first so it cannot be merged into a good
+ * claim, then decay retires rotted and unhelpful claims, then near-duplicates
+ * are merged. A safety backup is taken before the first destructive step.
+ */
 export function runScheduledHygiene(unusedDays = 90): {
   skipped?: boolean;
   reason?: string;
-  repos: Array<{
-    repoId: string;
-    name: string;
-    decayed: number;
-    merged: number;
-    error?: string;
-  }>;
+  backup?: string | null;
+  repos: ScheduledRepoResult[];
 } {
-  if (!hasFeature(FEATURE_HYGIENE)) {
-    return { skipped: true, reason: "Pro/IT license required for hygiene", repos: [] };
+  const repos: ScheduledRepoResult[] = [];
+  let backup: string | null = null;
+  // Deletion is not reversible from inside amem. Take a copy first, once, and
+  // let the job continue if backups are unavailable rather than skipping
+  // cleanup entirely.
+  try {
+    backup = createBackup({ label: "pre-hygiene" }).path;
+  } catch {
+    backup = null;
   }
-  const repos: Array<{
-    repoId: string;
-    name: string;
-    decayed: number;
-    merged: number;
-    error?: string;
-  }> = [];
+
   for (const repo of listRepos()) {
     try {
+      const active = listClaims(repo.id).length;
+      const junk = findNonFactClaims({ repoId: repo.id });
+      const overCap = active > 0 && junk.length / active > PURGE_SAFETY_FRACTION;
+      let purged = 0;
+      if (junk.length && !overCap) {
+        purged = purgeNonFactClaims({ repoId: repo.id, dryRun: false }).deleted;
+      }
       const result = acceptSafeCleanups(repo.id, unusedDays);
       repos.push({
         repoId: repo.id,
         name: repo.repo_name,
+        purged,
         decayed: result.decayed.length,
         merged: result.merged.length,
+        purgeHeld: overCap ? junk.length : 0,
       });
     } catch (error) {
       repos.push({
         repoId: repo.id,
         name: repo.repo_name,
+        purged: 0,
         decayed: 0,
         merged: 0,
+        purgeHeld: 0,
         error: error instanceof Error ? error.message : String(error),
       });
     }
   }
-  return { repos };
+  return { backup, repos };
 }
 
 export type NonFactClaim = {
@@ -364,4 +369,66 @@ export function purgeNonFactClaims(
     }
   }
   return { scanned, matched, deleted, dryRun };
+}
+
+export type CorpusIssue = {
+  kind: "phantom-repo" | "duplicate-binding" | "schedule-off";
+  /**
+   * "fault" is broken state a user should fix; "advice" is a recommendation.
+   * Only faults should fail `amem doctor` — an unscheduled machine is a normal
+   * fresh install, not a broken one.
+   */
+  severity: "fault" | "advice";
+  message: string;
+};
+
+/**
+ * Structural problems that quietly ruin memory quality: a repo bound to a
+ * directory with no source in it, the same project bound twice, and hygiene
+ * never actually being scheduled. None of these show up as a bad claim — they
+ * show up as a corpus that slowly stops matching reality.
+ */
+export function findCorpusIssues(): CorpusIssue[] {
+  const issues: CorpusIssue[] = [];
+  const repos = listRepos();
+  const byName = new Map<string, RepoRow[]>();
+
+  for (const repo of repos) {
+    const claims = listClaims(repo.id);
+    // A source-less workspace is legitimate — personal prefs live in one and
+    // use tag anchors. It is only phantom when claims point at FILES that no
+    // directory backs, which means those anchors can never be verified.
+    const withFileAnchors = claims.filter((c) =>
+      parseAnchors(c.code_anchors).some(looksLikeFilePath),
+    ).length;
+    if (withFileAnchors > 0 && !repoRootUsable(repo.root_path)) {
+      issues.push({
+        kind: "phantom-repo",
+        severity: "fault",
+        message: `Repo "${repo.repo_name}" holds ${withFileAnchors} claim(s) with file anchors but its root has no source: ${repo.root_path}. Those anchors are unverifiable — rebind it or move the memory.`,
+      });
+    }
+    const list = byName.get(repo.repo_name) ?? [];
+    list.push(repo);
+    byName.set(repo.repo_name, list);
+  }
+
+  for (const [name, list] of byName) {
+    if (list.length < 2) continue;
+    const roots = list.map((r) => `${r.root_path} (${listClaims(r.id).length} claims)`).join(", ");
+    issues.push({
+      kind: "duplicate-binding",
+      severity: "fault",
+      message: `Project "${name}" is bound ${list.length} times: ${roots}. Memory is being split across them.`,
+    });
+  }
+
+  if (!isHygieneScheduleInstalled()) {
+    issues.push({
+      kind: "schedule-off",
+      severity: "advice",
+      message: "Hygiene is not scheduled — memory will accumulate junk. Run `amem hygiene schedule`.",
+    });
+  }
+  return issues;
 }

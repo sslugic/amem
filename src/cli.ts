@@ -6,6 +6,7 @@ import { handleApi, logContextUsage } from "./api/routes.js";
 import {
   closeDb,
   getRepoByCwd,
+  getSetupState,
   getRepoByName,
   renameWorkspace,
   listClaims,
@@ -36,6 +37,12 @@ import { handleHookPayload } from "./hook.js";
 import { installClaude, claudeInstallHealth } from "./install/claude.js";
 import { installCursor, cursorInstallHealth } from "./install/cursor.js";
 import { installHost } from "./install/hosts.js";
+import {
+  allInstructionTargets,
+  applyInstructions,
+  instructionTargets,
+  missingInstructions,
+} from "./instructions.js";
 import { amemHome, dbPath, tryEnsureDir } from "./paths.js";
 import {
   assertExportAllowed,
@@ -69,7 +76,16 @@ import {
 import { installLoginService, isServiceInstalled, isServiceSupported, uninstallLoginService } from "./service.js";
 import { mcpClientConfig, runMcpServer } from "./mcp.js";
 import { provisionWorkspace } from "./workspace-setup.js";
-import { HOST_INSTALL_IDS } from "./platforms.js";
+import { attestUsage, recomputeUsageEstimates } from "./usage-attest.js";
+import {
+  HOST_INSTALL_IDS,
+  KNOWN_PLATFORMS,
+  PLATFORM_ALIASES,
+  PLATFORM_GROUPS,
+  platformLabel,
+  resolvePlatformId,
+  usesGenericMcp,
+} from "./platforms.js";
 import { ensurePersonalWorkspace, PERSONAL_SLUG } from "./personal.js";
 import {
   createBackup,
@@ -109,6 +125,8 @@ import {
   hygieneReport,
   mergeDuplicate,
   purgeNonFactClaims,
+  findCorpusIssues,
+  PURGE_SAFETY_FRACTION,
   runScheduledHygiene,
 } from "./hygiene.js";
 import {
@@ -140,7 +158,7 @@ function usage(): never {
 
 Usage:
   amem setup [--personal] [--platform <host>]
-  amem init --platform cursor|claude|claude-desktop|windsurf|continue|aider|zed
+  amem init --platform <client>          # amem platforms lists every id
   amem init --workspace <name> [--path <dir>] [--platform …]
   amem init --personal
   amem rename "<display name>" --workspace <slug>
@@ -149,6 +167,7 @@ Usage:
   amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna]
   amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>]
   amem recipe [--json]
+  amem platforms [--json]
   amem task [list] [--status <backlog|next|doing|blocked|done>] [--include-done] [--all] [--json]
   amem task add <title> [--body <notes>] [--status <status>] [--anchor <file>]
   amem task update <id> [--title <title>] [--body <notes>] [--status <status>]
@@ -171,6 +190,7 @@ Usage:
   amem hygiene --scheduled
   amem hygiene schedule [--hour <0-23>]
   amem hygiene unschedule
+  amem instructions [--all] [--platform <id>] [--check]
   amem rules sync
   amem skills list|show <name>|new <name> [--desc <text>]|rm <name>|sync|import <path>
   amem skills drafts|approve <id>|dismiss <id>
@@ -179,6 +199,8 @@ Usage:
   amem session touch --platform cursor|claude [--session-id <id>]
   amem hook
   amem usage report --saved <n> [--platform cursor|claude] [--event-id <id>]
+  amem usage attest [--opened <a,b>] [--unanswered] [--event-id <id>]
+  amem usage recompute [--apply] [--scope current|all]
   amem usage export [--format json|md|pdf] [--days 30] [--scope current|all] [--out <file>]
   amem ui [--port 7843] [--no-open]
   amem app [--port 7843]
@@ -231,6 +253,12 @@ function flagString(flags: Map<string, string | boolean>, name: string): string 
   return typeof v === "string" ? v : undefined;
 }
 
+/** --platform, folded to a canonical id so "claude-code" == "claude". */
+function platformFlag(flags: Map<string, string | boolean>): string | undefined {
+  const raw = flagString(flags, "platform");
+  return raw ? resolvePlatformId(raw) : undefined;
+}
+
 function resolveBinding(flags: Map<string, string | boolean>) {
   const workspace = flagString(flags, "workspace") || process.env.AMEM_WORKSPACE;
   if (workspace) {
@@ -265,13 +293,13 @@ async function main(): Promise<void> {
   try {
     switch (cmd) {
       case "setup": {
-        const personal = Boolean(flags.get("personal")) || !flagString(flags, "platform");
+        const personal = Boolean(flags.get("personal")) || !platformFlag(flags);
         if (personal || flags.get("personal")) {
-          const repo = ensurePersonalWorkspace(flagString(flags, "platform") ?? "app");
+          const repo = ensurePersonalWorkspace(platformFlag(flags) ?? "app");
           console.log(`Personal prefs workspace ready: ${repo.repo_name} (${repo.id})`);
           console.log(`  remember: amem remember "I prefer …" --workspace ${PERSONAL_SLUG}`);
         }
-        const platform = flagString(flags, "platform");
+        const platform = platformFlag(flags);
         if (platform && HOST_INSTALL_IDS.has(platform)) {
           const result = installHost(platform, {
             repoRoot: process.cwd(),
@@ -290,15 +318,32 @@ async function main(): Promise<void> {
           console.log("Claude Code hooks/skills installed");
           for (const s of info.skills) console.log(`  skill: ${s}`);
         }
+        // Wire the host up AND tell it how to use amem. An MCP endpoint on its
+        // own teaches a client nothing about the task board or memory.
+        if (platform) {
+          try {
+            const root = detectRepoIdentity().rootPath;
+            if (!unbindableRootReason(root)) {
+              for (const written of applyInstructions(root, instructionTargets([platform]))) {
+                if (written.status !== "unchanged") {
+                  console.log(`Instructions: ${written.path} (${written.status})`);
+                }
+              }
+            }
+          } catch {
+            // setup should not fail over guidance files
+          }
+        }
         console.log(`Memory DB: ${dbPath()}`);
         console.log("Next: amem ui   or   amem context \"What should I know?\"");
+        console.log("Teach every other client too: amem instructions --all");
         console.log("Host recipe (any MCP client): amem recipe");
         console.log("Install: npx @iamem/amem setup  (or npm i -g @iamem/amem)");
         break;
       }
       case "init": {
         if (flags.get("personal")) {
-          const repo = ensurePersonalWorkspace(flagString(flags, "platform") ?? "app");
+          const repo = ensurePersonalWorkspace(platformFlag(flags) ?? "app");
           upsertSetupState(repo.id, [repo.platform ?? "app"], true);
           console.log(`Personal prefs workspace ${repo.repo_name} (${repo.id})`);
           console.log(`Memory DB: ${dbPath()}`);
@@ -308,7 +353,7 @@ async function main(): Promise<void> {
         }
         const workspace = flagString(flags, "workspace");
         if (workspace) {
-          const platform = flagString(flags, "platform") ?? "app";
+          const platform = platformFlag(flags) ?? "app";
           const slugPath = join(amemHome(), "workspaces", workspace.toLowerCase());
           const root = resolve(flagString(flags, "path") ?? slugPath);
           tryEnsureDir(root);
@@ -328,10 +373,11 @@ async function main(): Promise<void> {
           for (const line of ready.checks) console.log(`Ready: ${line}`);
           break;
         }
-        const platform = flagString(flags, "platform");
+        const platform = platformFlag(flags);
         if (!platform) {
           throw new Error(
-            "amem init requires --platform cursor|claude|claude-desktop|windsurf|continue|aider|zed, --workspace <name>, or --personal",
+            "amem init requires --platform <client>, --workspace <name>, or --personal. " +
+              "See the full client list with: amem platforms",
           );
         }
         const policy = loadPolicy().policy;
@@ -369,12 +415,34 @@ async function main(): Promise<void> {
             repoRoot: identity.rootPath,
             workspace: identity.repoName,
           });
+        } else if (usesGenericMcp(platform)) {
+          // No local installer for this client — bind the repo anyway and hand
+          // over the MCP endpoint it can be pointed at.
+          const cfg = mcpClientConfig(identity.repoName);
+          installInfo = {
+            notes: [
+              `${platformLabel(platform)} has no local installer — add amem as an MCP server: ${cfg.http.url}`,
+              "Full config for any MCP client: amem recipe",
+            ],
+          };
         } else {
           throw new Error(
-            `Unknown platform "${platform}". Use cursor|claude|windsurf|continue|aider|zed`,
+            `Unknown platform "${platform}". Run: amem platforms`,
           );
         }
         upsertSetupState(repo.id, [platform], true);
+        // Teach the host how to use amem. Cursor's rule is written by its own
+        // installer (it has collision handling for a hand-written rule file).
+        if (platform !== "cursor") {
+          for (const written of applyInstructions(
+            identity.rootPath,
+            instructionTargets([platform]),
+          )) {
+            if (written.status !== "unchanged") {
+              console.log(`Instructions: ${written.path} (${written.status})`);
+            }
+          }
+        }
         console.log(`Bound repo ${repo.repo_name} (${repo.repo_key})`);
         console.log(`Memory DB: ${dbPath()}`);
         console.log(`Platform: ${platform}`);
@@ -397,6 +465,61 @@ async function main(): Promise<void> {
           for (const n of installInfo.notes) console.log(`Note: ${n}`);
         }
         console.log('Next: amem ui   or   amem context "What should I know?"');
+        break;
+      }
+      case "instructions": {
+        const all = Boolean(flags.get("all"));
+        const check = Boolean(flags.get("check"));
+        const one = platformFlag(flags);
+        const identity = detectRepoIdentity();
+        const unbindable = unbindableRootReason(identity.rootPath);
+        if (unbindable) {
+          throw new Error(
+            `Refusing to write instructions into ${unbindable} (${identity.rootPath}). ` +
+              "cd into a project first.",
+          );
+        }
+
+        let targets;
+        if (all) {
+          targets = allInstructionTargets();
+        } else if (one) {
+          targets = instructionTargets([one]);
+        } else {
+          // Default to whatever this repo is actually bound to.
+          const bound = getRepoByCwd();
+          const state = bound ? getSetupState(bound.id) : null;
+          let platforms: string[] = [];
+          try {
+            platforms = state ? (JSON.parse(state.platforms) as string[]) : [];
+          } catch {
+            platforms = [];
+          }
+          // Fall back to the platform recorded on the repo row itself.
+          if (!platforms.length && bound?.platform) platforms = [bound.platform];
+          if (!platforms.length) {
+            throw new Error(
+              "No platform bound here. Use --platform <id>, or --all for every supported client.",
+            );
+          }
+          targets = instructionTargets(platforms);
+        }
+
+        const results = applyInstructions(identity.rootPath, targets, { dryRun: check });
+        const changed = results.filter((r) => r.status !== "unchanged");
+        console.log(
+          `${check ? "Checked" : "Applied"} amem instructions in ${identity.rootPath}`,
+        );
+        for (const r of results) {
+          const hosts = r.platforms.map((id) => platformLabel(id)).join(", ");
+          console.log(`  ${r.status.padEnd(11)} ${r.path}  — ${hosts}`);
+        }
+        if (check && changed.length) {
+          console.log(`${changed.length} file(s) missing or out of date. Run: amem instructions`);
+          process.exitCode = 1;
+        } else if (!changed.length) {
+          console.log("All instruction files are current.");
+        }
         break;
       }
       case "status": {
@@ -497,7 +620,7 @@ async function main(): Promise<void> {
         } catch {
           // A locked or absent vault is reported elsewhere; don't fail doctor on it.
         }
-        const platform = repo?.platform ?? flagString(flags, "platform");
+        const platform = repo?.platform ?? platformFlag(flags);
         if (platform === "cursor") {
           issues.push(...cursorInstallHealth(identity.rootPath));
         } else if (platform === "claude") {
@@ -506,6 +629,39 @@ async function main(): Promise<void> {
           issues.push(...cursorInstallHealth(identity.rootPath));
           issues.push(...claudeInstallHealth());
         }
+        // Structural corpus problems: phantom bindings, split projects, and
+        // hygiene never actually being scheduled.
+        const advice: string[] = [];
+        try {
+          for (const issue of findCorpusIssues()) {
+            if (issue.severity === "fault") issues.push(issue.message);
+            else advice.push(issue.message);
+          }
+        } catch {
+          // corpus checks never break doctor
+        }
+        // A host wired to amem that was never told how to use it will not use
+        // it — the MCP endpoint alone teaches nothing about tasks or memory.
+        try {
+          if (repo && !unbindableRootReason(identity.rootPath)) {
+            const state = getSetupState(repo.id);
+            let bound: string[] = [];
+            try {
+              bound = state ? (JSON.parse(state.platforms) as string[]) : [];
+            } catch {
+              bound = [];
+            }
+            if (!bound.length && repo.platform) bound = [repo.platform];
+            const stale = missingInstructions(identity.rootPath, instructionTargets(bound));
+            for (const row of stale) {
+              advice.push(
+                `${row.platforms.map((id) => platformLabel(id)).join(", ")} has no current amem instructions (${row.path}). Run \`amem instructions\`, or \`amem instructions --all\` for every client.`,
+              );
+            }
+          }
+        } catch {
+          // advisory only
+        }
         if (issues.length === 0) {
           console.log("amem doctor: ok");
         } else {
@@ -513,6 +669,7 @@ async function main(): Promise<void> {
           for (const issue of issues) console.log(`- ${issue}`);
           process.exitCode = 1;
         }
+        for (const note of advice) console.log(`note: ${note}`);
         break;
       }
       case "context": {
@@ -520,7 +677,7 @@ async function main(): Promise<void> {
         if (!query) throw new Error('Usage: amem context "<query>"');
         const repo = resolveBinding(flags);
         const platform =
-          flagString(flags, "platform") ??
+          platformFlag(flags) ??
           repo.platform ??
           "unknown";
         if (platform === "cursor" || platform === "claude") {
@@ -749,9 +906,22 @@ async function main(): Promise<void> {
             console.log(`Hygiene schedule skipped: ${result.reason}`);
             break;
           }
+          if (result.backup) console.log(`Safety backup: ${result.backup}`);
           for (const row of result.repos) {
-            if (row.error) console.log(`${row.name}: error — ${row.error}`);
-            else console.log(`${row.name}: decayed ${row.decayed}, merged ${row.merged}`);
+            if (row.error) {
+              console.log(`${row.name}: error — ${row.error}`);
+              continue;
+            }
+            console.log(
+              `${row.name}: purged ${row.purged}, decayed ${row.decayed}, merged ${row.merged}`,
+            );
+            if (row.purgeHeld > 0) {
+              console.log(
+                `  held back ${row.purgeHeld} junk claim(s) — over ${Math.round(
+                  PURGE_SAFETY_FRACTION * 100,
+                )}% of this repo. Review with \`amem hygiene --purge-nonfacts\`.`,
+              );
+            }
           }
           break;
         }
@@ -1062,7 +1232,7 @@ async function main(): Promise<void> {
       case "session": {
         const sub = positional[1];
         if (sub !== "touch") throw new Error("Usage: amem session touch --platform <p>");
-        const platform = flagString(flags, "platform");
+        const platform = platformFlag(flags);
         if (platform !== "cursor" && platform !== "claude") {
           throw new Error("--platform cursor|claude required");
         }
@@ -1131,9 +1301,50 @@ async function main(): Promise<void> {
           console.log("Proxy only — not a Cursor or model bill.");
           break;
         }
+        if (sub === "attest") {
+          // The measured path: say what you opened, not what you think it saved.
+          const openedRaw = flagString(flags, "opened") ?? "";
+          const anchorsOpened = openedRaw
+            .split(",")
+            .map((a) => a.trim())
+            .filter(Boolean);
+          const repoForAttest = flags.get("event-id") ? null : resolveBinding(flags);
+          const res = attestUsage({
+            eventId: flagString(flags, "event-id") ?? null,
+            repoId: repoForAttest?.id ?? null,
+            platform: platformFlag(flags) ?? repoForAttest?.platform ?? null,
+            anchorsOpened,
+            answered: !flags.get("unanswered"),
+          });
+          const net = res.reportedTokensSaved;
+          console.log(`Attested ${res.event.id}`);
+          console.log(
+            `  anchors: ${res.anchorsReturned.length} returned, ${res.anchorsOpened.length} opened, ${res.anchorsUnopened.length} avoided`,
+          );
+          console.log(
+            `  measured: ${res.measuredFiles} file(s) sized on disk, ${res.assumedFiles} assumed`,
+          );
+          console.log(
+            `  reported tokens saved: ${net} (modelled was ${res.estimatedTokensSaved})`,
+          );
+          if (net < 0) console.log("  net loss on this packet — that is a real result, not an error.");
+          break;
+        }
+        if (sub === "recompute") {
+          const scope = flagString(flags, "scope") ?? "current";
+          const apply = Boolean(flags.get("apply"));
+          const repoForRecompute = scope === "all" ? null : resolveBinding(flags);
+          const res = recomputeUsageEstimates({ repoId: repoForRecompute?.id ?? null, apply });
+          console.log(`${apply ? "Recomputed" : "Dry run"} over ${res.scanned} usage event(s)`);
+          console.log(`  anchors: ${res.measuredFiles} measured, ${res.assumedFiles} assumed`);
+          console.log(`  estimated tokens saved: ${res.before} → ${res.after}`);
+          console.log(`  events changed: ${res.changed}`);
+          if (!apply) console.log("Re-run with --apply to write these back.");
+          break;
+        }
         if (sub !== "report") {
           throw new Error(
-            "Usage: amem usage report --saved <n> | amem usage export [--format json|md|pdf]",
+            "Usage: amem usage attest [--opened <a,b>] | amem usage recompute [--apply] | amem usage report --saved <n> | amem usage export [--format json|md|pdf]",
           );
         }
         const savedRaw = flagString(flags, "saved");
@@ -1149,7 +1360,7 @@ async function main(): Promise<void> {
           break;
         }
         const repo = resolveBinding(flags);
-        const platform = flagString(flags, "platform") ?? repo.platform ?? "unknown";
+        const platform = platformFlag(flags) ?? repo.platform ?? "unknown";
         const event = setReportedOnLatest(repo.id, platform, saved);
         console.log(`Updated ${event.id} reported_tokens_saved=${saved}`);
         break;
@@ -1338,6 +1549,27 @@ async function main(): Promise<void> {
           break;
         }
         throw new Error("Usage: amem embed status|use hash|use ngram|reindex");
+      }
+      case "platforms": {
+        if (flags.get("json")) {
+          console.log(JSON.stringify(KNOWN_PLATFORMS.filter((p) => !p.hidden), null, 2));
+          break;
+        }
+        console.log("Clients amem can be pointed at (use the id with --platform):\n");
+        for (const group of PLATFORM_GROUPS) {
+          const rows = KNOWN_PLATFORMS.filter((p) => p.group === group.id && !p.hidden);
+          if (rows.length === 0) continue;
+          console.log(group.label);
+          for (const row of rows) {
+            const how = row.installs ? "installer" : "MCP recipe";
+            console.log(`  ${row.id.padEnd(16)} ${row.label.padEnd(24)} ${how}`);
+          }
+          console.log("");
+        }
+        const aliasCount = Object.keys(PLATFORM_ALIASES).length;
+        console.log(`Aliases: ${aliasCount} extra spellings resolve to these ids (claude-code → claude, vscode → copilot, …).`);
+        console.log("Clients with no installer connect over MCP: amem recipe");
+        break;
       }
       case "help":
       case "--help":

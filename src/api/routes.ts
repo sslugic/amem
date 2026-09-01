@@ -1,8 +1,11 @@
 import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { createHash } from "node:crypto";
+import { attestUsage, recomputeUsageEstimates } from "../usage-attest.js";
 import {
+  calibrationRatio,
   estimateUsdSaved,
+  MIN_CALIBRATION_EVENTS,
   metricsFromPacket,
   savingsBasis,
   USD_PER_MILLION_INPUT_TOKENS,
@@ -528,13 +531,36 @@ function aggregateUsage(events: UsageEventRow[], windowDays = 30) {
   const queries = events.length;
   const estimatedTokensSaved = events.reduce((s, e) => s + e.estimated_tokens_saved, 0);
   const reportedTokensSaved = events.reduce((s, e) => s + (e.reported_tokens_saved ?? 0), 0);
+
+  // Calibration: compare what attested events actually saved against what the
+  // model predicted for those same events, then apply that correction to the
+  // events nobody attested. Without this the headline stays the model's guess
+  // no matter how much contrary evidence comes in.
+  const attested = events.filter((e) => e.attested_at != null);
+  const attestedEstimated = attested.reduce((s, e) => s + e.estimated_tokens_saved, 0);
+  const attestedReported = attested.reduce((s, e) => s + (e.reported_tokens_saved ?? 0), 0);
+  const ratio = calibrationRatio({
+    attestedEstimatedTokens: attestedEstimated,
+    attestedReportedTokens: attestedReported,
+    attestedEvents: attested.length,
+  });
+  const unattestedEstimated = estimatedTokensSaved - attestedEstimated;
+  // Below the minimum sample the ratio is null and the headline stays the
+  // model's own figure, clearly labelled as such.
+  const calibratedTokensSaved =
+    ratio == null ? estimatedTokensSaved : attestedReported + unattestedEstimated * ratio;
+
   return {
     pricing: {
       usdPerMillionInputTokens: USD_PER_MILLION_INPUT_TOKENS,
       basis: "input",
-      // How much to trust the numbers below. Until reported savings exist,
-      // every "saved" figure is a model, and callers must say so.
-      ...savingsBasis(reportedTokensSaved),
+      // How much to trust the numbers below. Until agents attest to what they
+      // actually opened, every "saved" figure is a model, and callers must say so.
+      ...savingsBasis({
+        attestedEvents: attested.length,
+        totalEvents: queries,
+        calibrationRatio: ratio,
+      }),
     },
     byPlatform: Object.values(byPlatform).map((p) => ({
       ...p,
@@ -552,6 +578,12 @@ function aggregateUsage(events: UsageEventRow[], windowDays = 30) {
       estimatedTokensSaved,
       estimatedUsdSaved: estimateUsdSaved(estimatedTokensSaved),
       reportedTokensSaved,
+      attestedEvents: attested.length,
+      calibrationMinEvents: MIN_CALIBRATION_EVENTS,
+      // The number to lead with once enough has been attested: modelled for
+      // unattested events, measured for the rest, corrected by the ratio.
+      calibratedTokensSaved: Math.round(calibratedTokensSaved),
+      calibratedUsdSaved: estimateUsdSaved(calibratedTokensSaved),
       estimatedMsSaved,
       localHits,
       serverTrips,
@@ -1788,6 +1820,54 @@ export function handleApi(req: ApiRequest): ApiResponse {
     });
   }
 
+  if (method === "POST" && pathname === "/api/usage/attest") {
+    const payload = body as {
+      eventId?: string;
+      platform?: string;
+      anchorsOpened?: unknown;
+      answered?: unknown;
+    };
+    const anchorsOpened = Array.isArray(payload.anchorsOpened)
+      ? payload.anchorsOpened.map((a) => String(a))
+      : [];
+    if (!payload.eventId && !repo) return err(400, "Repo not initialized");
+    try {
+      const result = attestUsage({
+        eventId: payload.eventId ?? null,
+        repoId: repo?.id ?? null,
+        platform: payload.platform ?? repo?.platform ?? null,
+        anchorsOpened,
+        answered: payload.answered !== false,
+      });
+      return ok({
+        eventId: result.event.id,
+        query: result.event.query,
+        anchorsReturned: result.anchorsReturned,
+        anchorsOpened: result.anchorsOpened,
+        anchorsUnopened: result.anchorsUnopened,
+        reportedTokensSaved: result.reportedTokensSaved,
+        estimatedTokensSaved: result.estimatedTokensSaved,
+        measuredFiles: result.measuredFiles,
+        assumedFiles: result.assumedFiles,
+        basis: "measured",
+      });
+    } catch (error) {
+      return err(400, error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/usage/recompute") {
+    const payload = (body ?? {}) as { apply?: boolean; scope?: string };
+    const scope = payload.scope ?? "current";
+    if (scope !== "all" && !repo) return err(400, "Repo not initialized");
+    return ok(
+      recomputeUsageEstimates({
+        repoId: scope === "all" ? null : repo!.id,
+        apply: payload.apply === true,
+      }),
+    );
+  }
+
   if (method === "POST" && pathname === "/api/usage/report") {
     const payload = body as {
       eventId?: string;
@@ -1828,7 +1908,7 @@ export function logContextUsage(input: {
     rootPath: repo?.root_path,
   });
   const markdown = renderContextMarkdown(packet);
-  const metrics = metricsFromPacket(packet, markdown);
+  const metrics = metricsFromPacket(packet, markdown, repo?.root_path);
   const localMs = Math.max(0, Date.now() - started);
   const event = insertUsageEvent({
     repoId: input.repoId,
@@ -1837,6 +1917,8 @@ export function logContextUsage(input: {
     query: input.query,
     claimIds: metrics.claimIds,
     anchorsCount: metrics.anchorsCount,
+    anchors: metrics.anchors,
+    anchorTokens: metrics.anchorTokens,
     claimsCount: metrics.claimsCount,
     packetTokens: metrics.packetTokens,
     estimatedTokensSaved: metrics.estimatedTokensSaved,

@@ -8,6 +8,8 @@ ui_bind = "127.0.0.1"
 allow_export = false
 
 # Only the hosts you explicitly allow.
+# Ids come from `amem platforms`; aliases (claude-code, vscode, pycharm…) fold in.
+# Empty list = allow every known client.
 allowed_platforms = ["cursor", "claude"]
 
 # Require a known remote prefix (uncomment and set your org).

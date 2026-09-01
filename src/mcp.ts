@@ -230,6 +230,33 @@ const TOOLS = [
       required: ["id"],
     },
   },
+  {
+    name: "amem_usage_report",
+    description:
+      "Report what you actually did with the last amem context packet, so its savings estimate becomes a measurement instead of a guess. Call this once after you have finished acting on a packet. Do NOT estimate tokens — just list which of the anchors amem gave you you ended up opening anyway (anchors_opened), and whether the packet answered the question without further exploration (answered). amem computes the saving from the real size of the files you did not have to open. Reporting that you opened everything is a useful and expected answer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        anchors_opened: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "File paths from the packet's Anchors lines that you actually read. Empty array if the claims alone were enough. Paths not in the packet are ignored.",
+        },
+        answered: {
+          type: "boolean",
+          description:
+            "True if the packet answered the question without broad exploration. False if you had to grep or read widely anyway.",
+        },
+        event_id: {
+          type: "string",
+          description: "Specific usage event. Omit to attest the most recent packet for this repo.",
+        },
+        workspace: { type: "string" },
+      },
+      required: ["anchors_opened", "answered"],
+    },
+  },
 ];
 
 function textResult(text: string, isError = false) {
@@ -529,6 +556,30 @@ function callTool(name: string, args: Record<string, unknown>, fallbackWorkspace
     const result = api("POST", "/api/tasks/complete", { id }, { workspace });
     if (result.status >= 400) return textResult(JSON.stringify(result.body), true);
     return textResult(JSON.stringify(result.body));
+  }
+  if (name === "amem_usage_report") {
+    // Deliberately does not accept a token count. The agent reports what it
+    // observed — which anchors it opened — and amem does the arithmetic from
+    // real file sizes. Asking a model for a savings figure invites it to
+    // flatter the tool it is being graded on.
+    const anchorsOpened = Array.isArray(args.anchors_opened)
+      ? (args.anchors_opened as unknown[]).map((a) => String(a))
+      : [];
+    if (typeof args.answered !== "boolean") {
+      return textResult("answered (boolean) is required", true);
+    }
+    const result = api(
+      "POST",
+      "/api/usage/attest",
+      {
+        eventId: typeof args.event_id === "string" ? args.event_id : undefined,
+        anchorsOpened,
+        answered: args.answered,
+      },
+      { workspace },
+    );
+    if (result.status >= 400) return textResult(JSON.stringify(result.body), true);
+    return jsonResult(result.body);
   }
   return textResult(`Unknown tool: ${name}`, true);
 }

@@ -1,3 +1,6 @@
+import { statSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+
 import type { ContextPacket } from "./context.js";
 
 /** Rough chars→tokens. */
@@ -6,18 +9,74 @@ export function estimateTokensFromText(text: string): number {
 }
 
 /**
- * Assumed cost of one file the agent did not have to open. This is a MODELLED
- * constant, not a measurement: it credits a saving whether or not the agent
- * would actually have read that file. It dominates the headline number, so
- * treat any total built from it as an upper bound until calibrated against
- * real reported savings (`amem usage report --saved <n>`).
+ * Fallback cost of one file the agent did not have to open, used ONLY when the
+ * file cannot be measured (missing, outside the repo, unreadable). Prefer
+ * measureAnchorTokens(), which reads the real size off disk. This constant is a
+ * guess and a total built from it is an upper bound, not a measurement.
  */
 export const ASSUMED_TOKENS_PER_FILE = 4000;
 export const ASSUMED_TOKENS_PER_CLAIM = 200;
 
 /**
+ * Ceiling on what one anchor may contribute. An agent that opens a 2 MB file
+ * usually reads a slice of it, so crediting the whole thing would let a single
+ * generated file dominate the headline. Conservative by design.
+ */
+export const MAX_TOKENS_PER_FILE = 25_000;
+
+export type AnchorMeasurement = {
+  /** Real token cost of the anchors, measured where possible. */
+  anchorTokens: number;
+  /** Anchors whose size was read off disk. */
+  measuredFiles: number;
+  /** Anchors that fell back to ASSUMED_TOKENS_PER_FILE. */
+  assumedFiles: number;
+};
+
+/**
+ * Measure what the anchored files actually cost to read, instead of assuming.
+ * This is the half of the savings figure that can be made real without asking
+ * anyone: file sizes are on disk right now. The other half — whether the agent
+ * would have opened them at all — needs attestation.
+ */
+export function measureAnchorTokens(anchors: string[], rootPath?: string | null): AnchorMeasurement {
+  let anchorTokens = 0;
+  let measuredFiles = 0;
+  let assumedFiles = 0;
+  const seen = new Set<string>();
+  for (const raw of anchors) {
+    const anchor = String(raw || "").trim();
+    if (!anchor || seen.has(anchor)) continue;
+    seen.add(anchor);
+    const full = isAbsolute(anchor) ? anchor : rootPath ? resolve(rootPath, anchor) : null;
+    let tokens: number | null = null;
+    if (full) {
+      try {
+        const st = statSync(full);
+        // A directory anchor is not a file the agent would have read whole.
+        if (st.isFile()) tokens = Math.ceil(st.size / 4);
+      } catch {
+        tokens = null;
+      }
+    }
+    if (tokens == null) {
+      assumedFiles += 1;
+      anchorTokens += ASSUMED_TOKENS_PER_FILE;
+    } else {
+      measuredFiles += 1;
+      anchorTokens += Math.min(tokens, MAX_TOKENS_PER_FILE);
+    }
+  }
+  return { anchorTokens, measuredFiles, assumedFiles };
+}
+
+/**
  * Proxy for exploration avoided, net of what the packet itself cost:
- * anchors_returned * 4000 + claims_returned * 200 - packet_tokens
+ * anchor_tokens + claims_returned * 200 - packet_tokens
+ *
+ * `anchorTokens` should come from measureAnchorTokens() so the file half of the
+ * figure is measured rather than assumed; passing only `anchorsCount` falls
+ * back to the modelled constant and keeps the number an upper bound.
  *
  * Deliberately NOT clamped at zero. A packet that returns little and still
  * costs input tokens is a net loss, and the metric has to be able to say so —
@@ -28,30 +87,109 @@ export function estimateTokensSaved(input: {
   anchorsCount: number;
   claimsCount: number;
   packetTokens: number;
+  /** Measured token cost of the anchors. Preferred over anchorsCount. */
+  anchorTokens?: number;
 }): number {
-  return (
-    input.anchorsCount * ASSUMED_TOKENS_PER_FILE +
-    input.claimsCount * ASSUMED_TOKENS_PER_CLAIM -
-    input.packetTokens
-  );
+  const anchorTokens =
+    input.anchorTokens != null ? input.anchorTokens : input.anchorsCount * ASSUMED_TOKENS_PER_FILE;
+  return anchorTokens + input.claimsCount * ASSUMED_TOKENS_PER_CLAIM - input.packetTokens;
 }
 
 /**
- * How a savings figure should be presented. "measured" only once real reported
- * savings exist; until then the number is a model and must be labelled as one.
+ * Ground truth, computed from two observable things rather than asked for:
+ * the real size of the anchors amem returned, and which of them the agent
+ * actually had to open anyway. Anchors it opened were NOT saved — the read
+ * happened. Only the unopened remainder counts, net of the packet's own cost.
+ *
+ * This is what makes a savings figure "measured": no constant is doing the
+ * work, and an agent that opened everything correctly reports a loss.
  */
-export function savingsBasis(reportedTokensSaved: number): {
-  savingsBasis: "measured" | "modelled";
+export function reportedTokensSavedFromAttestation(input: {
+  anchorsReturned: string[];
+  anchorsOpened: string[];
+  claimsCount: number;
+  packetTokens: number;
+  rootPath?: string | null;
+}): { reportedTokensSaved: number; anchorsUnopened: string[]; measurement: AnchorMeasurement } {
+  const opened = new Set(input.anchorsOpened.map((a) => String(a || "").trim()).filter(Boolean));
+  const anchorsUnopened = input.anchorsReturned
+    .map((a) => String(a || "").trim())
+    .filter((a) => a && !opened.has(a));
+  const measurement = measureAnchorTokens(anchorsUnopened, input.rootPath);
+  return {
+    reportedTokensSaved:
+      measurement.anchorTokens +
+      input.claimsCount * ASSUMED_TOKENS_PER_CLAIM -
+      input.packetTokens,
+    anchorsUnopened,
+    measurement,
+  };
+}
+
+/**
+ * Ratio of what attested events actually saved to what the model predicted for
+ * those same events. Applied to unattested events, it corrects the headline
+ * toward observed behaviour instead of leaving it at the model's guess.
+ * Returns null until there is something to calibrate against.
+ */
+/**
+ * Attested events required before the ratio may move the headline. One honest
+ * sample is evidence that the loop works, not grounds to restate 1,598 events —
+ * and attestation is plausibly biased toward sessions that went well.
+ */
+export const MIN_CALIBRATION_EVENTS = 30;
+
+export function calibrationRatio(input: {
+  attestedEstimatedTokens: number;
+  attestedReportedTokens: number;
+  attestedEvents: number;
+}): number | null {
+  if (input.attestedEvents < MIN_CALIBRATION_EVENTS) return null;
+  if (!Number.isFinite(input.attestedEstimatedTokens) || input.attestedEstimatedTokens === 0) {
+    return null;
+  }
+  return input.attestedReportedTokens / input.attestedEstimatedTokens;
+}
+
+/**
+ * How a savings figure should be presented. "measured" only once agents have
+ * actually attested to what they did and did not open; until then the number is
+ * a model and must be labelled as one.
+ *
+ * Keyed on the COUNT of attested events, not on the sum being positive. A run
+ * of honest attestations that nets out negative is still measured — treating
+ * only positive totals as real would rig the label toward good news.
+ */
+export function savingsBasis(input: {
+  attestedEvents: number;
+  totalEvents?: number;
+  calibrationRatio?: number | null;
+}): {
+  savingsBasis: "measured" | "partially-measured" | "modelled";
   calibrated: boolean;
+  calibrationMinEvents: number;
+  attestedEvents: number;
+  attestedShare: number;
+  calibrationRatio: number | null;
   assumedTokensPerFile: number;
   assumedTokensPerClaim: number;
 } {
-  const calibrated = Number(reportedTokensSaved) > 0;
+  const attestedEvents = Math.max(0, Number(input.attestedEvents) || 0);
+  const totalEvents = Math.max(0, Number(input.totalEvents ?? 0) || 0);
+  // "Calibrated" means evidence is actually moving the headline, which only
+  // happens past the minimum sample. A handful of attestations is progress,
+  // not calibration, and the label should not overclaim.
+  const calibrated = attestedEvents >= MIN_CALIBRATION_EVENTS;
+  const attestedShare = totalEvents > 0 ? attestedEvents / totalEvents : 0;
   return {
     // Distinct from pricing.basis ("input"), which is about which side of the
     // token bill is being priced, not about how trustworthy the figure is.
-    savingsBasis: calibrated ? "measured" : "modelled",
+    savingsBasis: !calibrated ? "modelled" : attestedShare >= 1 ? "measured" : "partially-measured",
     calibrated,
+    calibrationMinEvents: MIN_CALIBRATION_EVENTS,
+    attestedEvents,
+    attestedShare,
+    calibrationRatio: input.calibrationRatio ?? null,
     assumedTokensPerFile: ASSUMED_TOKENS_PER_FILE,
     assumedTokensPerClaim: ASSUMED_TOKENS_PER_CLAIM,
   };
@@ -81,9 +219,17 @@ export function eventKind(claimsCount: number, notesCount = 0): "local_hit" | "s
   return claimsCount > 0 || notesCount > 0 ? "local_hit" : "server_trip";
 }
 
-export function metricsFromPacket(packet: ContextPacket, markdown: string): {
+export function metricsFromPacket(
+  packet: ContextPacket,
+  markdown: string,
+  rootPath?: string | null,
+): {
   claimIds: string[];
+  anchors: string[];
   anchorsCount: number;
+  anchorTokens: number;
+  measuredFiles: number;
+  assumedFiles: number;
   claimsCount: number;
   packetTokens: number;
   estimatedTokensSaved: number;
@@ -110,13 +256,17 @@ export function metricsFromPacket(packet: ContextPacket, markdown: string): {
       if (component.code_anchor) anchorSet.add(component.code_anchor);
     }
   }
-  const anchorsCount = anchorSet.size;
+  const anchors = [...anchorSet];
+  const anchorsCount = anchors.length;
   const claimsCount = scored.length;
   const packetTokens = estimateTokensFromText(markdown);
+  // Measure what those files actually cost rather than assuming 4k apiece.
+  const measurement = measureAnchorTokens(anchors, rootPath);
   const estimatedTokensSaved =
     kind === "local_hit"
       ? estimateTokensSaved({
           anchorsCount,
+          anchorTokens: measurement.anchorTokens,
           claimsCount,
           packetTokens,
         })
@@ -124,7 +274,11 @@ export function metricsFromPacket(packet: ContextPacket, markdown: string): {
   const estimatedMsSaved = kind === "local_hit" ? estimateMsSaved({ anchorsCount, claimsCount }) : 0;
   return {
     claimIds,
+    anchors,
     anchorsCount,
+    anchorTokens: measurement.anchorTokens,
+    measuredFiles: measurement.measuredFiles,
+    assumedFiles: measurement.assumedFiles,
     claimsCount,
     packetTokens,
     estimatedTokensSaved,

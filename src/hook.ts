@@ -15,6 +15,7 @@ import {
   type RepoRow,
 } from "./db.js";
 import { detectRepoIdentity } from "./repo-identity.js";
+import { attestSessionFromTranscript } from "./usage-attest.js";
 import { captureSkillRevision, captureSkillSuggestion } from "./skill-capture.js";
 
 export type HookPayload = {
@@ -207,6 +208,17 @@ function handleHookPayloadInner(raw: string): HookResponse {
     const ordered = [...recent].reverse().map((n) => ({ role: n.role, text: n.text }));
     captureSkillRevision({ repo, sessionId: sid, notes: ordered }) ??
       captureSkillSuggestion({ repo, sessionId: sid, notes: ordered });
+    // Close the savings loop from the transcript rather than hoping the agent
+    // remembered to self-report. Skips itself when the transcript is unreadable.
+    try {
+      attestSessionFromTranscript({
+        repoId: repo.id,
+        sessionId: sid,
+        transcriptPath: payload.transcript_path ?? null,
+      });
+    } catch {
+      // attestation is bookkeeping; never fail a session stop over it
+    }
     return {};
   }
 

@@ -1,14 +1,9 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-  copyBundledSkills,
-  readJsonObject,
-  resolveAmemBin,
-  templatePath,
-  writeJson,
-} from "./skills.js";
+import { copyBundledSkills, readJsonObject, resolveAmemBin, writeJson } from "./skills.js";
 import { readFileSync } from "node:fs";
+import { instructionTargets, renderInstructions } from "../instructions.js";
 
 export type InstallResult = {
   skills: string[];
@@ -30,8 +25,10 @@ function writeCursorRule(repoRoot: string): string {
       rulePath = join(rulesDir, "amem-1.mdc");
     }
   }
-  const template = readFileSync(templatePath("cursor-rule.mdc"), "utf8");
-  writeFileSync(rulePath, template, "utf8");
+  // One canonical instruction source for every host — see src/instructions.ts.
+  // The old templates/cursor-rule.mdc drifted from what other hosts were told.
+  const [target] = instructionTargets(["cursor"]);
+  writeFileSync(rulePath, renderInstructions(target!), "utf8");
   return rulePath;
 }
 

@@ -3,7 +3,7 @@ import { platform as osPlatform } from "node:os";
 import { join } from "node:path";
 import { amemHome } from "./paths.js";
 
-import { KNOWN_PLATFORMS } from "./platforms.js";
+import { KNOWN_PLATFORMS, resolvePlatformId } from "./platforms.js";
 
 export type AmemPolicy = {
   telemetry: boolean;
@@ -267,9 +267,16 @@ export function compiledDenyPatterns(policy?: AmemPolicy): RegExp[] {
   });
 }
 
+/**
+ * Both sides are resolved through the alias table first: a client that calls
+ * itself "claude-code" or "vscode" is the same platform as "claude"/"copilot",
+ * and an allow-list written with either spelling means the same thing.
+ */
 export function assertPlatformAllowed(platform: string, policy: AmemPolicy = loadPolicy().policy): void {
   if (policy.allowed_platforms.length === 0) return;
-  if (!policy.allowed_platforms.includes(platform)) {
+  const wanted = resolvePlatformId(platform);
+  const allowed = policy.allowed_platforms.map((p) => resolvePlatformId(p));
+  if (!allowed.includes(wanted)) {
     throw new Error(
       `Platform "${platform}" blocked by policy.allowed_platforms (${policy.allowed_platforms.join(", ")})`,
     );

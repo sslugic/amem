@@ -88,6 +88,15 @@ export type UsageEventRow = {
   packet_tokens: number;
   estimated_tokens_saved: number;
   reported_tokens_saved: number | null;
+  /** JSON array of anchors the packet returned. Null on pre-attestation rows. */
+  anchors_json: string | null;
+  /** Measured token cost of those anchors. */
+  anchor_tokens: number | null;
+  /** JSON array of anchors the agent reported actually opening. */
+  anchors_opened_json: string | null;
+  /** 1 when the agent reported the packet answered it without more exploration. */
+  answered: number | null;
+  attested_at: string | null;
   created_at: string;
   local_ms: number | null;
   estimated_ms_saved: number | null;
@@ -370,6 +379,17 @@ function migrateUsageEvents(db: Database.Database): void {
     db.exec("ALTER TABLE usage_events ADD COLUMN estimated_ms_saved INTEGER");
   }
   if (!have.has("kind")) db.exec("ALTER TABLE usage_events ADD COLUMN kind TEXT");
+  // Attestation: what amem handed over, and what the agent still had to open.
+  // Without the anchor list a reported saving cannot be recomputed or audited.
+  if (!have.has("anchors_json")) db.exec("ALTER TABLE usage_events ADD COLUMN anchors_json TEXT");
+  if (!have.has("anchor_tokens")) {
+    db.exec("ALTER TABLE usage_events ADD COLUMN anchor_tokens INTEGER");
+  }
+  if (!have.has("anchors_opened_json")) {
+    db.exec("ALTER TABLE usage_events ADD COLUMN anchors_opened_json TEXT");
+  }
+  if (!have.has("answered")) db.exec("ALTER TABLE usage_events ADD COLUMN answered INTEGER");
+  if (!have.has("attested_at")) db.exec("ALTER TABLE usage_events ADD COLUMN attested_at TEXT");
 }
 
 function migrateClaimsColumns(db: Database.Database): void {
@@ -764,6 +784,9 @@ export function insertUsageEvent(input: {
   localMs?: number | null;
   estimatedMsSaved?: number | null;
   kind?: string | null;
+  /** Anchors the packet returned — kept so a saving can be attested later. */
+  anchors?: string[];
+  anchorTokens?: number | null;
 }): UsageEventRow {
   const id = newId("usage");
   const ts = nowIso();
@@ -775,8 +798,9 @@ export function insertUsageEvent(input: {
       `INSERT INTO usage_events (
          id, repo_id, platform, session_id, query, claim_ids,
          anchors_count, claims_count, packet_tokens, estimated_tokens_saved,
-         reported_tokens_saved, created_at, local_ms, estimated_ms_saved, kind
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+         reported_tokens_saved, created_at, local_ms, estimated_ms_saved, kind,
+         anchors_json, anchor_tokens
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -793,6 +817,8 @@ export function insertUsageEvent(input: {
       input.localMs ?? null,
       input.estimatedMsSaved ?? null,
       input.kind ?? null,
+      input.anchors ? JSON.stringify(input.anchors) : null,
+      input.anchorTokens ?? null,
     );
   return openDb().prepare("SELECT * FROM usage_events WHERE id = ?").get(id) as UsageEventRow;
 }
@@ -809,6 +835,114 @@ export function listSessionsAll(): SessionRow[] {
   return openDb()
     .prepare(`SELECT * FROM agent_sessions ORDER BY last_seen DESC`)
     .all() as SessionRow[];
+}
+
+export function getUsageEvent(eventId: string): UsageEventRow | null {
+  return (
+    (openDb()
+      .prepare("SELECT * FROM usage_events WHERE id = ?")
+      .get(eventId) as UsageEventRow | undefined) ?? null
+  );
+}
+
+export function latestUsageEvent(repoId: string, platform?: string | null): UsageEventRow | null {
+  const db = openDb();
+  const row = platform
+    ? db
+        .prepare(
+          `SELECT * FROM usage_events WHERE repo_id = ? AND platform = ?
+           ORDER BY created_at DESC LIMIT 1`,
+        )
+        .get(repoId, platform)
+    : db
+        .prepare(`SELECT * FROM usage_events WHERE repo_id = ? ORDER BY created_at DESC LIMIT 1`)
+        .get(repoId);
+  return (row as UsageEventRow | undefined) ?? null;
+}
+
+/**
+ * Record what the agent actually opened. `reportedTokensSaved` is computed by
+ * the caller from measured file sizes — this only persists it, along with the
+ * evidence, so the number can be re-derived instead of taken on faith.
+ */
+export function setUsageAttestation(
+  eventId: string,
+  input: {
+    anchorsOpened: string[];
+    answered: boolean;
+    reportedTokensSaved: number;
+    anchors?: string[];
+    anchorTokens?: number | null;
+  },
+): UsageEventRow {
+  const existing = getUsageEvent(eventId);
+  if (!existing) throw new Error(`Unknown usage event: ${eventId}`);
+  openDb()
+    .prepare(
+      `UPDATE usage_events
+         SET anchors_opened_json = ?, answered = ?, attested_at = ?,
+             reported_tokens_saved = ?,
+             anchors_json = COALESCE(anchors_json, ?),
+             anchor_tokens = COALESCE(?, anchor_tokens)
+       WHERE id = ?`,
+    )
+    .run(
+      JSON.stringify(input.anchorsOpened),
+      input.answered ? 1 : 0,
+      nowIso(),
+      Math.round(input.reportedTokensSaved),
+      input.anchors ? JSON.stringify(input.anchors) : null,
+      input.anchorTokens ?? null,
+      eventId,
+    );
+  return getUsageEvent(eventId) as UsageEventRow;
+}
+
+/** Rewrite a recomputed estimate onto a historical event (backfill). */
+export function setEstimatedTokensSaved(
+  eventId: string,
+  input: { estimatedTokensSaved: number; anchors?: string[]; anchorTokens?: number | null },
+): void {
+  openDb()
+    .prepare(
+      `UPDATE usage_events
+         SET estimated_tokens_saved = ?,
+             anchors_json = COALESCE(?, anchors_json),
+             anchor_tokens = COALESCE(?, anchor_tokens)
+       WHERE id = ?`,
+    )
+    .run(
+      Math.round(input.estimatedTokensSaved),
+      input.anchors ? JSON.stringify(input.anchors) : null,
+      input.anchorTokens ?? null,
+      eventId,
+    );
+}
+
+/** Events from one session that nobody has attested yet. */
+export function listUnattestedEvents(
+  repoId: string,
+  sessionId: string,
+  limit = 25,
+): UsageEventRow[] {
+  return openDb()
+    .prepare(
+      `SELECT * FROM usage_events
+        WHERE repo_id = ? AND session_id = ? AND attested_at IS NULL
+        ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(repoId, sessionId, limit) as UsageEventRow[];
+}
+
+export function listAllUsageEvents(repoId?: string | null): UsageEventRow[] {
+  const db = openDb();
+  return (
+    repoId
+      ? db
+          .prepare("SELECT * FROM usage_events WHERE repo_id = ? ORDER BY created_at ASC")
+          .all(repoId)
+      : db.prepare("SELECT * FROM usage_events ORDER BY created_at ASC").all()
+  ) as UsageEventRow[];
 }
 
 export function setReportedTokensSaved(eventId: string, saved: number): UsageEventRow {

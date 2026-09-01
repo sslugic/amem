@@ -58,7 +58,15 @@ describe("IT deny-default policy (shipped to customers)", () => {
             `${allowed} should be allowed`,
           );
         }
-        for (const blocked of ["luna", "windsurf", "continue", "zed"]) {
+        // Alias spellings resolve before the check: a client that calls itself
+        // "claude-code" is the allowed "claude", not an unknown platform.
+        for (const alias of ["claude-code", "Claude_Code", "cursor-ide"]) {
+          assert.doesNotThrow(
+            () => policy.assertPlatformAllowed(alias, loaded.policy),
+            `${alias} should resolve into the allow-list`,
+          );
+        }
+        for (const blocked of ["luna", "windsurf", "continue", "zed", "pycharm"]) {
           assert.throws(
             () => policy.assertPlatformAllowed(blocked, loaded.policy),
             /blocked by policy\.allowed_platforms/,
