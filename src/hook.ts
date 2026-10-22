@@ -158,13 +158,16 @@ function handleHookPayloadInner(raw: string): HookResponse {
   if (event === "sessionStart") {
     const packet = injectPacket(repo, "", sid, platform);
     const personal = recentPersonalContext();
-    const parts = [
-      packet ? `amem local memory for ${repo.repo_name}. Prefer these file anchors over broad exploration.\n\n${packet}` : "",
-      personal ?? "",
-    ].filter(Boolean);
+    // Hint and personal memory first: the cap trims from the end, and the repo packet is
+    // the part that is cheapest to fetch again with amem_context.
     const hint =
       "Before answering anything that builds on earlier work, check amem (amem_context, amem_skill_list).";
-    return contextResponse(rawEvent, cap([...parts, hint].join("\n\n"), 4000));
+    const parts = [
+      hint,
+      personal ?? "",
+      packet ? `amem local memory for ${repo.repo_name}. Prefer these file anchors over broad exploration.\n\n${packet}` : "",
+    ].filter(Boolean);
+    return contextResponse(rawEvent, cap(parts.join("\n\n"), 4000));
   }
 
   if (event === "beforeSubmitPrompt") {
