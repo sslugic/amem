@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { amemHome } from "./paths.js";
 
 import { KNOWN_PLATFORMS, resolvePlatformId } from "./platforms.js";
+import { SECRET_VALUE_PATTERNS } from "./secret-detect.js";
 
 export type AmemPolicy = {
   telemetry: boolean;
@@ -36,15 +37,11 @@ export type LoadedPolicy = {
 };
 
 /** Built-in secret hygiene — always active; policy patterns extend these. */
-export const BUILTIN_DENY_CLAIM_PATTERNS: string[] = [
-  "api[_-]?key",
-  "-----BEGIN",
-  "password\\s*=",
-  "secret\\s*=",
-  "private[_-]?key",
-  "aws[_-]?secret",
-  "xox[baprs]-",
-];
+/**
+ * Built-in deny-list: secret *values*, not mentions of secret names (see secret-detect.ts).
+ * IT policy can still add stricter `deny_claim_patterns`.
+ */
+export const BUILTIN_DENY_CLAIM_PATTERNS: string[] = [...SECRET_VALUE_PATTERNS];
 
 export const DEFAULT_POLICY: AmemPolicy = {
   telemetry: false,

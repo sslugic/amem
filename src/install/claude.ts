@@ -48,6 +48,7 @@ function mergeClaudeHooks(settingsPath: string): string {
   };
 
   // Full hook pipeline (inject + notes + drafts). Keep Stop on the same path as Cursor.
+  ensureEvent("SessionStart", fullHook);
   ensureEvent("UserPromptSubmit", fullHook);
   ensureEvent("Stop", fullHook);
   // Lightweight session touch remains useful if UserPromptSubmit payload is sparse

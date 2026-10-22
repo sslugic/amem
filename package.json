@@ -1,6 +1,6 @@
 {
   "name": "@iamem/amem",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local personal agent memory for Cursor and Claude Code. Private to your machine — never shared.",
   "type": "module",
   "bin": {
@@ -36,7 +36,7 @@
     "smoke": "node scripts/smoke.mjs",
     "pack:check": "npm run build && node scripts/check-pack.mjs",
     "prepublishOnly": "npm test && node scripts/check-pack.mjs",
-    "test": "npm run build && node --test --test-concurrency=1 test/**/*.test.mjs",
+    "test": "npm run build && node --test --test-concurrency=1 test/*.test.mjs",
     "test:all": "npm run test && npm run smoke && node scripts/check-pack.mjs",
     "shop": "node shop/server.mjs"
   },
