@@ -94,7 +94,7 @@ describe("Claude Code hook output", () => {
 
       const start = handleHookPayload(JSON.stringify({ hook_event_name: "SessionStart", cwd: repoDir, session_id: "s1" }));
       assert.equal(start.hookSpecificOutput?.hookEventName, "SessionStart");
-      assert.match(start.hookSpecificOutput.additionalContext, /check amem/);
+      assert.match(start.hookSpecificOutput.additionalContext, /^Before answering anything that builds on earlier work, check amem/);
 
       const cursor = handleHookPayload(
         JSON.stringify({ hook_event_name: "beforeSubmitPrompt", cwd: repoDir, session_id: "s2", prompt: "How do billing retries back off?" }),
