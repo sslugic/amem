@@ -16,7 +16,10 @@ import {
 } from "./db.js";
 import { detectRepoIdentity } from "./repo-identity.js";
 import { attestSessionFromTranscript } from "./usage-attest.js";
+import { stopCheckpoint } from "./checkpoint.js";
+import { listPersonalClaims } from "./personal.js";
 import { captureSkillRevision, captureSkillSuggestion } from "./skill-capture.js";
+import { looksLikeSecretValue } from "./secret-detect.js";
 
 export type HookPayload = {
   hook_event_name?: string;
@@ -29,11 +32,12 @@ export type HookPayload = {
   workspace_roots?: string[];
   cwd?: string;
   transcript_path?: string | null;
+  /** Claude Code: true while the agent is continuing because a Stop hook blocked */
+  stop_hook_active?: boolean;
 };
 
 export type HookResponse = Record<string, unknown>;
 
-const SECRET = /password|api[_-]?key|secret|token\s*[:=]|begin (rsa |openssh )?private/i;
 
 function workspaceRoot(payload: HookPayload): string {
   const roots = payload.workspace_roots;
@@ -82,6 +86,34 @@ export function normalizeHookEvent(raw: string): string {
   return e;
 }
 
+/** Claude Code event names arrive PascalCase; Cursor uses camelCase. */
+function isClaudeEvent(raw: string): boolean {
+  return /^(?:SessionStart|UserPromptSubmit|Stop|SessionEnd|PreToolUse|PostToolUse)$/.test(raw.trim());
+}
+
+/**
+ * Context for the agent in both dialects. Cursor reads `additional_context`; Claude Code
+ * only reads `hookSpecificOutput.additionalContext` (anything else is ignored).
+ */
+function contextResponse(rawEvent: string, text: string): HookResponse {
+  const out: HookResponse = { continue: true, additional_context: text };
+  if (isClaudeEvent(rawEvent)) {
+    out.hookSpecificOutput = { hookEventName: rawEvent.trim(), additionalContext: text };
+  }
+  return out;
+}
+
+/** Most recent personal memories (cross-repo), newest first, for session start. */
+export function recentPersonalContext(days = 7, limit = 8): string | null {
+  const since = Date.now() - days * 86_400_000;
+  const recent = listPersonalClaims()
+    .filter((c) => c.id !== "claim.personal_scope" && Date.parse(c.updated_at) >= since)
+    .slice(0, limit);
+  if (recent.length === 0) return null;
+  const lines = recent.map((c) => `- (${c.kind}, ${c.updated_at.slice(0, 10)}) ${c.text.replace(/\s+/g, " ").slice(0, 400)}`);
+  return `Recent personal memory (last ${days} days):\n${lines.join("\n")}`;
+}
+
 function injectPacket(repo: RepoRow, query: string, session: string, platform: string): string | null {
   const { markdown, packet } = logContextUsage({
     repoId: repo.id,
@@ -114,7 +146,8 @@ function handleHookPayloadInner(raw: string): HookResponse {
     }
   }
 
-  const event = normalizeHookEvent(payload.hook_event_name || payload.event || "");
+  const rawEvent = payload.hook_event_name || payload.event || "";
+  const event = normalizeHookEvent(rawEvent);
   const cwd = workspaceRoot(payload);
   const repo = bindRepo(cwd);
   if (!repo) return { continue: true };
@@ -123,13 +156,15 @@ function handleHookPayloadInner(raw: string): HookResponse {
   const platform = hookPlatform();
 
   if (event === "sessionStart") {
-    const context = injectPacket(repo, "", sid, platform);
-    return context
-      ? {
-          continue: true,
-          additional_context: `amem local memory for ${repo.repo_name}. Prefer these file anchors over broad exploration.\n\n${context}`,
-        }
-      : { continue: true };
+    const packet = injectPacket(repo, "", sid, platform);
+    const personal = recentPersonalContext();
+    const parts = [
+      packet ? `amem local memory for ${repo.repo_name}. Prefer these file anchors over broad exploration.\n\n${packet}` : "",
+      personal ?? "",
+    ].filter(Boolean);
+    const hint =
+      "Before answering anything that builds on earlier work, check amem (amem_context, amem_skill_list).";
+    return contextResponse(rawEvent, cap([...parts, hint].join("\n\n"), 4000));
   }
 
   if (event === "beforeSubmitPrompt") {
@@ -145,16 +180,16 @@ function handleHookPayloadInner(raw: string): HookResponse {
     }
     const context = isUsefulCaptureText(prompt) ? injectPacket(repo, prompt, sid, platform) : null;
     return context
-      ? {
-          continue: true,
-          additional_context: `amem already knows this about ${repo.repo_name}. Use it before grepping broadly.\n\n${context}`,
-        }
+      ? contextResponse(
+          rawEvent,
+          `amem already knows this about ${repo.repo_name}. Use it before grepping broadly.\n\n${context}`,
+        )
       : { continue: true };
   }
 
   if (event === "afterAgentResponse") {
     const text = typeof payload.text === "string" ? payload.text : "";
-    if (text.trim().length > 40 && !SECRET.test(text)) {
+    if (text.trim().length > 40 && !looksLikeSecretValue(text)) {
       insertConversationNote({
         repoId: repo.id,
         platform,
@@ -218,6 +253,18 @@ function handleHookPayloadInner(raw: string): HookResponse {
       });
     } catch {
       // attestation is bookkeeping; never fail a session stop over it
+    }
+    if (event === "stop") {
+      try {
+        const checkpoint = stopCheckpoint({
+          sessionId: sid,
+          transcriptPath: payload.transcript_path ?? null,
+          stopHookActive: payload.stop_hook_active === true,
+        });
+        if (checkpoint) return checkpoint;
+      } catch {
+        // a checkpoint is a nudge; never fail a session stop over it
+      }
     }
     return {};
   }

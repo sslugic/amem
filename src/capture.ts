@@ -24,10 +24,10 @@ import { applyProposal, type Proposal } from "./proposal.js";
 import { scoreProposal } from "./draft-quality.js";
 import { tokenJaccard } from "./search.js";
 import { isAutoApplyAll } from "./prefs.js";
+import { looksLikeSecretValue } from "./secret-detect.js";
 
 const TRIVIAL =
   /^(ok|okay|yes|yep|no|nah|thanks|thank you|continue|go ahead|sure|please|test|testing|hello|hi|hey|ping|asdf|foo|bar)\.?$/i;
-const SECRET = /password|api[_-]?key|secret|token\s*[:=]|begin (rsa |openssh )?private/i;
 const PATH_RE =
   /\b(?:[\w.-]+\/)*[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|md|json|yml|yaml|sql)\b/g;
 
@@ -36,7 +36,7 @@ export function isUsefulCaptureText(text: string): boolean {
   const t = text.trim();
   if (t.length < 16) return false;
   if (TRIVIAL.test(t)) return false;
-  if (SECRET.test(t)) return false;
+  if (looksLikeSecretValue(t)) return false;
   return true;
 }
 
@@ -46,7 +46,7 @@ export function isUsefulRememberText(text: string): boolean {
   if (!t) return false;
   if (TRIVIAL.test(t)) return false;
   if (t.length < 8) return false;
-  if (SECRET.test(t)) return false;
+  if (looksLikeSecretValue(t)) return false;
   return true;
 }
 
@@ -296,7 +296,7 @@ export function captureMissLearnDraft(input: {
   answer: string;
 }): ProposalDraftRow | null {
   if (!input.answer || input.answer.trim().length < 40) return null;
-  if (SECRET.test(input.answer)) return null;
+  if (looksLikeSecretValue(input.answer)) return null;
 
   const source = `miss-learn:${input.miss.id}`;
   if (draftExistsWithSource(input.repo.id, source)) return null;

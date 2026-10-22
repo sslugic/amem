@@ -309,6 +309,12 @@ Or let the agent do it — Cursor gets an always-on project rule; Claude gets ho
 
 Hooks also inject context on session start / prompt submit, store conversation notes, queue **session-end drafts**, and can queue **miss→learn** drafts after empty context lookups when the agent later cites real files. Approve drafts in **Memory** (or allow low-risk kinds via policy `auto_apply_kinds`).
 
+Session start also injects your recent personal memories (last 7 days), so a new chat picks up where the last one left off. Claude Code receives hook context through `hookSpecificOutput.additionalContext`; Cursor through `additional_context`.
+
+**Stop checkpoint (opt-in).** Set `AMEM_STOP_CHECKPOINT=1` on the Claude `Stop` hook command (`AMEM_STOP_CHECKPOINT=1 amem hook`) to have Claude save durable context before it stops — only when the turn changed something (edits, commands, write-type MCP tools) and nothing was saved to amem after that work. Read-only turns and turns that already saved are left alone.
+
+**Secret filter.** Remember, capture and skill writes block secret *values* (written-out keys, tokens, passwords, PEM keys, known token formats), not mentions of secret *names* such as `SUMSUB_MOCK_WEBHOOK_SECRET` or references like `"$(gcloud secrets …)"`. IT policy `deny_claim_patterns` can add stricter rules.
+
 ### 2. Work as usual
 
 Treat memory as a **map**, not source of truth. Read the anchored files before you change them. Prefer claims marked fresh; verify **stale** ones (anchored files changed after the claim).
@@ -608,7 +614,7 @@ Reload Cursor if skills/rules do not appear immediately.
 | Artifact | Path |
 | --- | --- |
 | Skills | `~/.claude/skills/amem-*` |
-| Hooks | `~/.claude/settings.json` (`UserPromptSubmit` / `Stop` / related → full `amem hook`) |
+| Hooks | `~/.claude/settings.json` (`SessionStart` / `UserPromptSubmit` / `Stop` / related → full `amem hook`) |
 
 ### Other hosts
 
