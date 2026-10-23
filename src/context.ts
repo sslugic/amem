@@ -35,6 +35,8 @@ import { FEATURE_LOCAL_EMBED, hasFeature } from "./license.js";
 import { PERSONAL_SLUG } from "./personal.js";
 import { listIndexedSkills, rankSkills, type RankedSkill } from "./skills.js";
 import { loadPolicy } from "./policy.js";
+import { isPrivatePersonalClaim } from "./personal.js";
+import { clipText } from "./text-clip.js";
 
 /** Reasons are stored as JSON; a malformed row must not break the whole packet. */
 function safeReasons(raw: string): string {
@@ -191,7 +193,7 @@ export function buildContext(
     const personal = getRepoByName(PERSONAL_SLUG);
     if (personal && personal.id !== repoId) {
       const personalClaims = listClaims(personal.id).filter(
-        (c) => c.id !== "claim.personal_scope",
+        (c) => c.id !== "claim.personal_scope" && !isPrivatePersonalClaim(c),
       );
       if (personalClaims.length > 0) {
         const pFts = new Map<string, number>();
@@ -472,7 +474,7 @@ export function renderContextMarkdown(packet: ContextPacket): string {
       "",
     );
     for (const task of packet.tasks) {
-      const body = task.body ? ` — ${task.body.replace(/\s+/g, " ").slice(0, 120)}` : "";
+      const body = task.body ? ` — ${clipText(task.body.replace(/\s+/g, " "), 140)}` : "";
       lines.push(`- **[${task.status}]** ${task.title}${body} (\`${task.id}\`)`);
     }
     lines.push("");
@@ -486,7 +488,7 @@ export function renderContextMarkdown(packet: ContextPacket): string {
     );
     for (const skill of packet.skills) {
       const desc = skill.description
-        ? ` — ${skill.description.replace(/\s+/g, " ").slice(0, 140)}`
+        ? ` — ${clipText(skill.description.replace(/\s+/g, " "), 160)}`
         : "";
       lines.push(`- **${skill.name}**${desc}`);
     }

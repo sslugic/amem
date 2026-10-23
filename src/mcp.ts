@@ -44,7 +44,8 @@ const TOOLS = [
   },
   {
     name: "amem_remember",
-    description: "Store a durable local fact in amem (stays on this machine).",
+    description:
+      "Store a durable local fact in amem (stays on this machine). Use kind `private` (or anchor `private`) for personal, non-work facts so they never appear in work repositories' context.",
     inputSchema: {
       type: "object",
       properties: {

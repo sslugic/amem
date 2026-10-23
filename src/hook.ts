@@ -17,7 +17,8 @@ import {
 import { detectRepoIdentity } from "./repo-identity.js";
 import { attestSessionFromTranscript } from "./usage-attest.js";
 import { stopCheckpoint } from "./checkpoint.js";
-import { listPersonalClaims } from "./personal.js";
+import { listWorkPersonalClaims, repoTokens } from "./personal.js";
+import { clipText } from "./text-clip.js";
 import { captureSkillRevision, captureSkillSuggestion } from "./skill-capture.js";
 import { looksLikeSecretValue } from "./secret-detect.js";
 
@@ -66,7 +67,7 @@ function bindRepo(cwd: string): RepoRow | null {
 
 function cap(text: string, max = 2400): string {
   if (text.length <= max) return text;
-  return `${text.slice(0, max)}\n\n_[amem truncated]_`;
+  return `${clipText(text, max, "")}\n\n_[amem truncated]_`;
 }
 
 function hookPlatform(): "cursor" | "claude" {
@@ -103,14 +104,31 @@ function contextResponse(rawEvent: string, text: string): HookResponse {
   return out;
 }
 
-/** Most recent personal memories (cross-repo), newest first, for session start. */
-export function recentPersonalContext(days = 7, limit = 8): string | null {
+/**
+ * Recent personal memories (cross-repo) for session start. Private ones are left out;
+ * memories that mention this repository rank first, then newest first.
+ */
+export function recentPersonalContext(
+  repo?: Pick<RepoRow, "repo_name" | "remote_url"> | null,
+  days = 7,
+  limit = 8,
+): string | null {
   const since = Date.now() - days * 86_400_000;
-  const recent = listPersonalClaims()
-    .filter((c) => c.id !== "claim.personal_scope" && Date.parse(c.updated_at) >= since)
-    .slice(0, limit);
+  const tokens = repo ? repoTokens(repo) : [];
+  const relevance = (text: string) => {
+    const lower = text.toLowerCase();
+    return tokens.reduce((n, t) => n + (lower.includes(t) ? 1 : 0), 0);
+  };
+  const recent = listWorkPersonalClaims()
+    .filter((c) => Date.parse(c.updated_at) >= since)
+    .map((c) => ({ c, score: relevance(c.text) }))
+    .sort((a, b) => b.score - a.score || b.c.updated_at.localeCompare(a.c.updated_at))
+    .slice(0, limit)
+    .map(({ c }) => c);
   if (recent.length === 0) return null;
-  const lines = recent.map((c) => `- (${c.kind}, ${c.updated_at.slice(0, 10)}) ${c.text.replace(/\s+/g, " ").slice(0, 400)}`);
+  const lines = recent.map(
+    (c) => `- (${c.kind}, ${c.updated_at.slice(0, 10)}) ${clipText(c.text.replace(/\s+/g, " "), 420)}`,
+  );
   return `Recent personal memory (last ${days} days):\n${lines.join("\n")}`;
 }
 
@@ -157,7 +175,7 @@ function handleHookPayloadInner(raw: string): HookResponse {
 
   if (event === "sessionStart") {
     const packet = injectPacket(repo, "", sid, platform);
-    const personal = recentPersonalContext();
+    const personal = recentPersonalContext(repo);
     // Hint and personal memory first: the cap trims from the end, and the repo packet is
     // the part that is cheapest to fetch again with amem_context.
     const hint =

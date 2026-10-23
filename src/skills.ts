@@ -434,6 +434,16 @@ export function skillSummary(s: SkillMeta | IndexedSkill): Record<string, unknow
   };
 }
 
+/**
+ * Auto-generated skills whose only description is "Procedure for <the user's prompt>"
+ * are one-off chats, not procedures. Keep them out of suggestions unless they have
+ * actually been opened more than once.
+ */
+export function isPromptDerivedSkill(skill: Pick<IndexedSkill, "description" | "tags" | "uses">): boolean {
+  const auto = (skill.tags ?? []).some((t) => t.toLowerCase() === "auto-generated");
+  return auto && /^procedure for\b/i.test((skill.description ?? "").trim()) && (skill.uses ?? 0) < 2;
+}
+
 export function rankSkills(
   skills: IndexedSkill[],
   query: string,
@@ -443,6 +453,7 @@ export function rankSkills(
   if (tokens.length === 0) return [];
   const ranked: RankedSkill[] = [];
   for (const skill of skills) {
+    if (isPromptDerivedSkill(skill)) continue;
     const name = skill.name.toLowerCase();
     const haystack = `${name} ${skill.description} ${skill.tags.join(" ")}`.toLowerCase();
     let score = 0;

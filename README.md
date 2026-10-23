@@ -309,7 +309,7 @@ Or let the agent do it — Cursor gets an always-on project rule; Claude gets ho
 
 Hooks also inject context on session start / prompt submit, store conversation notes, queue **session-end drafts**, and can queue **miss→learn** drafts after empty context lookups when the agent later cites real files. Approve drafts in **Memory** (or allow low-risk kinds via policy `auto_apply_kinds`).
 
-Session start also injects your recent personal memories (last 7 days), so a new chat picks up where the last one left off. Claude Code receives hook context through `hookSpecificOutput.additionalContext`; Cursor through `additional_context`.
+Session start also injects your recent personal memories (last 7 days), so a new chat picks up where the last one left off. Memories that mention the current repository come first. Personal memories saved with kind `private` (or anchor `private`) never appear in a work repository's context. Auto-generated skills whose description is just "Procedure for <prompt>" are no longer suggested unless they have been used, and injected text is shortened at sentence boundaries. Claude Code receives hook context through `hookSpecificOutput.additionalContext`; Cursor through `additional_context`.
 
 **Stop checkpoint (opt-in).** Set `AMEM_STOP_CHECKPOINT=1` on the Claude `Stop` hook command (`AMEM_STOP_CHECKPOINT=1 amem hook`) to have Claude save durable context before it stops — only when the turn changed something (edits, commands, write-type MCP tools) and nothing was saved to amem after that work. Read-only turns and turns that already saved are left alone.
 
