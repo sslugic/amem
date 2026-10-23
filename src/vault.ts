@@ -8,6 +8,7 @@ import {
 } from "./crypto.js";
 import { backupSchedulePath, isBackupScheduleInstalled, readBackupScheduleHour } from "./backup-schedule.js";
 import { dbPath } from "./paths.js";
+import { backupRetention } from "./crypto.js";
 
 export type BackupEntry = {
   name: string;
@@ -28,6 +29,8 @@ export type VaultStatus = {
     scheduled: boolean;
     schedulePath: string;
     scheduledHour: number | null;
+    totalBytes: number;
+    retention: { keepDays: number; keepMonths: number; keepRecent: number };
     last: BackupEntry | null;
     recent: BackupEntry[];
     count: number;
@@ -70,6 +73,8 @@ export function vaultStatus(): VaultStatus {
       last: backups[0] ?? null,
       recent: backups.slice(0, 8),
       count: backups.length,
+      totalBytes: backups.reduce((n, b) => n + (b.bytes || 0), 0),
+      retention: (({ keepDays, keepMonths, keepRecent }) => ({ keepDays, keepMonths, keepRecent }))(backupRetention()),
     },
   };
 }

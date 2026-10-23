@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { installIssues } from "./install-check.js";
 import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { buildAttestReport, formatAttestHuman } from "./attest.js";
@@ -89,6 +90,7 @@ import {
 import { ensurePersonalWorkspace, PERSONAL_SLUG } from "./personal.js";
 import {
   createBackup,
+  createBackupWithRetention,
   defaultBackupDir,
   encryptedDbPath,
   isDbEncryptedAtRest,
@@ -165,7 +167,8 @@ Usage:
   amem status [--workspace <name>]
   amem doctor [--attest] [--json]
   amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna]
-  amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>]
+  amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>] [--supersedes <id,id>]
+  amem supersede <claimId...> [--by <newerClaimId>] [--workspace <name>]
   amem recipe [--json]
   amem platforms [--json]
   amem task [list] [--status <backlog|next|doing|blocked|done>] [--include-done] [--all] [--json]
@@ -632,6 +635,8 @@ async function main(): Promise<void> {
         // Structural corpus problems: phantom bindings, split projects, and
         // hygiene never actually being scheduled.
         const advice: string[] = [];
+        // Several installs or a host on another version: worth fixing, not a fault.
+        advice.push(...installIssues());
         try {
           for (const issue of findCorpusIssues()) {
             if (issue.severity === "fault") issues.push(issue.message);
@@ -703,7 +708,7 @@ async function main(): Promise<void> {
       }
       case "remember": {
         const text = positional.slice(1).join(" ").trim();
-        if (!text) throw new Error('Usage: amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>]');
+        if (!text) throw new Error('Usage: amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>] [--supersedes <id,id>]');
         const repo = resolveBinding(flags);
         const anchor = flagString(flags, "anchor");
         const result = handleApi({
@@ -715,6 +720,7 @@ async function main(): Promise<void> {
             repoId: repo.id,
             kind: flagString(flags, "kind") ?? "session",
             anchors: anchor ? [anchor] : undefined,
+            supersedes: flagString(flags, "supersedes"),
             source: "cli",
           },
           cwd: process.cwd(),
@@ -722,8 +728,37 @@ async function main(): Promise<void> {
         if (result.status >= 400) {
           throw new Error((result.body as { error?: string }).error || "remember failed");
         }
-        const remembered = result.body as { claimId?: string; workspace?: string };
+        const remembered = result.body as {
+          claimId?: string;
+          workspace?: string;
+          superseded?: string[];
+          possiblySupersedes?: Array<{ id: string; updatedAt: string; text: string; similarity: number }>;
+        };
         console.log(`Remembered ${remembered.claimId} in ${remembered.workspace || repo.repo_name}`);
+        if (remembered.superseded?.length) console.log(`Superseded: ${remembered.superseded.join(", ")}`);
+        for (const c of remembered.possiblySupersedes ?? []) {
+          console.log(`  possibly outdated: ${c.id} (${c.updatedAt.slice(0, 10)}, ${Math.round(c.similarity * 100)}% similar) ${c.text.slice(0, 90)}`);
+        }
+        if (remembered.possiblySupersedes?.length) {
+          console.log(`  retire with: amem supersede <id> --by ${remembered.claimId}`);
+        }
+        break;
+      }
+      case "supersede": {
+        const ids = positional.slice(1).flatMap((s) => s.split(",")).map((s) => s.trim()).filter(Boolean);
+        if (ids.length === 0) throw new Error("Usage: amem supersede <claimId...> [--by <newerClaimId>] [--workspace <name>]");
+        const repo = resolveBinding(flags);
+        const result = handleApi({
+          method: "POST",
+          pathname: "/api/supersede",
+          searchParams: new URLSearchParams(),
+          body: { ids, by: flagString(flags, "by"), repoId: repo.id },
+          cwd: process.cwd(),
+        });
+        if (result.status >= 400) throw new Error((result.body as { error?: string }).error || "supersede failed");
+        const out = result.body as { superseded: string[]; notFound: string[]; by: string };
+        console.log(`Superseded ${out.superseded.length} claim(s)${out.by !== "retired" ? ` by ${out.by}` : ""}.`);
+        if (out.notFound.length) console.log(`Not found or already retired: ${out.notFound.join(", ")}`);
         break;
       }
       case "recipe": {
@@ -854,13 +889,16 @@ async function main(): Promise<void> {
         } catch {
           passphrase = undefined;
         }
-        const result = createBackup({
-          outDir: flagString(flags, "out") || defaultBackupDir(),
+        const result = createBackupWithRetention({
+          outDir: flagString(flags, "out") || undefined,
           passphrase,
           label: flagString(flags, "label"),
         });
         console.log(`Backup written: ${result.path}`);
         console.log(`Encrypted: ${result.encrypted ? "yes" : "no (pass --passphrase to encrypt)"}`);
+        if (result.pruned > 0) {
+          console.log(`Removed ${result.pruned} old backup(s), freed ${(result.bytesFreed / 1048576).toFixed(0)} MB (keeps 14 days + 12 monthly).`);
+        }
         break;
       }
       case "restore": {

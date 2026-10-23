@@ -1,3 +1,4 @@
+import { contentTokens } from "../search.js";
 import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { createHash } from "node:crypto";
@@ -152,6 +153,7 @@ import { applyLicenseJson, licenseStatus } from "../license.js";
 import { embedStatus, embedIndexHealth, embedIndexIssues, reindexAllEmbeds, setEmbedBackend, type EmbedBackend } from "../embed.js";
 import {
   createBackup,
+  createBackupWithRetention,
   lockDatabase,
   restoreBackup,
   unlockDatabase,
@@ -664,6 +666,58 @@ function runContext(repo: RepoRow, body: unknown, searchParams: URLSearchParams)
   });
 }
 
+/**
+ * Active claims in the same repo that look like earlier versions of `text`: same topic
+ * words (Jaccard >= 0.4 over meaningful tokens) and older. Most similar first, max 3.
+ */
+export function findOlderSimilarClaims(
+  repoId: string,
+  text: string,
+  excludeIds: string[] = [],
+): Array<{ id: string; kind: string; updatedAt: string; text: string; similarity: number }> {
+  const words = (t: string) => new Set(contentTokens(t).filter((w) => w.length > 2 && !/^\d+$/.test(w)));
+  const mine = words(text);
+  if (mine.size < 4) return [];
+  const skip = new Set(excludeIds);
+  const out: Array<{ id: string; kind: string; updatedAt: string; text: string; similarity: number }> = [];
+  for (const c of listClaims(repoId)) {
+    if (skip.has(c.id)) continue;
+    const theirs = words(c.text);
+    let shared = 0;
+    for (const w of mine) if (theirs.has(w)) shared += 1;
+    const union = mine.size + theirs.size - shared;
+    const similarity = union > 0 ? shared / union : 0;
+    if (similarity >= 0.4) {
+      out.push({ id: c.id, kind: c.kind, updatedAt: c.updated_at, text: c.text.slice(0, 200), similarity: Number(similarity.toFixed(2)) });
+    }
+  }
+  return out.sort((a, b) => b.similarity - a.similarity).slice(0, 3);
+}
+
+/** Retire claims explicitly: status superseded, pointing at the claim that replaces them (or "retired"). */
+function runSupersede(repo: RepoRow, body: unknown): ApiResponse {
+  const payload = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const ids = (Array.isArray(payload.ids) ? payload.ids : typeof payload.ids === "string" ? payload.ids.split(",") : [])
+    .filter((s): s is string => typeof s === "string")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  if (ids.length === 0) return err(400, "ids required");
+  const by = bodyField(body, "by") || "retired";
+  const db = openDb();
+  const stmt = db.prepare(
+    `UPDATE claims SET status = 'superseded', superseded_by = ?, updated_at = ?
+     WHERE repo_id = ? AND id = ? AND COALESCE(status, 'active') = 'active'`,
+  );
+  const now = new Date().toISOString();
+  const done: string[] = [];
+  for (const id of ids) {
+    if (id === by) continue;
+    if (stmt.run(by, now, repo.id, id).changes > 0) done.push(id);
+  }
+  return ok({ superseded: done, by, notFound: ids.filter((i) => !done.includes(i) && i !== by) });
+}
+
 function runRemember(repo: RepoRow, body: unknown): ApiResponse {
   const text = bodyField(body, "text");
   if (!text) return err(400, "text required");
@@ -682,6 +736,18 @@ function runRemember(repo: RepoRow, body: unknown): ApiResponse {
   if (anchors.length === 0) {
     anchors.push(parseWorkspaceSlug(repo.remote_url) ?? repo.repo_name);
   }
+  const supersedesRaw = payload.supersedes;
+  const supersedes = (
+    Array.isArray(supersedesRaw)
+      ? supersedesRaw
+      : typeof supersedesRaw === "string"
+        ? supersedesRaw.split(",")
+        : []
+  )
+    .filter((s): s is string => typeof s === "string")
+    .map((s) => s.trim())
+    .filter((s) => s && s !== id)
+    .slice(0, 10);
   const applied = applyProposal(repo.id, {
     claims: [
       {
@@ -690,13 +756,24 @@ function runRemember(repo: RepoRow, body: unknown): ApiResponse {
         text,
         code_anchors: anchors,
         source_ref: bodyField(body, "source") ?? "api",
+        ...(supersedes.length ? { supersedes } : {}),
       },
     ],
   });
+  // Older memories on the same topic that this one may replace: the caller decides,
+  // and re-saves with `supersedes` (or calls amem supersede) to retire them.
+  const possiblySupersedes = findOlderSimilarClaims(repo.id, text, [id, ...supersedes]);
   return ok({
     applied,
     claimId: id,
     workspace: parseWorkspaceSlug(repo.remote_url) ?? repo.repo_name,
+    superseded: supersedes,
+    possiblySupersedes,
+    ...(possiblySupersedes.length
+      ? {
+          hint: "If this replaces any of possiblySupersedes, retire them: amem_supersede { ids, by: claimId }.",
+        }
+      : {}),
   });
 }
 
@@ -733,7 +810,7 @@ function runVaultUnlock(body: unknown): ApiResponse {
 
 function runVaultBackup(body: unknown): ApiResponse {
   try {
-    const result = createBackup({
+    const result = createBackupWithRetention({
       passphrase: bodyField(body, "passphrase"),
       label: bodyField(body, "label"),
       outDir: bodyField(body, "outDir"),
@@ -1110,6 +1187,11 @@ export function handleApi(req: ApiRequest): ApiResponse {
   if (method === "POST" && pathname === "/api/remember") {
     if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
     return runRemember(repo, body);
+  }
+
+  if (method === "POST" && pathname === "/api/supersede") {
+    if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
+    return runSupersede(repo, body);
   }
 
   if (method === "POST" && pathname === "/api/bootstrap") {

@@ -143,6 +143,7 @@ without looking.
 - Prefer the returned anchors over searching. Still verify the code before editing: trust **fresh** claims, re-check anything marked **stale**.
 - The **Why:** line explains ranking. It is explainability, not proof.
 - \`amem_remember "<fact>"\` — store a durable, anchored fact when you learn one. Facts about the repo, not chat filler.
+- When a fact replaces an older one (new status, fixed bug, changed decision), pass the old ids in \`supersedes\`; if the response lists \`possiblySupersedes\` that are now wrong, retire them with \`amem_supersede\`.
 
 ### 3. Skills — procedures worth repeating
 - A \`## Relevant skills\` section lists names only. If one applies, call \`amem_skill_view\` to load it **before** working the problem out yourself.
