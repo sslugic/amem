@@ -29,7 +29,9 @@ function mcpToolName(name: string): string {
   const tool = name.split("__").slice(2).join("__") || name;
   return tool.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
 }
-const AMEM_SAVE = /amem_(?:remember|skill_save|task_add|task_update|task_complete)$/;
+const AMEM_SAVE = /amem_(?:remember|skill_save|task_add|task_update|task_complete|cli_save)$/;
+/** The same saves made through the CLI from a shell tool (`amem remember "…"`). */
+const AMEM_CLI_SAVE = /(?:^|[\s;&|(/])amem\s+(?:remember|skills?\s+(?:new|import)|task\s+(?:add|update|complete|delete))\b/;
 
 export function isMutatingTool(name: string): boolean {
   if (!name || READ_ONLY_TOOLS.has(name)) return false;
@@ -56,8 +58,11 @@ export function toolCallsInTranscript(jsonl: string): string[] {
       if (!Array.isArray(content)) continue;
       for (const block of content) {
         if (block && typeof block === "object" && (block as { type?: string }).type === "tool_use") {
-          const name = (block as { name?: string }).name;
-          if (typeof name === "string") names.push(name);
+          const { name, input } = block as { name?: string; input?: { command?: unknown } };
+          if (typeof name !== "string") continue;
+          const command = typeof input?.command === "string" ? input.command : "";
+          // A shell call that saves to amem counts as a save, not as an unsaved change.
+          names.push(AMEM_CLI_SAVE.test(command) ? "amem_cli_save" : name);
         }
       }
     } catch {

@@ -80,11 +80,13 @@ describe("capture + context ranking", () => {
         assert.ok(stemmed.claims.some((c) => c.id === "claim.boot_order"));
 
         setClaimPinned(repo.id, "claim.unrelated", true);
-        const pinnedPacket = buildContext(repo.id, "zzz-no-match-token-qqq", {
-          rootPath: repoDir,
-        });
-        // pin boost alone should keep pinned claim visible
-        assert.ok(pinnedPacket.claims.some((c) => c.id === "claim.unrelated"));
+        // Pinning lifts a claim that matches the question above an equal match...
+        const pinnedPacket = buildContext(repo.id, "invoices boot", { rootPath: repoDir });
+        assert.equal(pinnedPacket.claims[0]?.id, "claim.unrelated");
+        assert.ok(pinnedPacket.claims[0].reasons.includes("pinned"));
+        // ...but does not inject it into packets about something else.
+        const otherPacket = buildContext(repo.id, "boot initializes api", { rootPath: repoDir });
+        assert.ok(!otherPacket.claims.some((c) => c.id === "claim.unrelated"));
 
         // Make api claim stale
         touchFuture(join(repoDir, "src", "api.ts"));
@@ -94,7 +96,7 @@ describe("capture + context ranking", () => {
         assert.equal(boot.freshness.status, "stale");
         const md = renderContextMarkdown(stalePacket);
         assert.match(md, /stale/i);
-        assert.match(md, /Pinned: `yes`/);
+        assert.match(renderContextMarkdown(pinnedPacket), /Pinned: `yes`/);
       } finally {
         rmSync(repoDir, { recursive: true, force: true });
       }

@@ -129,6 +129,19 @@ describe("stop checkpoint", () => {
     assert.equal(needsCheckpoint(["mcp__amem__amem_remember", "Bash"]), true);
   });
 
+  it("counts an amem CLI save from a shell tool as a save", async () => {
+    const { toolCallsInTranscript, needsCheckpoint } = await import("../dist/checkpoint.js");
+    const line = (name, command) =>
+      `${JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name, input: command ? { command } : {} }] } })}\n`;
+    const saved = toolCallsInTranscript(
+      line("Edit") + line("Bash", '~/.local/bin/amem remember "2026-10-23 worklog (done): shipped" --workspace personal'),
+    );
+    assert.deepEqual(saved, ["Edit", "amem_cli_save"]);
+    assert.equal(needsCheckpoint(saved), false);
+    const notSaved = toolCallsInTranscript(line("Bash", "amem context 'billing'") + line("Bash", "echo remember to amem"));
+    assert.equal(needsCheckpoint(notSaved), true);
+  });
+
   it("blocks once per changed window, never when off or already continuing", async () => {
     await withAmemHome(async () => {
       const { stopCheckpoint } = await import("../dist/checkpoint.js");

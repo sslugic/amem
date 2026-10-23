@@ -5,6 +5,26 @@ const FTS_TABLE = "claims_fts";
 const FTS_MAP = "claims_fts_map";
 
 /** Tokenize for keyword fallback / conflict heuristics. */
+/**
+ * Words that carry no topic. Left in, they make every claim and task match every
+ * question ("what is the status of …" matched all of them through "the", "is", "of").
+ */
+const STOPWORDS = new Set(
+  (
+    "a an and are as at be been but by can could did do does doing for from had has have how i if in into is it its " +
+    "me my of on or our so than that the their them then there these they this to us was we were what when where " +
+    "which who why will with would you your yes no not ok okay please thanks just also about any some all more " +
+    "should shall may might am get got go going make made let lets now new use using used work worked working"
+  ).split(" "),
+);
+
+/** Query tokens that carry meaning: tokenize() minus stopwords (falls back to all tokens). */
+export function contentTokens(text: string): string[] {
+  const all = tokenize(text);
+  const content = all.filter((t) => !STOPWORDS.has(t));
+  return content.length > 0 ? content : all;
+}
+
 export function tokenize(text: string): string[] {
   return text
     .toLowerCase()
@@ -14,7 +34,7 @@ export function tokenize(text: string): string[] {
 
 /** Build a safe FTS5 MATCH string from a free-text query (OR of quoted terms). */
 export function buildFtsMatchQuery(query: string): string | null {
-  const tokens = tokenize(query)
+  const tokens = contentTokens(query)
     .map((t) => t.replace(/"/g, "").replace(/'/g, ""))
     .filter((t) => t.length > 1 && !/^[.]+$/.test(t));
   if (tokens.length === 0) return null;

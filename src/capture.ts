@@ -25,6 +25,7 @@ import { scoreProposal } from "./draft-quality.js";
 import { tokenJaccard } from "./search.js";
 import { isAutoApplyAll } from "./prefs.js";
 import { looksLikeSecretValue } from "./secret-detect.js";
+import { isSystemText } from "./kinds.js";
 
 const TRIVIAL =
   /^(ok|okay|yes|yep|no|nah|thanks|thank you|continue|go ahead|sure|please|test|testing|hello|hi|hey|ping|asdf|foo|bar)\.?$/i;
@@ -37,6 +38,7 @@ export function isUsefulCaptureText(text: string): boolean {
   if (t.length < 16) return false;
   if (TRIVIAL.test(t)) return false;
   if (looksLikeSecretValue(t)) return false;
+  if (isSystemText(t)) return false;
   return true;
 }
 
