@@ -153,8 +153,11 @@ export function nonFactReason(text: string): string | null {
   const t = (text ?? "").replace(/\s+/g, " ").trim();
   if (t.length === 0) return "empty";
   if (SYSTEM_TEXT.test(t)) return "system-text";
-  // A question is a request someone typed, not a fact about the code.
-  if (QUESTION_MARK.test(t)) return "question";
+  // A question is a request someone typed, not a fact about the code. Only when it opens
+  // the memory (or the memory is short): a long fact may quote an open question
+  // ("…; open question: is X the intended experience?") and must be kept.
+  const firstSentence = t.split(/(?<=[.!?])\s+/)[0] ?? t;
+  if (QUESTION_MARK.test(firstSentence) || (t.length < 160 && QUESTION_MARK.test(t))) return "question";
   // ...and plenty were typed without the question mark ("can we expose amem
   // data via mcp"). Require an interrogative opener FOLLOWED by a subject, so
   // this cannot swallow a declarative sentence that merely starts with "Is".

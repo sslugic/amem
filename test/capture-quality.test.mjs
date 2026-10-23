@@ -128,6 +128,16 @@ describe("nonFactReason keeps real facts that look like residue (false positives
     }
   });
 
+  it("keeps a long fact that quotes an open question", async () => {
+    const { nonFactReason } = await import("../dist/kinds.js");
+    assert.equal(
+      nonFactReason(
+        "2026-10-23 worklog (done): Filed TEST-106 (High; relates to TEST-104): on sandbox the hosted link returns 422 for a business. Open question for product: is the sandbox kyc-link the intended experience for the client?",
+      ),
+      null,
+    );
+  });
+
   it("still flags real residue and real questions", async () => {
     const { nonFactReason } = await import("../dist/kinds.js");
     assert.equal(nonFactReason("The config is read from , then cached for the session."), "scrub-residue");
