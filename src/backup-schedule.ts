@@ -2,7 +2,7 @@
  * Schedule local encrypted backups (no cloud sync).
  * Uses LaunchAgent (macOS), systemd user timer (Linux), or Startup cmd (Windows).
  */
-import { existsSync, mkdirSync, unlinkSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -58,6 +58,31 @@ export function isBackupScheduleInstalled(): boolean {
   if (process.platform === "linux") return existsSync(backupSystemdTimerPath());
   if (process.platform === "win32") return existsSync(backupWindowsStartupPath());
   return false;
+}
+
+/** Hour from a launchd plist (`<key>Hour</key><integer>3</integer>`) or systemd timer (`OnCalendar=*-*-* 03:15:00`). */
+export function parseScheduleHour(text: string): number | null {
+  const m =
+    text.match(/<key>Hour<\/key>\s*<integer>(\d{1,2})<\/integer>/) ?? text.match(/OnCalendar=\S+\s+(\d{1,2}):\d{2}/);
+  if (!m) return null;
+  const hour = Number(m[1]);
+  return hour >= 0 && hour <= 23 ? hour : null;
+}
+
+/**
+ * The hour (0-23) the daily backup runs at, read back from the installed schedule, or
+ * null when no schedule is installed or the platform's schedule has no fixed hour
+ * (Windows runs it at login).
+ */
+export function readBackupScheduleHour(): number | null {
+  if (!isBackupScheduleInstalled()) return null;
+  try {
+    if (process.platform === "darwin") return parseScheduleHour(readFileSync(backupLaunchAgentPath(), "utf8"));
+    if (process.platform === "linux") return parseScheduleHour(readFileSync(backupSystemdTimerPath(), "utf8"));
+  } catch {
+    // unreadable schedule file: report it as installed without an hour
+  }
+  return null;
 }
 
 export function backupSchedulePath(): string {

@@ -87,33 +87,72 @@
 
         <div id="vaultPanel" class="vault-panel hidden">
           <div class="vault-panel-inner">
-            <div>
-              <strong>Lock &amp; local backup</strong>
-              <p class="note" style="margin: 0.35rem 0 0">
-                AES-256-GCM on this machine. Passphrase never leaves localhost. No cloud.
-              </p>
+            <div class="vault-head">
+              <div>
+                <strong>Lock &amp; backup</strong>
+                <p class="note">Everything stays on this machine. Nothing is uploaded.</p>
+              </div>
+              <button class="btn small secondary" id="vaultCloseBtn" type="button">Close</button>
             </div>
-            <div class="add-repo-row">
-              <input id="vaultPass" type="password" autocomplete="new-password" placeholder="Passphrase" />
-              <button class="btn" id="vaultLockBtn" type="button">Lock</button>
-              <button class="btn secondary" id="vaultUnlockBtn" type="button">Unlock</button>
+
+            <div class="vault-grid">
+              <section class="vault-card" aria-labelledby="vaultBackupTitle">
+                <header class="vault-card-head">
+                  <h3 id="vaultBackupTitle">Backups</h3>
+                  <span class="vault-badge" id="vaultBackupBadge"></span>
+                </header>
+                <p class="vault-line" id="vaultLastBackup">Loading…</p>
+                <div class="vault-row">
+                  <button class="btn" id="vaultBackupBtn" type="button">Back up now</button>
+                </div>
+                <div class="vault-row vault-schedule">
+                  <label for="vaultHour">Daily backup at</label>
+                  <select id="vaultHour"></select>
+                  <button class="btn small" id="vaultScheduleBtn" type="button">Turn on</button>
+                  <button class="btn small secondary" id="vaultUnscheduleBtn" type="button">Turn off</button>
+                </div>
+                <p class="note" id="vaultScheduleNote"></p>
+              </section>
+
+              <section class="vault-card" aria-labelledby="vaultLockTitle">
+                <header class="vault-card-head">
+                  <h3 id="vaultLockTitle">Encryption</h3>
+                  <span class="vault-badge" id="vaultLockBadge"></span>
+                </header>
+                <p class="vault-line" id="vaultLockLine"></p>
+                <div class="vault-row">
+                  <input id="vaultPass" type="password" autocomplete="new-password" placeholder="Passphrase" />
+                </div>
+                <div class="vault-row" id="vaultPassConfirmRow">
+                  <input id="vaultPassConfirm" type="password" autocomplete="new-password" placeholder="Type it again" />
+                </div>
+                <div class="vault-row">
+                  <button class="btn" id="vaultLockBtn" type="button">Encrypt and lock</button>
+                  <button class="btn" id="vaultUnlockBtn" type="button">Unlock</button>
+                </div>
+                <p class="note" id="vaultLockNote">There is no recovery if you forget the passphrase. With a passphrase entered, <b>Back up now</b> also encrypts the backup.</p>
+              </section>
+
+              <section class="vault-card vault-card-wide" aria-labelledby="vaultRestoreTitle">
+                <header class="vault-card-head">
+                  <h3 id="vaultRestoreTitle">Restore</h3>
+                </header>
+                <div class="vault-row">
+                  <select id="vaultRestorePick" aria-label="Backup to restore"></select>
+                  <input id="vaultRestorePath" class="hidden" type="text" placeholder="/path/to/amem-backup.db or .db.enc" aria-label="Backup file path" />
+                  <button class="btn secondary" id="vaultRestoreBtn" type="button">Restore…</button>
+                </div>
+                <div class="vault-confirm hidden" id="vaultRestoreConfirm" role="alertdialog" aria-labelledby="vaultRestoreConfirmText">
+                  <p id="vaultRestoreConfirmText"></p>
+                  <div class="vault-row">
+                    <button class="btn" id="vaultRestoreYes" type="button">Replace memory</button>
+                    <button class="btn secondary" id="vaultRestoreNo" type="button">Cancel</button>
+                  </div>
+                </div>
+              </section>
             </div>
-            <div class="add-repo-row">
-              <button class="btn secondary" id="vaultBackupBtn" type="button">Backup now</button>
-              <label class="note" for="vaultHour">Hour</label>
-              <input id="vaultHour" type="number" min="0" max="23" value="3" />
-              <button class="btn secondary" id="vaultScheduleBtn" type="button">Schedule daily</button>
-              <button class="btn secondary" id="vaultUnscheduleBtn" type="button">Unschedule</button>
-            </div>
-            <div class="add-repo-row">
-              <input
-                id="vaultRestorePath"
-                type="text"
-                placeholder="Path to backup .db or .db.enc on this machine"
-              />
-              <button class="btn secondary" id="vaultRestoreBtn" type="button">Restore</button>
-            </div>
-            <p class="note" id="vaultDetail"></p>
+
+            <p class="vault-status" id="vaultStatusMsg" role="status" aria-live="polite"></p>
           </div>
         </div>
 

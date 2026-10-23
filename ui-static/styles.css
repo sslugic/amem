@@ -380,17 +380,141 @@ body {
 }
 
 .vault-panel input[type="password"],
-.vault-panel input[type="number"] {
+.vault-panel input[type="text"],
+.vault-panel select {
   background: var(--bg0);
   color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 0.55rem 0.75rem;
   font: inherit;
+  min-width: 0;
 }
 
-.vault-panel input[type="number"] {
-  width: 4.5rem;
+.vault-panel input[type="password"],
+.vault-panel input[type="text"] {
+  flex: 1;
+}
+
+.vault-panel .hidden {
+  display: none !important;
+}
+
+.vault-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.vault-head .note {
+  margin: 0.25rem 0 0;
+}
+
+.vault-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.75rem;
+}
+
+.vault-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.9rem 1rem;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.vault-card-wide {
+  grid-column: 1 / -1;
+}
+
+.vault-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.vault-card-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.vault-card .note {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.vault-line {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.88rem;
+}
+
+.vault-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.vault-row .btn {
+  padding: 0.55rem 1rem;
+}
+
+.vault-row .btn.small {
+  padding: 0.4rem 0.8rem;
+}
+
+.vault-schedule label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.vault-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.vault-badge[data-tone="ok"] {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.vault-badge[data-tone="warn"] {
+  color: var(--warn);
+  border-color: rgba(232, 184, 109, 0.45);
+}
+
+.vault-confirm {
+  padding: 0.75rem;
+  border: 1px solid rgba(232, 184, 109, 0.45);
+  border-radius: 10px;
+  background: rgba(232, 184, 109, 0.06);
+}
+
+.vault-confirm p {
+  margin: 0 0 0.6rem;
+  font-size: 0.85rem;
+}
+
+.vault-status {
+  margin: 0;
+  min-height: 1.2em;
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+
+.vault-status[data-kind="error"] {
+  color: #ff8a80;
 }
 
 .recipe-card {
