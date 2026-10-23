@@ -1,3 +1,4 @@
+import { currentInstall, findInstalls, hostLaunches, installIssues } from "../install-check.js";
 import { contentTokens } from "../search.js";
 import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -938,6 +939,17 @@ export function handleApi(req: ApiRequest): ApiResponse {
     return ok(vaultStatus());
   }
 
+  // Which amem installs exist and which version each host (Claude Desktop MCP,
+  // Claude Code / Cursor hooks) launches. Read-only; powers Settings → Connections.
+  if (method === "GET" && pathname === "/api/installs") {
+    return ok({
+      current: currentInstall(),
+      installs: findInstalls(),
+      hosts: hostLaunches(),
+      issues: installIssues(),
+    });
+  }
+
   if (method === "POST" && pathname === "/api/vault/lock") {
     return runVaultLock(body);
   }
@@ -1187,6 +1199,16 @@ export function handleApi(req: ApiRequest): ApiResponse {
   if (method === "POST" && pathname === "/api/remember") {
     if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
     return runRemember(repo, body);
+  }
+
+  if (method === "POST" && pathname === "/api/claims/restore") {
+    if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
+    const id = bodyField(body, "id");
+    if (!id) return err(400, "id required");
+    const changed = openDb()
+      .prepare(`UPDATE claims SET status = 'active', superseded_by = NULL, updated_at = ? WHERE repo_id = ? AND id = ?`)
+      .run(new Date().toISOString(), repo.id, id).changes;
+    return changed ? ok({ restored: id }) : err(404, "claim not found");
   }
 
   if (method === "POST" && pathname === "/api/supersede") {
