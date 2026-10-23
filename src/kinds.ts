@@ -99,7 +99,9 @@ function scrubCodeNoise(text: string): string {
 const QUESTION_LEAD =
   /^(can|could|would|should|is|are|was|were|do|does|did|how|what|why|when|where|who|which|will|shall|may|might|am|have|has|had)\b/i;
 const CHAT_LEAD =
-  /^(so|ok|okay|and|but|also|im|i'm|let's|lets|please|thanks|thx|yeah|yep|nope|hmm|wait|actually|btw|oh|hey)\b/i;
+  /^(so|ok|okay|and|but|also|im|i'm|let's|lets|please|thanks|thx|yeah|yep|yes|nope|no|sure|great|cool|alright|perfect|awesome|hmm|wait|actually|btw|oh|hey)\b/i;
+/** Pasted host/system plumbing (task notifications, reminders, agent hand-backs). */
+const SYSTEM_TEXT = /<(?:task-notification|system-reminder|agent-message|tool-use-id)\b|\[SYSTEM NOTIFICATION/i;
 /**
  * Residue of an earlier scrub: "lives in and is", "wired via and included". The
  * preposition must be a word of its own (not "stand-in", "log-in") and the next word
@@ -143,9 +145,14 @@ const CODE_LEAD = /^[\w@./-]*[._/][\w@./-]*(\s|$)/;
  * positive destroys memory. Short, lowercase or oddly-formatted claims are
  * kept here even though capture would now reject them.
  */
+export function isSystemText(text: string): boolean {
+  return SYSTEM_TEXT.test(text ?? "");
+}
+
 export function nonFactReason(text: string): string | null {
   const t = (text ?? "").replace(/\s+/g, " ").trim();
   if (t.length === 0) return "empty";
+  if (SYSTEM_TEXT.test(t)) return "system-text";
   // A question is a request someone typed, not a fact about the code.
   if (QUESTION_MARK.test(t)) return "question";
   // ...and plenty were typed without the question mark ("can we expose amem
@@ -164,6 +171,7 @@ export function nonFactReason(text: string): string | null {
 export function isFactLike(text: string): boolean {
   const t = (text ?? "").replace(/\s+/g, " ").trim();
   if (t.length < 40) return false;
+  if (SYSTEM_TEXT.test(t)) return false;
   if (QUESTION_MARK.test(t)) return false;
   if (QUESTION_LEAD.test(t)) return false;
   if (CHAT_LEAD.test(t)) return false;

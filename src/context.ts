@@ -1,3 +1,4 @@
+import { contentTokens } from "./search.js";
 import {
   getRepoByName,
   listClaims,
@@ -101,6 +102,69 @@ export type BuildContextOptions = {
   includeSkills?: boolean;
 };
 
+/** "What did I do yesterday / this week / for standup": recent dated work is the answer. */
+const TIME_INTENT =
+  /\b(yesterday|today|tonight|this (?:morning|week|sprint)|last (?:week|sprint|friday|monday)|recent(?:ly)?|lately|stand-?up|recap|catch me up|worked on|what (?:did|have) i)\b/i;
+
+export function hasTimeIntent(query: string): boolean {
+  return TIME_INTENT.test(query);
+}
+
+/** Status-like memories go out of date: favour the newest (up to +30% for this week). */
+const DATED_KINDS = new Set(["worklog", "project", "decision", "session", "fact", "plan"]);
+function recencyBoost(c: ClaimRow): number {
+  const kind = (c.kind || "").toLowerCase();
+  // Captured chat notes are not status updates: being recent does not make them right.
+  if (!DATED_KINDS.has(kind) || kind === "session") return 1;
+  const ageDays = (Date.now() - Date.parse(c.updated_at)) / 86_400_000;
+  if (!Number.isFinite(ageDays) || ageDays < 0) return 1;
+  return 1 + 0.3 * Math.max(0, 1 - ageDays / 14);
+}
+
+/**
+ * Drop older near-duplicates of a newer, similar memory (two status updates on the same
+ * work), so the packet shows the current state once instead of its history.
+ */
+export function dropSupersededUpdates<T extends ClaimRow>(ranked: T[], threshold = 0.5): T[] {
+  const kept: Array<{ claim: T; tokens: Set<string> }> = [];
+  for (const claim of ranked) {
+    const tokens = new Set(contentTokens(claim.text).filter((t) => t.length > 2 && !/^\d+$/.test(t)));
+    const dated = DATED_KINDS.has((claim.kind || "").toLowerCase());
+    const twin = dated
+      ? kept.find((k) => {
+          if (!DATED_KINDS.has((k.claim.kind || "").toLowerCase())) return false;
+          let shared = 0;
+          for (const t of tokens) if (k.tokens.has(t)) shared += 1;
+          const union = tokens.size + k.tokens.size - shared;
+          return union > 0 && shared / union >= threshold;
+        })
+      : undefined;
+    if (!twin) {
+      kept.push({ claim, tokens });
+    } else if (claim.updated_at > twin.claim.updated_at) {
+      twin.claim = claim; // keep the newer one in the older one's slot
+      twin.tokens = tokens;
+    }
+  }
+  return kept.map((k) => k.claim);
+}
+
+/** Did this claim match the question on words (or by date), not only by similarity? */
+function hasDirectMatch(c: RankedClaim): boolean {
+  return c.reasons.some((r) => /^(keyword|fts|lead|timely|pinned)/.test(r));
+}
+
+/**
+ * When some memories match the question's words, similarity-only matches far below the
+ * best one are noise (the n-gram embedder rates almost anything a little similar).
+ * With no direct match at all, similarity is all there is, so keep it.
+ */
+export function dropWeakSemanticMatches<T extends RankedClaim>(ranked: T[], ratio = 0.35): T[] {
+  const top = ranked[0]?.score ?? 0;
+  if (top <= 0 || !ranked.some(hasDirectMatch)) return ranked;
+  return ranked.filter((c) => hasDirectMatch(c) || c.score >= top * ratio);
+}
+
 function rankClaims(
   claims: ClaimRow[],
   query: string,
@@ -110,6 +174,7 @@ function rankClaims(
     ftsBoost: Map<string, number>;
     embedBoost: Map<string, number>;
     extraReason?: string;
+    timeIntent?: boolean;
   },
 ): RankedClaim[] {
   return claims.map((c) => {
@@ -117,12 +182,31 @@ function rankClaims(
     const keyword = keywordScoreClaim(c, queryTokens);
     const boost = opts.ftsBoost.get(c.id) ?? 0;
     const embed = opts.embedBoost.get(c.id) ?? 0;
-    const pinBoost = (c.pinned ?? 0) > 0 ? 40 : 0;
     const kindBoost = kindRankBoost(c.kind);
-    const matchSignal = keyword + boost + embed + pinBoost;
+    // Pinning lifts a claim that matches; it must not put an unrelated claim in every
+    // packet. Semantic similarity alone (no keyword or FTS hit) counts half: the n-gram
+    // embedder finds something "close" to almost any question.
+    // Words in the opening of a memory name its topic; the same words deep in a long
+    // update are a passing mention.
+    const lead = c.text.slice(0, 110).toLowerCase();
+    const leadHits = queryTokens.filter((t) => t.length > 2 && lead.includes(t)).length;
+    const leadBoost = leadHits >= 2 ? leadHits * 2.5 : 0;
+    const lexical = keyword + boost + leadBoost;
+    const embedPart = lexical > 0 ? embed : embed * 0.5;
+    const pinBoost = (c.pinned ?? 0) > 0 && (lexical > 0 || embed >= 6) ? 12 : 0;
+    const recency = recencyBoost(c);
+    // A time question ("yesterday", "standup") matches recent dated work by date, not words.
+    const ageDays = (Date.now() - Date.parse(c.updated_at)) / 86_400_000;
+    const timely =
+      opts.timeIntent && DATED_KINDS.has((c.kind || "").toLowerCase()) && c.kind !== "session"
+        ? 16 * Math.max(0, 1 - ageDays / 4) * ((c.kind || "").toLowerCase() === "worklog" ? 1.5 : 1)
+        : 0;
+    const matchSignal = lexical + embedPart + pinBoost + timely;
     const reasons: string[] = [];
     if (opts.extraReason) reasons.push(opts.extraReason);
+    if (timely > 0) reasons.push("timely");
     if (keyword > 0) reasons.push(`keyword+${keyword}`);
+    if (leadBoost > 0) reasons.push(`lead+${leadBoost}`);
     if (boost > 0) reasons.push(`fts+${boost.toFixed(1)}`);
     if (embed > 0) reasons.push(`embed+${embed.toFixed(1)}`);
     if (pinBoost > 0) reasons.push("pinned");
@@ -131,14 +215,8 @@ function rankClaims(
     else if (freshness.status === "fresh" && matchSignal > 0) reasons.push("fresh");
 
     const raw = matchSignal > 0 ? matchSignal + kindBoost * 0.35 : 0;
-    const withFloor =
-      raw > 0
-        ? Math.max(
-            raw,
-            boost > 0 || embed > 0 ? boost + embed + pinBoost + kindBoost * 0.35 : raw,
-          )
-        : 0;
-    const score = withFloor * freshnessScoreMultiplier(freshness.status);
+    if (raw > 0 && recency > 1) reasons.push("recent");
+    const score = raw * recency * freshnessScoreMultiplier(freshness.status);
     if (score > 0 && reasons.length === 0) reasons.push("rank");
     return { ...c, score, freshness, reasons };
   });
@@ -155,7 +233,7 @@ export function buildContext(
   const rootPath = opts.rootPath;
   const includePersonal = opts.includePersonal !== false;
 
-  const queryTokens = tokenize(query);
+  const queryTokens = contentTokens(query);
   const db = openDb();
   const allActive = listClaims(repoId);
   const ftsHits = searchClaimsFts(db, repoId, query, Math.max(limit * 2, 24));
@@ -169,18 +247,21 @@ export function buildContext(
     embedBoost.set(hit.id, embedBoostFromScore(hit.score));
   }
 
-  const scored = rankClaims(allActive, query, queryTokens, {
+  const timeIntent = hasTimeIntent(query);
+  const scoredAll = rankClaims(allActive, query, queryTokens, {
     rootPath,
     ftsBoost,
     embedBoost,
+    timeIntent,
   })
     .filter((c) => (queryTokens.length === 0 ? true : c.score > 0))
     .sort((a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at));
+  const scored = dropWeakSemanticMatches(scoredAll);
 
   // If no keyword/FTS/embed hits, return newest fresh-leaning claims as weak fallback
   let selected: RankedClaim[] =
     scored.length > 0
-      ? scored.slice(0, limit)
+      ? dropSupersededUpdates(scored).slice(0, limit)
       : allActive.slice(0, Math.min(5, limit)).map((c) => {
           const freshness = assessClaimFreshness(rootPath, c);
           const reasons = ["fallback:recent"];
@@ -209,17 +290,18 @@ export function buildContext(
           ftsBoost: pFts,
           embedBoost: pEmbed,
           extraReason: "personal",
+          timeIntent,
         })
           .filter((c) => c.score > 0)
           .sort((a, b) => b.score - a.score)
-          .slice(0, 3);
+          .slice(0, Math.max(1, Math.ceil(limit / 2)));
         if (personalRanked.length > 0) {
-          const room = Math.max(1, Math.min(3, Math.floor(limit / 4) || 1));
-          const take = personalRanked.slice(0, room);
-          const keep = selected.slice(0, Math.max(0, limit - take.length));
-          selected = [...keep, ...take].sort(
-            (a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at),
-          );
+          // Personal and repo memories compete on score; personal takes at most half.
+          selected = dropSupersededUpdates(
+            [...selected, ...personalRanked].sort(
+              (a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at),
+            ),
+          ).slice(0, limit);
         }
       }
     }
@@ -264,14 +346,23 @@ export function buildContext(
       ? notesRaw
       : listConversationNotes(repoId, 5).map((n) => ({ ...n, score: 0 }));
 
-  const openTasks = listOpenTasksForContext(repoId, 8);
+  // Session start (no question): the open backlog. A question: only the open tasks it is
+  // about, and done tasks only when they match it on two or more meaningful words.
+  const openTasks =
+    queryTokens.length === 0
+      ? listOpenTasksForContext(repoId, 8)
+      : listOpenTasksForContext(repoId, 24)
+          .map((t) => ({ ...t, score: scoreTask(t, queryTokens) }))
+          .filter((t) => t.score >= 3)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 5);
   const doneTasks =
     queryTokens.length > 0
-      ? listTasks(repoId, { status: "done", includeDone: true, limit: 20 })
+      ? listTasks(repoId, { status: "done", includeDone: true, limit: 40 })
           .map((t) => ({ ...t, score: scoreTask(t, queryTokens) }))
-          .filter((t) => t.score > 0)
+          .filter((t) => t.score >= 5)
           .sort((a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at))
-          .slice(0, 4)
+          .slice(0, 3)
       : [];
   const tasks = [...openTasks, ...doneTasks];
   const skillsOn = opts.includeSkills !== false && loadPolicy().policy.skills_enabled;
