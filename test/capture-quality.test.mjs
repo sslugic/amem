@@ -105,6 +105,37 @@ describe("nonFactReason (deletion predicate)", () => {
   });
 });
 
+describe("nonFactReason keeps real facts that look like residue (false positives seen in use)", () => {
+  it("keeps prose endings, hyphenated words, domains, paths and URL query strings", async () => {
+    const { nonFactReason } = await import("../dist/kinds.js");
+    for (const text of [
+      "An existing bad binding is removed with: amem wipe --yes, then re-run init.",
+      "The build installs on the iPhone after Xcode Apple ID sign-in. PR #19 adds the widget.",
+      "Port 4318 is set in .claude/launch.json for the local dashboard.",
+      "Approve each track before it goes in. Six candidates were reviewed.",
+      "The submission was picked up and did not go through; the resubmission passed.",
+      "Each env var name points at, as checked via the application API, one staging app.",
+      "The Sumsub mock stand-in is complete and merged into main.",
+      "Build 8 was approved immediately, status Testing, with What to Test notes.",
+      "Sandbox links are real in.sumsub.com sbx_ links that open the hosted flow.",
+      "How-to: kyc-link applicants are created through the hosted link endpoint.",
+      "The dashboard preview renders Reports with fixtures (?view=reports) in local mode.",
+      "Referral links use invite.html?r=CODE and the language order is ?lang= then saved choice.",
+      "Billing errors used to surface as 'out of AI credits (this needs ?)' before PR 52.",
+      "Deep links: pulse://coach?q=TEXT sends text to the Coach screen.",
+    ]) {
+      assert.equal(nonFactReason(text), null, text);
+    }
+  });
+
+  it("still flags real residue and real questions", async () => {
+    const { nonFactReason } = await import("../dist/kinds.js");
+    assert.equal(nonFactReason("The config is read from , then cached for the session."), "scrub-residue");
+    assert.equal(nonFactReason("Ship it on Friday or do we wait for QA?"), "question");
+    assert.equal(nonFactReason("Should the loader cache it (or not)?"), "question");
+  });
+});
+
 describe("nonFactReason catches what the first purge missed", () => {
   it("flags questions typed without a question mark", async () => {
     const { nonFactReason } = await import("../dist/kinds.js");

@@ -100,13 +100,29 @@ const QUESTION_LEAD =
   /^(can|could|would|should|is|are|was|were|do|does|did|how|what|why|when|where|who|which|will|shall|may|might|am|have|has|had)\b/i;
 const CHAT_LEAD =
   /^(so|ok|okay|and|but|also|im|i'm|let's|lets|please|thanks|thx|yeah|yep|nope|hmm|wait|actually|btw|oh|hey)\b/i;
-/** Residue of an earlier scrub: "lives in and is", "wired via and included". */
-const DANGLING = /\b(in|at|from|to|via|inside|under|with|into)\s+(and|is|was|the file|what)\b/i;
+/**
+ * Residue of an earlier scrub: "lives in and is", "wired via and included". The
+ * preposition must be a word of its own (not "stand-in", "log-in") and the next word
+ * lowercase, so "notes with What to Test" or "stand-in is complete" are left alone.
+ */
+const DANGLING = /(?<![\w-])(?:[Ii]n|[Aa]t|[Ff]rom|[Tt]o|[Vv]ia|[Ii]nside|[Uu]nder|[Ww]ith|[Ii]nto)\s+(?:and|is|was|the file|what)\b/;
 /** Interrogative opener plus a subject — a question missing its "?". */
 const QUESTION_SHAPE =
   /^(can|could|should|would|do|does|did|is|are|will|shall|how|what|why|when|where|who|which)\s+(?:(?:do|does|did|can|could|should|would|is|are|will|shall)\s+)?(we|you|i|amem)\b/i;
-/** Preposition running into punctuation or end of string: the object was deleted. */
-const TRAILING_PREPOSITION = /\b(in|at|from|to|via|inside|under|with|into|through)\s*([.,;:]|$)/i;
+/**
+ * A preposition whose object was deleted, leaving a space before the punctuation:
+ * "memory lives under ." or "reads it from , then". Ordinary prose ("before it goes
+ * in.", "removed with:"), hyphenated words ("sign-in.", "How-to:"), domains
+ * ("in.sumsub.com") and paths ("in .claude/launch.json") do not have that shape.
+ */
+const TRAILING_PREPOSITION =
+  /(?<![\w-])(?:in|at|from|to|via|inside|under|with|into|through)\s+[.,;:](?=\s|$)/i;
+/**
+ * A question mark that ends a question: after a word or closing quote/bracket and
+ * followed by space or end. URL query strings ("?view=reports", "invite.html?r=CODE")
+ * and quoted placeholders ("needs ?)") are not questions.
+ */
+const QUESTION_MARK = /[\w"'\u2019)\]]\?(?=\s|$|["'\u2019)])/;
 
 /** A leading token that looks like code (path, dotted or snake_case name). */
 const CODE_LEAD = /^[\w@./-]*[._/][\w@./-]*(\s|$)/;
@@ -131,7 +147,7 @@ export function nonFactReason(text: string): string | null {
   const t = (text ?? "").replace(/\s+/g, " ").trim();
   if (t.length === 0) return "empty";
   // A question is a request someone typed, not a fact about the code.
-  if (t.includes("?")) return "question";
+  if (QUESTION_MARK.test(t)) return "question";
   // ...and plenty were typed without the question mark ("can we expose amem
   // data via mcp"). Require an interrogative opener FOLLOWED by a subject, so
   // this cannot swallow a declarative sentence that merely starts with "Is".
@@ -148,7 +164,7 @@ export function nonFactReason(text: string): string | null {
 export function isFactLike(text: string): boolean {
   const t = (text ?? "").replace(/\s+/g, " ").trim();
   if (t.length < 40) return false;
-  if (t.includes("?")) return false;
+  if (QUESTION_MARK.test(t)) return false;
   if (QUESTION_LEAD.test(t)) return false;
   if (CHAT_LEAD.test(t)) return false;
   if (DANGLING.test(t)) return false;

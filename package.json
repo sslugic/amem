@@ -1,6 +1,6 @@
 {
   "name": "@iamem/amem",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Local personal agent memory for Cursor and Claude Code. Private to your machine — never shared.",
   "type": "module",
   "bin": {
