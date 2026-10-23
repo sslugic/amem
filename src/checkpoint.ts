@@ -29,9 +29,9 @@ function mcpToolName(name: string): string {
   const tool = name.split("__").slice(2).join("__") || name;
   return tool.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
 }
-const AMEM_SAVE = /amem_(?:remember|skill_save|task_add|task_update|task_complete|cli_save)$/;
+const AMEM_SAVE = /amem_(?:remember|supersede|skill_save|task_add|task_update|task_complete|cli_save)$/;
 /** The same saves made through the CLI from a shell tool (`amem remember "…"`). */
-const AMEM_CLI_SAVE = /(?:^|[\s;&|(/])amem\s+(?:remember|skills?\s+(?:new|import)|task\s+(?:add|update|complete|delete))\b/;
+const AMEM_CLI_SAVE = /(?:^|[\s;&|(/])amem\s+(?:remember|supersede|skills?\s+(?:new|import)|task\s+(?:add|update|complete|delete))\b/;
 
 export function isMutatingTool(name: string): boolean {
   if (!name || READ_ONLY_TOOLS.has(name)) return false;

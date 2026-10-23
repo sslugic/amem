@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdirSync, copyFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync, mkdirSync, copyFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { amemHome, dbPath } from "./paths.js";
 
@@ -116,6 +116,85 @@ export function defaultBackupDir(): string {
   return join(amemHome(), "backups");
 }
 
+export type BackupRetention = { keepDays: number; keepMonths: number; keepRecent: number; keepPreRestore: number };
+
+/** Defaults: newest per day for 14 days, newest per month for 12 months, always the last 3. */
+export function backupRetention(env: Record<string, string | undefined> = process.env): BackupRetention {
+  const num = (v: string | undefined, d: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : d;
+  };
+  return {
+    keepDays: num(env.AMEM_BACKUP_KEEP_DAYS, 14),
+    keepMonths: num(env.AMEM_BACKUP_KEEP_MONTHS, 12),
+    keepRecent: Math.max(1, num(env.AMEM_BACKUP_KEEP_RECENT, 3)),
+    keepPreRestore: Math.max(1, num(env.AMEM_BACKUP_KEEP_PRE_RESTORE, 5)),
+  };
+}
+
+/**
+ * Which backup files to delete under the retention policy. Pure: takes names with
+ * modification times, returns the names to remove. `AMEM_BACKUP_KEEP_DAYS=0` and
+ * `AMEM_BACKUP_KEEP_MONTHS=0` still keep the newest `keepRecent`.
+ */
+export function backupsToPrune(
+  files: Array<{ name: string; mtimeMs: number }>,
+  policy: BackupRetention = backupRetention(),
+  nowMs = Date.now(),
+): string[] {
+  const isPre = (n: string) => n.startsWith("pre-restore-");
+  const regular = files.filter((f) => !isPre(f.name)).sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const pre = files.filter((f) => isPre(f.name)).sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const keep = new Set<string>(regular.slice(0, policy.keepRecent).map((f) => f.name));
+  const dayKey = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  const monthKey = (ms: number) => new Date(ms).toISOString().slice(0, 7);
+  const seenDays = new Set<string>();
+  const seenMonths = new Set<string>();
+  for (const f of regular) {
+    const ageDays = (nowMs - f.mtimeMs) / 86_400_000;
+    const day = dayKey(f.mtimeMs);
+    if (ageDays <= policy.keepDays && !seenDays.has(day)) {
+      seenDays.add(day);
+      keep.add(f.name);
+    }
+    const month = monthKey(f.mtimeMs);
+    if (ageDays <= policy.keepMonths * 31 && !seenMonths.has(month)) {
+      seenMonths.add(month);
+      keep.add(f.name);
+    }
+  }
+  for (const f of pre.slice(0, policy.keepPreRestore)) keep.add(f.name);
+  return files.map((f) => f.name).filter((n) => !keep.has(n));
+}
+
+/** Apply retention to a backup folder. Returns the files removed and bytes freed. */
+export function pruneBackups(dir = defaultBackupDir(), policy: BackupRetention = backupRetention()): {
+  removed: string[];
+  bytesFreed: number;
+} {
+  if (!existsSync(dir)) return { removed: [], bytesFreed: 0 };
+  const files = readdirSync(dir)
+    .filter((n) => n.endsWith(".db") || n.endsWith(".db.enc"))
+    .map((name) => {
+      const st = statSync(join(dir, name));
+      return { name, mtimeMs: st.mtimeMs, bytes: st.size };
+    });
+  const doomed = new Set(backupsToPrune(files, policy));
+  let bytesFreed = 0;
+  const removed: string[] = [];
+  for (const f of files) {
+    if (!doomed.has(f.name)) continue;
+    try {
+      unlinkSync(join(dir, f.name));
+      removed.push(f.name);
+      bytesFreed += f.bytes;
+    } catch {
+      // a file we cannot remove is left for the next run
+    }
+  }
+  return { removed, bytesFreed };
+}
+
 export function createBackup(opts: {
   outDir?: string;
   passphrase?: string;
@@ -151,6 +230,17 @@ export function createBackup(opts: {
   const out = join(dir, `${label}-${stamp}.db`);
   copyFileSync(source, out);
   return { path: out, encrypted: false };
+}
+
+/** Back up, then apply retention to the default backup folder (not to a custom --out dir). */
+export function createBackupWithRetention(opts: Parameters<typeof createBackup>[0] = {}): ReturnType<typeof createBackup> & {
+  pruned: number;
+  bytesFreed: number;
+} {
+  const result = createBackup(opts);
+  if (opts.outDir) return { ...result, pruned: 0, bytesFreed: 0 };
+  const { removed, bytesFreed } = pruneBackups();
+  return { ...result, pruned: removed.length, bytesFreed };
 }
 
 /** Replace graph.db from a local backup (plaintext .db or AMEM1 .enc). Caller must closeDb(). */

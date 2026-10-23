@@ -45,7 +45,7 @@ const TOOLS = [
   {
     name: "amem_remember",
     description:
-      "Store a durable local fact in amem (stays on this machine). Use kind `private` (or anchor `private`) for personal, non-work facts so they never appear in work repositories' context.",
+      "Store a durable local fact in amem (stays on this machine). Use kind `private` (or anchor `private`) for personal, non-work facts so they never appear in work repositories' context. When the fact replaces an older one (a newer status, a fixed bug, a changed decision), pass the old claim ids in `supersedes` so the outdated memory stops being served. The response lists `possiblySupersedes`: older look-alikes to retire with amem_supersede if they are now wrong.",
     inputSchema: {
       type: "object",
       properties: {
@@ -53,8 +53,23 @@ const TOOLS = [
         workspace: { type: "string" },
         kind: { type: "string" },
         anchors: { type: "array", items: { type: "string" } },
+        supersedes: { type: "array", items: { type: "string" }, description: "Claim ids this fact replaces" },
       },
       required: ["text"],
+    },
+  },
+  {
+    name: "amem_supersede",
+    description:
+      "Retire outdated claims so they stop appearing in context: marks them superseded (kept for history, not served). Pass `by` with the claim id that replaces them, if any.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ids: { type: "array", items: { type: "string" } },
+        by: { type: "string", description: "Claim id of the newer fact (optional)" },
+        workspace: { type: "string" },
+      },
+      required: ["ids"],
     },
   },
   {
@@ -420,10 +435,16 @@ function callTool(name: string, args: Record<string, unknown>, fallbackWorkspace
         workspace,
         kind: typeof args.kind === "string" ? args.kind : "session",
         anchors: args.anchors,
+        supersedes: args.supersedes,
         source: "mcp",
       },
       { workspace },
     );
+    if (result.status >= 400) return textResult(JSON.stringify(result.body), true);
+    return textResult(JSON.stringify(result.body));
+  }
+  if (name === "amem_supersede") {
+    const result = api("POST", "/api/supersede", { ids: args.ids, by: args.by, workspace }, { workspace });
     if (result.status >= 400) return textResult(JSON.stringify(result.body), true);
     return textResult(JSON.stringify(result.body));
   }

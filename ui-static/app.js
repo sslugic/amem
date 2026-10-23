@@ -532,7 +532,10 @@ function paintVault() {
   const scheduleNote = $("#vaultScheduleNote");
   if (scheduleNote) {
     const dir = String(backup.dir || "~/.amem/backups").replace(/^\/(?:Users|home)\/[^/]+/, "~");
-    scheduleNote.textContent = `${backup.count ?? 0} backup${backup.count === 1 ? "" : "s"} kept in ${dir}`;
+    const keep = backup.retention
+      ? ` Keeps the newest per day for ${backup.retention.keepDays} days and one per month for ${backup.retention.keepMonths} months.`
+      : "";
+    scheduleNote.textContent = `${backup.count ?? 0} backup${backup.count === 1 ? "" : "s"} · ${formatBytes(backup.totalBytes)} in ${dir}.${keep}`;
     scheduleNote.title = backup.dir || "";
   }
 
@@ -4331,7 +4334,9 @@ $("#vaultBackupBtn")?.addEventListener("click", (e) =>
     button: e.currentTarget,
     busy: "Backing up…",
     clearPassphrase: false,
-    success: (r) => `Backed up${r.encrypted ? " (encrypted)" : ""}: ${String(r.path || r.file || "").split("/").pop() || "done"}.`,
+    success: (r) =>
+      `Backed up${r.encrypted ? " (encrypted)" : ""}: ${String(r.path || r.file || "").split("/").pop() || "done"}.` +
+      (r.pruned ? ` Removed ${r.pruned} old backup${r.pruned === 1 ? "" : "s"} (${formatBytes(r.bytesFreed)}).` : ""),
   }),
 );
 $("#vaultLockBtn")?.addEventListener("click", (e) =>
