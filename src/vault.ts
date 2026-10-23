@@ -6,7 +6,7 @@ import {
   encryptionConfigured,
   isDbEncryptedAtRest,
 } from "./crypto.js";
-import { backupSchedulePath, isBackupScheduleInstalled } from "./backup-schedule.js";
+import { backupSchedulePath, isBackupScheduleInstalled, readBackupScheduleHour } from "./backup-schedule.js";
 import { dbPath } from "./paths.js";
 
 export type BackupEntry = {
@@ -27,6 +27,7 @@ export type VaultStatus = {
     dir: string;
     scheduled: boolean;
     schedulePath: string;
+    scheduledHour: number | null;
     last: BackupEntry | null;
     recent: BackupEntry[];
     count: number;
@@ -64,6 +65,8 @@ export function vaultStatus(): VaultStatus {
       dir: defaultBackupDir(),
       scheduled: isBackupScheduleInstalled(),
       schedulePath: isBackupScheduleInstalled() ? backupSchedulePath() : "",
+      /** Hour (0-23) of the daily run, minute is always :15. Null when unknown or off. */
+      scheduledHour: readBackupScheduleHour(),
       last: backups[0] ?? null,
       recent: backups.slice(0, 8),
       count: backups.length,

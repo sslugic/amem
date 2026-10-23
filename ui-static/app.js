@@ -450,16 +450,140 @@ function vaultSummaryText() {
   return bits.join(" · ");
 }
 
+function formatBytes(n) {
+  const v = Number(n) || 0;
+  if (v >= 1024 * 1024) return `${(v / (1024 * 1024)).toFixed(1)} MB`;
+  if (v >= 1024) return `${Math.round(v / 1024)} KB`;
+  return `${v} B`;
+}
+
+function formatDateTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso || "");
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function hourLabel(h) {
+  return `${String(h).padStart(2, "0")}:15`;
+}
+
+/** Lock state in plain words: what the user has, and the one action that fits. */
+function vaultLockState(v) {
+  if (v?.encryptedAtRest && !v?.unlocked) return "locked";
+  if (v?.encCopyPresent || v?.encryptedAtRest) return "unlocked";
+  return "plain";
+}
+
+function setVaultBusy(button, busyText) {
+  if (!button) return () => {};
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = busyText;
+  return () => {
+    button.disabled = false;
+    button.textContent = label;
+  };
+}
+
+function vaultMessage(text, kind = "ok") {
+  const el = $("#vaultStatusMsg");
+  if (!el) return;
+  el.textContent = text;
+  el.dataset.kind = kind;
+  clearTimeout(vaultMessage.timer);
+  if (kind === "ok") vaultMessage.timer = setTimeout(() => (el.textContent = ""), 6000);
+}
+
 function paintVault() {
   const chips = $("#vaultChips");
   if (chips) chips.textContent = vaultSummaryText();
-  const detail = $("#vaultDetail");
-  if (detail && state.vault) {
-    const last = state.vault.backup?.last;
-    detail.textContent = last
-      ? `Last backup: ${last.name} · ${last.encrypted ? "encrypted" : "plaintext"} · stays in ${state.vault.backup.dir}`
-      : `Backups go to ${state.vault.backup?.dir || "~/.amem/backups"} on this machine.`;
+  const v = state.vault;
+  if (!v) return;
+  const backup = v.backup || {};
+
+  // Backups card
+  const last = backup.last;
+  const lastLine = $("#vaultLastBackup");
+  if (lastLine) {
+    lastLine.textContent = last
+      ? `Last backup ${formatDateTime(last.mtime)} · ${formatBytes(last.bytes)} · ${last.encrypted ? "encrypted" : "not encrypted"}`
+      : "No backups yet.";
+    lastLine.title = last ? last.path : "";
   }
+  const scheduled = Boolean(backup.scheduled);
+  const hour = Number.isInteger(backup.scheduledHour) ? backup.scheduledHour : null;
+  const badge = $("#vaultBackupBadge");
+  if (badge) {
+    badge.textContent = scheduled ? (hour === null ? "Daily" : `Daily ${hourLabel(hour)}`) : "Manual only";
+    badge.dataset.tone = scheduled ? "ok" : "muted";
+  }
+  const select = $("#vaultHour");
+  if (select && select.options.length === 0) {
+    for (let h = 0; h < 24; h += 1) select.add(new Option(hourLabel(h), String(h)));
+  }
+  if (select && !select.dataset.touched) select.value = String(hour ?? 3);
+  const scheduleBtn = $("#vaultScheduleBtn");
+  const unscheduleBtn = $("#vaultUnscheduleBtn");
+  if (scheduleBtn) {
+    scheduleBtn.textContent = scheduled ? "Change time" : "Turn on";
+    scheduleBtn.disabled = scheduled && hour !== null && select?.value === String(hour);
+  }
+  unscheduleBtn?.classList.toggle("hidden", !scheduled);
+  const scheduleNote = $("#vaultScheduleNote");
+  if (scheduleNote) {
+    const dir = String(backup.dir || "~/.amem/backups").replace(/^\/(?:Users|home)\/[^/]+/, "~");
+    scheduleNote.textContent = `${backup.count ?? 0} backup${backup.count === 1 ? "" : "s"} kept in ${dir}`;
+    scheduleNote.title = backup.dir || "";
+  }
+
+  // Encryption card
+  const lock = vaultLockState(v);
+  const lockBadge = $("#vaultLockBadge");
+  if (lockBadge) {
+    lockBadge.textContent = { locked: "Locked", unlocked: "Unlocked", plain: "Not encrypted" }[lock];
+    lockBadge.dataset.tone = lock === "plain" ? "warn" : "ok";
+  }
+  const lockLine = $("#vaultLockLine");
+  if (lockLine) {
+    lockLine.textContent = {
+      locked: "Memory is encrypted and locked. Enter your passphrase to use it again.",
+      unlocked: "Memory is unlocked for use. An encrypted copy exists; lock it again when you step away.",
+      plain: "Memory is stored as a plain file on this machine. Choose a passphrase to encrypt it.",
+    }[lock];
+  }
+  const pass = $("#vaultPass");
+  if (pass) pass.placeholder = lock === "plain" ? "Choose a passphrase" : "Passphrase";
+  $("#vaultPassConfirmRow")?.classList.toggle("hidden", lock !== "plain");
+  const lockBtn = $("#vaultLockBtn");
+  const unlockBtn = $("#vaultUnlockBtn");
+  lockBtn?.classList.toggle("hidden", lock === "locked");
+  unlockBtn?.classList.toggle("hidden", lock !== "locked");
+  if (lockBtn) lockBtn.textContent = lock === "plain" ? "Encrypt and lock" : "Lock now";
+  paintVaultPassButtons();
+
+  // Restore card
+  const pick = $("#vaultRestorePick");
+  if (pick) {
+    const keep = pick.value;
+    pick.innerHTML = "";
+    for (const b of backup.recent || []) {
+      pick.add(new Option(`${formatDateTime(b.mtime)} · ${formatBytes(b.bytes)}${b.encrypted ? " · encrypted" : ""}`, b.path));
+    }
+    pick.add(new Option("Other file…", "__other__"));
+    if (keep && [...pick.options].some((o) => o.value === keep)) pick.value = keep;
+    $("#vaultRestorePath")?.classList.toggle("hidden", pick.value !== "__other__");
+  }
+}
+
+/** Lock/Unlock stay disabled until the passphrase (and its confirmation) are filled in. */
+function paintVaultPassButtons() {
+  const lock = vaultLockState(state.vault);
+  const pass = vaultPassphrase();
+  const confirm = $("#vaultPassConfirm")?.value || "";
+  const lockBtn = $("#vaultLockBtn");
+  const unlockBtn = $("#vaultUnlockBtn");
+  if (lockBtn) lockBtn.disabled = !pass || (lock === "plain" && pass !== confirm);
+  if (unlockBtn) unlockBtn.disabled = !pass;
 }
 
 async function focusPersonal() {
@@ -482,25 +606,41 @@ function vaultPassphrase() {
 }
 
 function clearVaultPass() {
-  const input = $("#vaultPass");
-  if (input) input.value = "";
+  for (const id of ["#vaultPass", "#vaultPassConfirm"]) {
+    const input = $(id);
+    if (input) input.value = "";
+  }
+  paintVaultPassButtons();
 }
 
-async function vaultAction(path, extra = {}) {
+/**
+ * Run one vault action with visible progress and an inline result. Errors stay in the
+ * panel instead of window.alert, which desktop shells can swallow silently.
+ */
+async function vaultAction(path, extra = {}, ui = {}) {
   const passphrase = vaultPassphrase();
+  const done = setVaultBusy(ui.button, ui.busy || "Working…");
   try {
     const body = { ...extra };
-    if (passphrase) body.passphrase = passphrase;
+    if (passphrase && ui.sendPassphrase !== false) body.passphrase = passphrase;
     const result = await apiUnscoped(path, { method: "POST", body: JSON.stringify(body) });
-    state.vault = result.vault || result;
-    paintVault();
-    clearVaultPass();
-    if (path.includes("/lock") || path.includes("/unlock")) {
+    state.vault = result.vault || (result.backup && result.dbPath ? result : state.vault);
+    if (!result.vault && !result.backup) state.vault = await apiUnscoped("/api/vault").catch(() => state.vault);
+    if (ui.clearPassphrase !== false) clearVaultPass();
+    if (path.includes("/lock") || path.includes("/unlock") || path.includes("/restore")) {
       await refreshStatus().catch(() => {});
       await render();
     }
+    done();
+    paintVault();
+    vaultMessage(typeof ui.success === "function" ? ui.success(result) : ui.success || "Done.", "ok");
+    return result;
   } catch (e) {
-    alert(e.message);
+    done();
+    paintVault();
+    const raw = e?.message || String(e);
+    vaultMessage(/unable to authenticate data|bad decrypt|wrong passphrase/i.test(raw) ? "Wrong passphrase." : raw, "error");
+    return null;
   }
 }
 
@@ -4181,22 +4321,80 @@ $("#addRepoBtn")?.addEventListener("click", () => setAddPanel(true));
 $("#personalBtn")?.addEventListener("click", () => focusPersonal());
 $("#vaultToggle")?.addEventListener("click", () => {
   $("#vaultPanel")?.classList.toggle("hidden");
+  paintVault();
 });
-$("#vaultLockBtn")?.addEventListener("click", () => vaultAction("/api/vault/lock"));
-$("#vaultUnlockBtn")?.addEventListener("click", () => vaultAction("/api/vault/unlock"));
-$("#vaultBackupBtn")?.addEventListener("click", () => vaultAction("/api/vault/backup"));
-$("#vaultScheduleBtn")?.addEventListener("click", () => {
+$("#vaultCloseBtn")?.addEventListener("click", () => $("#vaultPanel")?.classList.add("hidden"));
+$("#vaultPass")?.addEventListener("input", paintVaultPassButtons);
+$("#vaultPassConfirm")?.addEventListener("input", paintVaultPassButtons);
+$("#vaultBackupBtn")?.addEventListener("click", (e) =>
+  vaultAction("/api/vault/backup", {}, {
+    button: e.currentTarget,
+    busy: "Backing up…",
+    clearPassphrase: false,
+    success: (r) => `Backed up${r.encrypted ? " (encrypted)" : ""}: ${String(r.path || r.file || "").split("/").pop() || "done"}.`,
+  }),
+);
+$("#vaultLockBtn")?.addEventListener("click", (e) =>
+  vaultAction("/api/vault/lock", {}, { button: e.currentTarget, busy: "Locking…", success: "Memory is encrypted and locked." }),
+);
+$("#vaultUnlockBtn")?.addEventListener("click", (e) =>
+  vaultAction("/api/vault/unlock", {}, { button: e.currentTarget, busy: "Unlocking…", success: "Unlocked." }),
+);
+$("#vaultHour")?.addEventListener("change", (e) => {
+  e.currentTarget.dataset.touched = "1";
+  paintVault();
+});
+$("#vaultScheduleBtn")?.addEventListener("click", async (e) => {
   const hour = Number($("#vaultHour")?.value);
-  vaultAction("/api/vault/backup/schedule", { hour: Number.isFinite(hour) ? hour : 3 });
+  const h = Number.isFinite(hour) ? hour : 3;
+  const res = await vaultAction("/api/vault/backup/schedule", { hour: h }, {
+    button: e.currentTarget,
+    busy: "Saving…",
+    sendPassphrase: false,
+    clearPassphrase: false,
+    success: `Daily backup at ${hourLabel(h)}.`,
+  });
+  if (res) delete $("#vaultHour").dataset.touched;
+  paintVault();
 });
-$("#vaultUnscheduleBtn")?.addEventListener("click", () => vaultAction("/api/vault/backup/unschedule"));
+$("#vaultUnscheduleBtn")?.addEventListener("click", (e) =>
+  vaultAction("/api/vault/backup/unschedule", {}, {
+    button: e.currentTarget,
+    busy: "Turning off…",
+    sendPassphrase: false,
+    clearPassphrase: false,
+    success: "Daily backup turned off.",
+  }),
+);
+$("#vaultRestorePick")?.addEventListener("change", (e) => {
+  $("#vaultRestorePath")?.classList.toggle("hidden", e.currentTarget.value !== "__other__");
+  $("#vaultRestoreConfirm")?.classList.add("hidden");
+});
+function vaultRestoreTarget() {
+  const pick = $("#vaultRestorePick")?.value;
+  return pick === "__other__" ? $("#vaultRestorePath")?.value?.trim() || "" : pick || "";
+}
 $("#vaultRestoreBtn")?.addEventListener("click", () => {
-  const file = $("#vaultRestorePath")?.value?.trim();
+  const file = vaultRestoreTarget();
   if (!file) {
-    alert("Path to a local backup .db or .db.enc is required");
+    vaultMessage("Choose a backup, or enter the path to a backup file.", "error");
     return;
   }
-  vaultAction("/api/vault/restore", { file });
+  const encrypted = file.endsWith(".enc");
+  $("#vaultRestoreConfirmText").textContent =
+    `Replace current memory with ${file.split("/").pop()}? A safety copy of the current memory is saved to the backups folder first.` +
+    (encrypted && !vaultPassphrase() ? " This backup is encrypted: enter its passphrase in Encryption first." : "");
+  $("#vaultRestoreConfirm")?.classList.remove("hidden");
+});
+$("#vaultRestoreNo")?.addEventListener("click", () => $("#vaultRestoreConfirm")?.classList.add("hidden"));
+$("#vaultRestoreYes")?.addEventListener("click", async (e) => {
+  const file = vaultRestoreTarget();
+  const res = await vaultAction("/api/vault/restore", { file }, {
+    button: e.currentTarget,
+    busy: "Restoring…",
+    success: (r) => `Restored ${file.split("/").pop()}${r.safetyCopy ? `. Previous memory saved as ${String(r.safetyCopy).split("/").pop()}` : ""}.`,
+  });
+  if (res) $("#vaultRestoreConfirm")?.classList.add("hidden");
 });
 $("#renameWsBtn")?.addEventListener("click", () => {
   renameWorkspaceUi(matchBoundRepo() || state.status?.repo);
