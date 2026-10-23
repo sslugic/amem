@@ -215,7 +215,10 @@ describe("UI setup stepper + brain defaults", () => {
     assert.match(UI_APP, /if \(fromUrl === "all" \|\| !hasTrackedRepo\) return true/);
     assert.match(UI_APP, /if \(!state\.brainAll\) opt\.selected = true/);
     assert.match(UI_APP, /function setupIsComplete/);
-    assert.match(UI_APP, /You're set up/);
+    // Once set up, Settings shows connections, backup and projects as cards.
+    assert.match(UI_APP, /section class="page settings-page"/);
+    assert.match(UI_APP, /id="connectionsCard"/);
+    assert.match(UI_APP, /function mountVaultIn/);
     assert.match(UI_APP, /data-setup-step/);
     assert.match(UI_APP, /id="editSetup"/);
     assert.match(UI_APP, /function shopBuyCardHtml/);

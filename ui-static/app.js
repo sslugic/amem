@@ -272,6 +272,89 @@ async function apiUnscoped(path, options = {}) {
   return data;
 }
 
+
+/**
+ * In-page notice. window.alert/confirm are swallowed by desktop shells (the Claude and
+ * Cursor webviews), which made buttons look dead, so every message goes through here.
+ */
+function notify(message, kind) {
+  const text = String(message ?? "");
+  const tone = kind || (/error|fail|invalid|denied|not found|required|cannot|unable/i.test(text) ? "error" : "info");
+  let host = document.getElementById("toastHost");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "toastHost";
+    host.className = "toast-host";
+    host.setAttribute("role", "status");
+    host.setAttribute("aria-live", "polite");
+    document.body.appendChild(host);
+  }
+  const el = document.createElement("div");
+  el.className = `toast ${tone}`;
+  el.textContent = text;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "toast-x";
+  close.setAttribute("aria-label", "Dismiss");
+  close.textContent = "×";
+  close.addEventListener("click", () => el.remove());
+  el.appendChild(close);
+  host.appendChild(el);
+  setTimeout(() => el.remove(), tone === "error" ? 9000 : 5000);
+}
+
+/** In-page confirm dialog; resolves true when the user confirms. */
+function askConfirm(message, { confirmLabel = "Confirm", danger = true } = {}) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.className = "confirm-scrim";
+    wrap.innerHTML = `<div class="confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="confirmText">
+      <p id="confirmText"></p>
+      <div class="confirm-actions">
+        <button type="button" class="btn secondary" data-no>Cancel</button>
+        <button type="button" class="btn ${danger ? "danger-solid" : ""}" data-yes></button>
+      </div></div>`;
+    wrap.querySelector("#confirmText").textContent = String(message);
+    wrap.querySelector("[data-yes]").textContent = confirmLabel;
+    const done = (v) => {
+      wrap.remove();
+      document.removeEventListener("keydown", onKey);
+      resolve(v);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") done(false);
+      if (e.key === "Enter") done(true);
+    };
+    wrap.querySelector("[data-no]").addEventListener("click", () => done(false));
+    wrap.querySelector("[data-yes]").addEventListener("click", () => done(true));
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) done(false);
+    });
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(wrap);
+    wrap.querySelector("[data-yes]").focus();
+  });
+}
+
+/** "users-spherepay-github-slaven-docklio" → "docklio": workspaces named after a path. */
+function prettyRepoName(name) {
+  const n = String(name || "");
+  if (/^users-[^-]+-/.test(n)) return n.split("-").filter(Boolean).pop() || n;
+  if (n === "Personal prefs" || n === "personal") return "Personal";
+  return n;
+}
+
+/** One readable line from stored text: drops pasted system/XML plumbing and long tails. */
+function cleanLine(text, max = 110) {
+  let t = String(text || "");
+  if (/<scheduled-task\b/i.test(t)) return "Scheduled task run";
+  t = t.replace(/<[^>]{1,80}>/g, " ").replace(/\s+/g, " ").trim();
+  if (!t) return "(empty)";
+  const first = t.split(/(?<=[.!?])\s/)[0] || t;
+  const line = first.length >= 24 ? first : t;
+  return line.length > max ? `${line.slice(0, max).replace(/\s+\S*$/, "")}…` : line;
+}
+
 function $(sel) {
   return document.querySelector(sel);
 }
@@ -339,8 +422,9 @@ function setTab(tab) {
   } else {
     stopAllViz();
   }
+  if (tab !== "setup") mountVaultIn(null);
   state.tab = tab;
-  document.querySelectorAll("#tabs button[data-tab]").forEach((b) => {
+  document.querySelectorAll("button[data-tab]").forEach((b) => {
     b.classList.toggle("active", b.dataset.tab === tab);
   });
   writeUrlState();
@@ -600,7 +684,7 @@ async function focusPersonal() {
     state.repos = (await apiUnscoped("/api/repos")).repos || [];
     await focusRepo({ repoId: created.repo?.id, tab: "brain" });
   } catch (e) {
-    alert(e.message);
+    notify(e.message);
   }
 }
 
@@ -765,8 +849,7 @@ function memoryLabel(repoId) {
   const r = listedRepos().find((x) => x.id === repoId);
   if (!r) return "unknown";
   if (isPersonal(r)) return "Personal";
-  if (isWorkspace(r)) return `${r.repo_name} · workspace`;
-  return `${r.repo_name} · repo`;
+  return prettyRepoName(r.repo_name);
 }
 
 function switcherLabel(r) {
@@ -872,7 +955,7 @@ async function renameWorkspaceUi(repo) {
     await refreshStatus();
     await render();
   } catch (e) {
-    alert(e.message);
+    notify(e.message);
   }
 }
 
@@ -909,7 +992,7 @@ async function openAddedPath() {
     await focusRepo({ path, tab: "setup" });
     setAddPanel(false);
   } catch (e) {
-    alert(e.message);
+    notify(e.message);
   }
 }
 
@@ -1416,72 +1499,64 @@ function setupStepperHtml(current) {
 
 function setupDoneHtml(ctx) {
   const { gitBound, workspaces, serviceOn, focused } = ctx;
-  const clients = selectedClientLabels();
   const mcpHint = focused?.slug
     ? `http://127.0.0.1:7843/mcp?workspace=${focused.slug}`
     : "http://127.0.0.1:7843/mcp?workspace=personal";
-  const rows = [
-    {
-      title: "Clients",
-      detail: clients.length ? clients.join(", ") : "None selected",
-    },
-    {
-      title: "Git repos",
-      detail:
-        gitBound.length === 0
-          ? "None tracking"
-          : `${gitBound.length} tracking · ${gitBound
-              .slice(0, 3)
-              .map((r) => r.repo_name)
-              .join(", ")}${gitBound.length > 3 ? "…" : ""}`,
-    },
-    {
-      title: "Workspaces",
-      detail:
-        workspaces.length === 0
-          ? "Skipped — add one anytime"
-          : `${workspaces.length} named · ${workspaces.map((w) => w.repo_name).join(", ")}`,
-    },
-    {
-      title: "Connect",
-      detail: serviceOn
-        ? "Recipe ready · UI starts at login · MCP on 127.0.0.1:7843"
-        : "Recipe ready · MCP on 127.0.0.1:7843",
-    },
-  ];
+  const projects = gitBound.filter((r) => !/^scratch-|^tmp$/i.test(String(r.repo_name)));
+  const hiddenScratch = gitBound.length - projects.length;
   return `
-    <section class="hero">
-      <div class="hero-inner setup-wide">
-        <h1>You're set up</h1>
-        <p>Memory stays in ~/.amem and never leaves this machine. Every step below is done — change any of them if you need to.</p>
-        <ol class="setup-done">
-          ${rows
-            .map(
-              (row, i) => `<li>
-            <span class="setup-check" aria-hidden="true">✓</span>
-            <div>
-              <strong>${i + 1}. ${esc(row.title)}</strong>
-              <p>${esc(row.detail)}</p>
-            </div>
-          </li>`,
-            )
-            .join("")}
-        </ol>
-        <div class="setup-verify" id="setupVerify">
-          <strong>Verify MCP context</strong>
-          <p class="note">Green when a sample query returns at least one claim from this machine.</p>
-          <div class="add-repo-row">
-            <button class="btn secondary small" type="button" id="probeContext">Test amem_context</button>
-            <code class="mcp-url-chip">${esc(mcpHint)}</code>
+    <section class="page settings-page">
+      <header class="page-head">
+        <div>
+          <h1>Settings</h1>
+          <p class="sub">Everything stays in <code>~/.amem</code> on this machine. Nothing is uploaded.</p>
+        </div>
+      </header>
+
+      <div class="settings-grid">
+        <article class="card" id="connectionsCard">
+          <header class="card-head"><h2>Connected apps</h2><span class="pill muted" id="connectionsBadge">Checking…</span></header>
+          <p class="note">Which amem each app runs. They should all use the same, newest install.</p>
+          <ul class="conn-list" id="connectionsList"><li class="note">Checking…</li></ul>
+          <div id="connectionsAdvice"></div>
+        </article>
+
+        <article class="card card-wide" id="settingsVaultCard">
+          <header class="card-head"><h2>Lock &amp; backup</h2></header>
+          <div id="settingsVaultSlot"></div>
+        </article>
+
+        <article class="card">
+          <header class="card-head"><h2>Projects &amp; workspaces</h2></header>
+          <dl class="kv">
+            <dt>Projects</dt>
+            <dd>${projects.length ? esc(projects.slice(0, 6).map((r) => r.repo_name).join(", ")) + (projects.length > 6 ? ` and ${projects.length - 6} more` : "") : "None yet"}${hiddenScratch ? ` <span class="note">(+${hiddenScratch} temporary folders)</span>` : ""}</dd>
+            <dt>Workspaces</dt>
+            <dd>${workspaces.length ? esc(workspaces.map((w) => prettyRepoName(w.repo_name)).join(", ")) : "None"}</dd>
+            <dt>Starts at login</dt>
+            <dd>${serviceOn ? "Yes" : "No"}</dd>
+          </dl>
+          <div class="card-actions">
+            <button class="btn secondary small" id="editSetup" type="button">Change setup</button>
+            <button class="btn secondary small" id="openBrain" type="button">Open memory</button>
           </div>
-          <p class="note" id="probeContextMsg">Not tested yet.</p>
-        </div>
-        <div class="actions">
-          <button class="btn" id="openBrain" type="button">Open memory</button>
-          <button class="btn secondary" id="editSetup" type="button">Change setup</button>
-        </div>
-        ${recipeBlockHtml()}
-        ${shopBuyCardHtml()}
+        </article>
+
+        <article class="card" id="setupVerify">
+          <header class="card-head"><h2>Check memory works</h2></header>
+          <p class="note">Asks amem a sample question, the same way an agent does. Green means agents get answers from this machine.</p>
+          <div class="card-actions">
+            <button class="btn small" type="button" id="probeContext">Run check</button>
+          </div>
+          <p class="note" id="probeContextMsg">Not checked yet.</p>
+          <details class="more"><summary>Address agents connect to</summary><code class="mcp-url-chip">${esc(mcpHint)}</code></details>
+        </article>
+
+        <article class="card card-wide">
+          <header class="card-head"><h2>Plan &amp; license</h2></header>
+          ${recipeBlockHtml()}
+          ${shopBuyCardHtml()}
+        </article>
       </div>
     </section>`;
 }
@@ -1529,6 +1604,8 @@ function setupWizardHtml(ctx) {
 }
 
 function renderSetup() {
+  // #main is about to be replaced; keep the vault panel out of it.
+  mountVaultIn(null);
   const ctx = setupContext();
   const main = $("#main");
   setMainMode("page");
@@ -1536,6 +1613,64 @@ function renderSetup() {
   const showDone = setupIsComplete() && !state.setupEdit;
   main.innerHTML = showDone ? setupDoneHtml(ctx) : setupWizardHtml(ctx);
   bindSetupEvents(main, ctx);
+  if (showDone) {
+    mountVaultIn($("#settingsVaultSlot"));
+    paintConnections();
+    if (state.focusVault) {
+      state.focusVault = false;
+      $("#settingsVaultCard")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+}
+
+/** The Lock & backup panel lives in Settings; this moves it in (and back out on leave). */
+function mountVaultIn(slot) {
+  const panel = $("#vaultPanel");
+  if (!panel) return;
+  if (slot) {
+    slot.appendChild(panel);
+    panel.classList.remove("hidden");
+    panel.classList.add("in-settings");
+  } else if (panel.classList.contains("in-settings")) {
+    panel.classList.remove("in-settings");
+    panel.classList.add("hidden");
+    document.querySelector(".app-main")?.insertBefore(panel, $("#embedIndexBanner"));
+  }
+  paintVault();
+}
+
+async function paintConnections() {
+  const list = $("#connectionsList");
+  const badge = $("#connectionsBadge");
+  const advice = $("#connectionsAdvice");
+  if (!list) return;
+  try {
+    const data = await apiUnscoped("/api/installs");
+    const newest = data.current?.version || "";
+    const hosts = data.hosts || [];
+    list.innerHTML = hosts.length
+      ? hosts
+          .map((h) => {
+            const v = h.install?.version || "?";
+            const fromCheckout = /\/GitHub|\/src\//.test(h.install?.root || "") && !/node_modules/.test(h.install?.root || "");
+            const ok = h.install && v === newest && !fromCheckout;
+            return `<li class="conn ${ok ? "ok" : "warn"}">
+              <span class="dot" aria-hidden="true"></span>
+              <span class="conn-name">${esc(h.host.replace(/^Claude Code (\w+) hook$/, "Claude Code ($1)"))}</span>
+              <span class="conn-ver">${h.install ? `amem ${esc(v)}` : "not found"}${fromCheckout ? " · from a git checkout" : ""}</span>
+            </li>`;
+          })
+          .join("")
+      : `<li class="note">No apps are set up to use amem yet. Run <code>amem install</code> for your editor.</li>`;
+    const issues = data.issues || [];
+    if (badge) {
+      badge.textContent = issues.length ? `${issues.length} to fix` : "All up to date";
+      badge.className = `pill ${issues.length ? "warn" : "ok"}`;
+    }
+    if (advice) advice.innerHTML = issues.length ? `<ul class="advice">${issues.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "";
+  } catch (e) {
+    list.innerHTML = `<li class="note">Could not check: ${esc(e.message || e)}</li>`;
+  }
 }
 
 function goSetupStep(step) {
@@ -1594,7 +1729,7 @@ function bindSetupEvents(main, ctx) {
       });
       state.service = { ...(state.service || {}), ...result };
     } catch (err) {
-      alert(err.message);
+      notify(err.message);
       e.target.checked = !e.target.checked;
     }
   });
@@ -1613,7 +1748,7 @@ function bindSetupEvents(main, ctx) {
       await loadScan({ force: true });
       renderSetup();
     } catch (err) {
-      alert(err.message);
+      notify(err.message);
       renderSetup();
     }
   });
@@ -1628,9 +1763,9 @@ function bindSetupEvents(main, ctx) {
   });
   $("#trackBtn")?.addEventListener("click", async () => {
     const platforms = [...state.selected];
-    if (!platforms.length) return alert("Pick at least one platform");
+    if (!platforms.length) return notify("Pick at least one platform");
     const paths = [...state.picked];
-    if (!paths.length) return alert("Select at least one git repo");
+    if (!paths.length) return notify("Select at least one git repo");
     const btn = $("#trackBtn");
     btn.disabled = true;
     btn.textContent = "Tracking…";
@@ -1647,19 +1782,19 @@ function bindSetupEvents(main, ctx) {
       }
       await refreshStatus();
       await loadScan({ force: true });
-      alert(`Tracking ${tracked.tracked?.length ?? paths.length} repo(s).`);
+      notify(`Tracking ${tracked.tracked?.length ?? paths.length} repo(s).`);
       state.setupStep = 3;
       state.setupEdit = true;
       render();
     } catch (err) {
-      alert(err.message);
+      notify(err.message);
       btn.disabled = false;
       btn.textContent = "Start tracking selected";
     }
   });
   $("#wsBtn")?.addEventListener("click", async () => {
     const name = $("#wsName")?.value?.trim();
-    if (!name) return alert("Name a workspace, e.g. luna");
+    if (!name) return notify("Name a workspace, e.g. luna");
     try {
       const created = await apiUnscoped("/api/workspaces", {
         method: "POST",
@@ -1676,14 +1811,14 @@ function bindSetupEvents(main, ctx) {
       const mcpUrl = created.mcp?.url || `http://127.0.0.1:7843/mcp?workspace=${created.workspace}`;
       const slugNote =
         created.workspace && created.workspace !== label ? `\nMCP id stays: ${created.workspace}` : "";
-      alert(
+      notify(
         `Workspace "${label}" is ready.${checks ? `\n${checks}` : ""}${slugNote}\n\nMCP URL:\n${mcpUrl}`,
       );
       state.setupStep = 4;
       state.setupEdit = true;
       render();
     } catch (err) {
-      alert(err.message);
+      notify(err.message);
     }
   });
   $("#applyBootstrap")?.addEventListener("click", async () => {
@@ -1695,10 +1830,10 @@ function bindSetupEvents(main, ctx) {
       });
       await refreshStatus();
       await refreshGraph();
-      alert("Baseline memory applied locally.");
+      notify("Baseline memory applied locally.");
       render();
     } catch (e) {
-      alert(e.message);
+      notify(e.message);
     }
   });
   $("#openBrain")?.addEventListener("click", () => setTab("brain"));
@@ -1717,7 +1852,7 @@ function bindSetupEvents(main, ctx) {
       const btn = $("#copyRecipe");
       if (btn) btn.textContent = "Copied";
     } catch {
-      alert(text);
+      notify(text);
     }
   });
   main.querySelectorAll("[data-rename-ws]").forEach((el) => {
@@ -1932,6 +2067,8 @@ function setMainMode(mode) {
   const main = $("#main");
   if (!main) return;
   main.classList.toggle("tab-brain", mode === "brain");
+  // Search bar and the detail panel belong to Memory; other pages use the full width.
+  $("#app")?.classList.toggle("mode-memory", mode === "brain");
   syncShellChrome(mode);
 }
 
@@ -1955,32 +2092,13 @@ function syncShellChrome(mode) {
   const auto = $("#autoApplyAll");
   if (auto && isBrain) auto.checked = Boolean(state.prefs?.autoApplyAll);
   const sd = $("#showdownToggle");
-  if (sd && isBrain) sd.textContent = state.showdownOpen ? "Hide compare" : "Compare retrieval";
+  if (sd && isBrain) sd.textContent = state.showdownOpen ? "Hide comparison" : "Compare search modes";
 }
 
 function renderPageInsight() {
+  // The right panel is Memory's detail view; other pages show their own content full width.
   const el = $("#rightPanel");
-  if (!el) return;
-  const tier = state.license?.tier || "free";
-  const locked = Boolean(state.vault?.locked);
-  const embed = state.embed?.backend || "hashing";
-  const repo = state.status?.repo?.repo_name || (state.brainAll ? "All memory" : "—");
-  el.innerHTML = `
-    <h2>Overview</h2>
-    <div class="fact-kpis">
-      <div class="fact-kpi"><b>${esc(String(tier))}</b><span>License</span></div>
-      <div class="fact-kpi"><b>${locked ? "Yes" : "No"}</b><span>Vault locked</span></div>
-      <div class="fact-kpi"><b>${esc(embed)}</b><span>Embedder</span></div>
-      <div class="fact-kpi"><b>${(state.graph?.claims || []).length || "—"}</b><span>Facts loaded</span></div>
-    </div>
-    <div class="insight-card">
-      <strong>Focus</strong>
-      <p>${esc(repo)}</p>
-    </div>
-    <div class="insight-card">
-      <strong>Local only</strong>
-      <p>Memory stays in <code>~/.amem</code>. Use Lock / backup in the sidebar for passphrase protection.</p>
-    </div>`;
+  if (el) el.innerHTML = "";
 }
 
 function renderBrainRight() {
@@ -2171,24 +2289,24 @@ function renderBrain() {
   const totalClaims = (state.graph?.claims || []).length;
   const showdownOpen = Boolean(state.showdownOpen);
   const filterHelp = {
-    files: "Everything stored, grouped by file — what amem can inject instead of searching.",
-    drafts: "Session captures waiting for you. Approve good ones; dismiss junk in bulk.",
-    chats: "Takeaways from chats (session facts).",
-    used: "Facts that were actually injected into a recent Cursor/Claude query.",
-    pinned: "Pinned facts rank higher in retrieval and can sync to Cursor rules (Pro).",
-    review: "Pro cleanup: unused facts and near-duplicates.",
+    files: "Everything your agents can be told, grouped by project. Click a fact to edit, pin, retire or delete it.",
+    drafts: "Notes captured from chats, waiting for you. Keep the good ones, dismiss the rest.",
+    chats: "Takeaways saved from chats.",
+    used: "Facts an agent was actually given recently.",
+    pinned: "Pinned facts are shown to agents first. Pin the ones that matter most.",
+    review: "Facts nobody has used in a while, and near-duplicates you can merge.",
   }[state.brainFilter] || "";
 
   main.innerHTML = `
     <div class="brain-v2">
       <div class="brain-chrome">
         <div class="brain-filters" id="brainFilters" role="tablist" aria-label="Memory views">
-          <button type="button" data-filter="files" class="${state.brainFilter === "files" ? "active" : ""}" title="Every stored fact, grouped by file">Files${totalClaims ? ` (${totalClaims})` : ""}</button>
-          <button type="button" data-filter="drafts" class="${state.brainFilter === "drafts" ? "active" : ""}" title="Approve session captures">Approve${pendingTotal ? ` (${pendingTotal})` : ""}</button>
-          <button type="button" data-filter="chats" class="${state.brainFilter === "chats" ? "active" : ""}" title="Chat takeaways">Chats</button>
-          <button type="button" data-filter="used" class="${state.brainFilter === "used" ? "active" : ""}" title="Recently injected">Injected</button>
-          <button type="button" data-filter="pinned" class="${state.brainFilter === "pinned" ? "active" : ""}" title="Pinned / boosted facts">Pinned</button>
-          <button type="button" data-filter="review" class="${state.brainFilter === "review" ? "active" : ""}" title="Unused & duplicates">Cleanup</button>
+          <button type="button" data-filter="files" class="${state.brainFilter === "files" ? "active" : ""}" title="Every stored fact">All facts${totalClaims ? ` <span class="count">${totalClaims}</span>` : ""}</button>
+          <button type="button" data-filter="drafts" class="${state.brainFilter === "drafts" ? "active" : ""}" title="Captured notes waiting for you">To review${pendingTotal ? ` <span class="count warn">${pendingTotal}</span>` : ""}</button>
+          <button type="button" data-filter="chats" class="${state.brainFilter === "chats" ? "active" : ""}" title="Takeaways saved from chats">From chats</button>
+          <button type="button" data-filter="used" class="${state.brainFilter === "used" ? "active" : ""}" title="Facts agents were given recently">Recently used</button>
+          <button type="button" data-filter="pinned" class="${state.brainFilter === "pinned" ? "active" : ""}" title="Facts shown to agents first">Pinned</button>
+          <button type="button" data-filter="review" class="${state.brainFilter === "review" ? "active" : ""}" title="Unused facts and duplicates">Tidy up</button>
         </div>
         ${vizToggleHtml()}
       </div>
@@ -2307,6 +2425,14 @@ function renderBrainFeed() {
       paintBrain();
     });
   });
+}
+
+/** "Personal · sphere-e2e-testing" style keys, with path-like workspace names shortened. */
+function friendlyGroupLabel(key) {
+  return String(key || "")
+    .split(" · ")
+    .map((part) => prettyRepoName(part))
+    .join(" · ");
 }
 
 function fileLabel(path) {
@@ -2563,11 +2689,11 @@ function renderBrainMap() {
             const result = await api("/api/hygiene/accept-safe", { method: "POST", body: "{}" });
             await refreshGraph();
             renderBrain();
-            alert(
+            notify(
               `Decayed ${result.decayed?.length || 0}; merged ${result.merged?.length || 0}.`,
             );
           } catch (err) {
-            alert(err.message);
+            notify(err.message);
           }
         });
         $("#decayStale")?.addEventListener("click", async () => {
@@ -2575,9 +2701,9 @@ function renderBrainMap() {
             const result = await api("/api/hygiene/decay", { method: "POST", body: "{}" });
             await refreshGraph();
             renderBrain();
-            alert(`Decayed ${result.decayed?.length || 0} facts.`);
+            notify(`Decayed ${result.decayed?.length || 0} facts.`);
           } catch (err) {
-            alert(err.message);
+            notify(err.message);
           }
         });
         $("#hygieneSched")?.addEventListener("click", async () => {
@@ -2588,7 +2714,7 @@ function renderBrainMap() {
             });
             renderBrain();
           } catch (err) {
-            alert(err.message);
+            notify(err.message);
           }
         });
         $("#hygieneUnsched")?.addEventListener("click", async () => {
@@ -2596,7 +2722,7 @@ function renderBrainMap() {
             await apiUnscoped("/api/hygiene/unschedule", { method: "POST", body: "{}" });
             renderBrain();
           } catch (err) {
-            alert(err.message);
+            notify(err.message);
           }
         });
         el.querySelectorAll("[data-merge-keep]").forEach((btn) => {
@@ -2609,7 +2735,7 @@ function renderBrainMap() {
               await refreshGraph();
               renderBrain();
             } catch (err) {
-              alert(err.message);
+              notify(err.message);
             }
           });
         });
@@ -2700,16 +2826,16 @@ function renderBrainMap() {
         if (result.appliedCount) parts.push(`approved ${result.appliedCount}`);
         if (result.dismissedCount) parts.push(`dismissed ${result.dismissedCount}`);
         if (result.skipped?.length) parts.push(`skipped ${result.skipped.length}`);
-        if (parts.length) alert(parts.join(" · "));
+        if (parts.length) notify(parts.join(" · "));
       } catch (err) {
-        alert(err.message);
+        notify(err.message);
       }
     };
 
     $("#approveHigh")?.addEventListener("click", () => runBulk("approve_high"));
     $("#dismissJunk")?.addEventListener("click", () => runBulk("dismiss_junk"));
-    $("#dismissAllDrafts")?.addEventListener("click", () => {
-      if (!confirm(`Dismiss all ${pendingTotal} waiting captures? This cannot be undone.`)) return;
+    $("#dismissAllDrafts")?.addEventListener("click", async () => {
+      if (!(await askConfirm(`Dismiss all ${pendingTotal} waiting captures? This cannot be undone.`, { confirmLabel: "Dismiss all" }))) return;
       runBulk("dismiss_all", { confirm: true });
     });
     $("#applySelected")?.addEventListener("click", () => {
@@ -2763,8 +2889,8 @@ function renderBrainMap() {
       : state.brainFilter === "chats"
         ? "Chat takeaways. Other files stay on the map, dimmed."
         : state.brainFilter === "pinned"
-          ? "Pinned facts only — click Pin on any row to boost retrieval."
-          : "Each tile is a file amem can inject. Use ★ Pin on a row to boost it.";
+          ? "Pinned facts only."
+          : "";
 
   const list =
     shown.length === 0
@@ -2777,14 +2903,16 @@ function renderBrainMap() {
                 ? "No pinned facts yet. On any fact row, click <b>Pin</b> — pinned facts rank higher and fill this view."
                 : state.brainSearch
                   ? "No facts match that filter. Clear the search box to see everything again."
-                  : "No facts yet. Apply a bootstrap on Setup, or keep working in this repo."
+                  : state.selectedFile
+                    ? "Nothing in this group. <button type=\"button\" class=\"linkish\" id=\"clearFileFilter\">Show all facts</button>"
+                    : "No facts yet. They appear here as your agents save what they learn."
         }</div>`
       : shown
           .map((group) => {
             const usedClass = group.used ? "used" : "";
             return `<article class="file-card ${usedClass}">
         <header>
-          <code>${esc(group.file)}</code>
+          <span class="group-name">${esc(friendlyGroupLabel(group.file))}</span>
           <span>${group.items.length} fact${group.items.length === 1 ? "" : "s"}${group.used ? " · used recently" : ""}</span>
         </header>
         <ul>
@@ -2805,7 +2933,7 @@ function renderBrainMap() {
                   <span class="claim-text">${esc(claimPreview(c))}</span>
                   <span class="claim-tags">${tags.map((t) => `<em>${esc(t)}</em>`).join("")}</span>
                 </button>
-                ${pinButtonHtml(c)}
+                ${rowActionsHtml(c)}
               </li>`;
             })
             .join("")}
@@ -2909,6 +3037,11 @@ function renderBrainMap() {
   }
   bindClaimClicks(el);
   bindPinButtons(el);
+  bindRowActions(el);
+  el.querySelector("#clearFileFilter")?.addEventListener("click", () => {
+    state.selectedFile = null;
+    paintBrain();
+  });
   bindVizToggle(el);
 }
 
@@ -2917,8 +3050,8 @@ function bindClaimClicks(root) {
     btn.addEventListener("click", () => {
       const claim = (state.graph.claims || []).find((c) => c.id === btn.dataset.claim);
       if (!claim) return;
-      const anchors = claimAnchors(claim);
-      if (anchors[0]) state.selectedFile = anchors[0];
+      // Keep the current list; selecting a fact opens it in the detail panel. (Jumping to a
+      // group named after its first anchor showed an empty "No facts yet" page.)
       state.selectedNode = { type: "claim", id: claim.id, detail: claim };
       renderBrain();
     });
@@ -2949,10 +3082,84 @@ function bindPinButtons(root = document) {
       try {
         await toggleClaimPin(btn.dataset.pin, btn.dataset.repo);
       } catch (err) {
-        alert(err.message);
+        notify(err.message);
       }
     });
   });
+}
+
+function rowActionsHtml(c) {
+  return `<span class="row-actions">
+    ${pinButtonHtml(c)}
+    <button type="button" class="row-act" data-retire="${esc(c.id)}" data-repo="${esc(c.repo_id || "")}" title="Retire: stop showing this fact to agents (kept for history)">Retire</button>
+    <button type="button" class="row-act danger" data-delete="${esc(c.id)}" data-repo="${esc(c.repo_id || "")}" title="Delete this fact">Delete</button>
+  </span>`;
+}
+
+/** Retire = supersede: hidden from agents, kept in history, undoable from the notice. */
+async function retireClaim(id, repoId) {
+  await api("/api/supersede", { method: "POST", repoId, body: JSON.stringify({ ids: [id] }) });
+  if (state.selectedNode?.id === id) state.selectedNode = null;
+  await refreshGraph();
+  paintBrain();
+  notifyUndo("Fact retired. Agents will no longer see it.", async () => {
+    await api("/api/claims/restore", { method: "POST", repoId, body: JSON.stringify({ id }) });
+    await refreshGraph();
+    paintBrain();
+    notify("Fact restored.");
+  });
+}
+
+async function deleteClaim(id, repoId) {
+  if (!(await askConfirm("Delete this fact from memory? This cannot be undone. Retire keeps it for history instead.", { confirmLabel: "Delete" }))) return;
+  await api(`/api/claims?id=${encodeURIComponent(id)}`, { method: "DELETE", repoId });
+  if (state.selectedNode?.id === id) state.selectedNode = null;
+  await refreshGraph();
+  paintBrain();
+  notify("Fact deleted.");
+}
+
+function notifyUndo(message, undo) {
+  notify(message);
+  const host = document.getElementById("toastHost");
+  const last = host?.lastElementChild;
+  if (!last) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "toast-undo";
+  btn.textContent = "Undo";
+  btn.addEventListener("click", async () => {
+    last.remove();
+    try {
+      await undo();
+    } catch (err) {
+      notify(err.message || err, "error");
+    }
+  });
+  last.insertBefore(btn, last.querySelector(".toast-x"));
+}
+
+function bindRowActions(root = document) {
+  root.querySelectorAll("[data-retire]").forEach((btn) =>
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await retireClaim(btn.dataset.retire, btn.dataset.repo);
+      } catch (err) {
+        notify(err.message || err, "error");
+      }
+    }),
+  );
+  root.querySelectorAll("[data-delete]").forEach((btn) =>
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await deleteClaim(btn.dataset.delete, btn.dataset.repo);
+      } catch (err) {
+        notify(err.message || err, "error");
+      }
+    }),
+  );
 }
 
 function pinButtonHtml(c) {
@@ -3136,7 +3343,7 @@ function showBrainDetail(node) {
         await refreshGraph();
         renderBrain();
       } catch (err) {
-        alert(err.message);
+        notify(err.message);
       }
     };
     $("#draftApply")?.addEventListener("click", () => applyDraft(conflicts.length ? "keep" : undefined));
@@ -3152,7 +3359,7 @@ function showBrainDetail(node) {
         await refreshGraph();
         renderBrain();
       } catch (err) {
-        alert(err.message);
+        notify(err.message);
       }
     });
     return;
@@ -3168,17 +3375,25 @@ function showBrainDetail(node) {
       <textarea id="claimText" rows="6">${esc(d.text || "")}</textarea>
       <label class="drawer-label">Kind</label>
       <input id="claimKind" type="text" value="${esc(d.kind || "")}" />
-      <label class="drawer-label">Anchors (comma-separated)</label>
+      <label class="drawer-label">Tags / files (comma-separated)</label>
       <input id="claimAnchors" type="text" value="${esc(anchors.join(", "))}" />
       <div class="drawer-actions">
         <button class="btn" type="button" id="claimSave">Save</button>
         <button class="btn secondary" type="button" id="claimPin">${pinned ? "Unpin ★" : "Pin ★"}</button>
-        <button class="btn secondary" type="button" id="claimClose">Close</button>
+        <button class="btn secondary" type="button" id="claimRetire" title="Stop showing this fact to agents; keep it for history">Retire</button>
         <button class="btn secondary danger" type="button" id="claimDelete">Delete</button>
+        <button class="btn secondary" type="button" id="claimClose">Close</button>
       </div>
       ${rel.flows.length ? `<div class="meta">Flows: ${rel.flows.map((f) => esc(f.name)).join(", ")}</div>` : ""}
       ${rel.components.length ? `<div class="meta">Components: ${rel.components.map((c) => esc(c.name)).join(", ")}</div>` : ""}
-      <p class="note" style="margin:0"><b>Pin</b> boosts this fact in <code>amem context</code>. Use the Pin button on each row, or here. Pinned facts appear under the Pinned filter and can sync to Cursor rules (Pro).</p>`;
+      <p class="note" style="margin:0"><b>Pin</b> shows this fact to agents first. <b>Retire</b> hides an outdated fact but keeps it for history. <b>Delete</b> removes it for good.</p>`;
+    $("#claimRetire")?.addEventListener("click", async () => {
+      try {
+        await retireClaim(d.id, d.repo_id);
+      } catch (err) {
+        notify(err.message || err, "error");
+      }
+    });
     $("#claimSave")?.addEventListener("click", async () => {
       try {
         const text = $("#claimText")?.value ?? "";
@@ -3197,7 +3412,7 @@ function showBrainDetail(node) {
         await refreshGraph();
         paintBrain();
       } catch (err) {
-        alert(err.message);
+        notify(err.message);
       }
     });
     $("#claimPin")?.addEventListener("click", async () => {
@@ -3215,7 +3430,7 @@ function showBrainDetail(node) {
           showPinRulesCta(result.claim);
         }
       } catch (err) {
-        alert(err.message);
+        notify(err.message);
       }
     });
     $("#claimClose")?.addEventListener("click", () => {
@@ -3223,14 +3438,14 @@ function showBrainDetail(node) {
       renderBrain();
     });
     $("#claimDelete")?.addEventListener("click", async () => {
-      if (!confirm(`Delete ${d.id} from local memory?`)) return;
+      if (!(await askConfirm("Delete this fact from memory? This cannot be undone. Retire keeps it for history instead.", { confirmLabel: "Delete" }))) return;
       try {
         await api(`/api/claims?id=${encodeURIComponent(d.id)}`, { method: "DELETE", repoId: d.repo_id });
         state.selectedNode = null;
         await refreshGraph();
         renderBrain();
       } catch (err) {
-        alert(err.message);
+        notify(err.message);
       }
     });
     return;
@@ -3464,7 +3679,7 @@ function renderSkills() {
         });
         host.scrollIntoView({ behavior: "smooth", block: "nearest" });
       } catch (e) {
-        alert(e.message || e);
+        notify(e.message || e);
       }
     });
   });
@@ -3472,13 +3687,13 @@ function renderSkills() {
   main.querySelectorAll(".skill-del").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const name = btn.closest(".skill-card")?.getAttribute("data-name");
-      if (!name || !confirm(`Delete skill "${name}"? This removes the file from disk.`)) return;
+      if (!name || !(await askConfirm(`Delete the skill "${name}"? This removes its file from disk.`, { confirmLabel: "Delete skill" }))) return;
       try {
         await apiUnscoped(`/api/skills?name=${encodeURIComponent(name)}`, { method: "DELETE" });
         await refreshSkills();
         renderSkills();
       } catch (e) {
-        alert(e.message || e);
+        notify(e.message || e);
       }
     });
   });
@@ -3491,7 +3706,7 @@ function renderSkills() {
       await refreshSkills();
       renderSkills();
     } catch (e) {
-      alert(e.message || e);
+      notify(e.message || e);
     }
   };
   main.querySelectorAll(".skill-draft-apply").forEach((btn) => {
@@ -3509,14 +3724,17 @@ function currentRepoLabel() {
 }
 
 function taskCardHtml(t) {
-  const body = t.body ? `<p class="tasks-card-body">${esc(String(t.body).slice(0, 160))}</p>` : "";
+  const bodyText = String(t.body || "");
+  const body = bodyText
+    ? `<p class="tasks-card-body clamp" title="Click to expand">${esc(bodyText)}</p>`
+    : "";
   const opts = TASK_COLS.map(
     (c) => `<option value="${c.id}" ${c.id === t.status ? "selected" : ""}>${esc(c.label)}</option>`,
   ).join("");
   // Across memories a bare title is ambiguous — say which memory the task came from.
   const owner =
     state.brainAll && t.repo_name
-      ? `<span class="tasks-card-repo" title="Memory this task belongs to">${esc(t.repo_name)}</span>`
+      ? `<span class="tasks-card-repo" title="${esc(t.repo_name)}">${esc(prettyRepoName(t.repo_name))}</span>`
       : "";
   return `
     <article class="tasks-card" data-id="${esc(t.id)}" draggable="true">
@@ -3529,6 +3747,11 @@ function taskCardHtml(t) {
       </div>
     </article>`;
 }
+
+document.addEventListener("click", (e) => {
+  const body = e.target instanceof Element ? e.target.closest(".tasks-card-body") : null;
+  if (body) body.classList.toggle("clamp");
+});
 
 function renderTasks() {
   const main = $("#main");
@@ -3561,7 +3784,7 @@ function renderTasks() {
           <button class="btn secondary small" type="button" data-go="dashboard">Dashboard</button>
         </div>
       </header>
-      <p class="note">${openCount} open · use MCP <code>amem_task_add</code> / <code>amem_task_update</code> or the form below${
+      <p class="note">${openCount} open · agents add tasks as they work, or add one below${
         state.brainAll ? ` · new tasks land in <strong>${esc(currentRepoLabel())}</strong>` : ""
       }</p>
       <form class="tasks-add" id="tasksAddForm">
@@ -3595,7 +3818,7 @@ function renderTasks() {
     try {
       await refreshTasks();
     } catch (err) {
-      alert(err.message || err);
+      notify(err.message || err);
     }
     renderTasks();
   });
@@ -3620,7 +3843,7 @@ function renderTasks() {
       await refreshTasks();
       renderTasks();
     } catch (err) {
-      alert(err.message || err);
+      notify(err.message || err);
     }
   });
 
@@ -3637,11 +3860,11 @@ function renderTasks() {
         await refreshTasks();
         renderTasks();
       } catch (err) {
-        alert(err.message || err);
+        notify(err.message || err);
       }
     });
     card.querySelector(".tasks-del")?.addEventListener("click", async () => {
-      if (!confirm("Delete this task?")) return;
+      if (!(await askConfirm("Delete this task?", { confirmLabel: "Delete task" }))) return;
       try {
         const url = state.brainAll
           ? `/api/tasks?scope=all&id=${encodeURIComponent(id)}`
@@ -3650,7 +3873,7 @@ function renderTasks() {
         await refreshTasks();
         renderTasks();
       } catch (err) {
-        alert(err.message || err);
+        notify(err.message || err);
       }
     });
     card.addEventListener("dragstart", (ev) => {
@@ -3682,144 +3905,163 @@ function renderTasks() {
         await refreshTasks();
         renderTasks();
       } catch (err) {
-        alert(err.message || err);
+        notify(err.message || err);
       }
     });
   });
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 }
 
 function renderDashboard() {
   const main = $("#main");
   setMainMode("page");
   stopAllViz();
+  renderPageInsight();
   const g = state.graph || emptyGraph(state.brainAll ? "all" : "current");
   const agg = state.usage?.aggregate;
   const totals = agg?.totals || {};
+  const claims = g.claims || [];
   const drafts = (g.drafts || []).filter((d) => d.status === "pending");
   const pendingTotal = Number(g.pendingDraftTotal ?? drafts.length);
-  const claims = g.claims || [];
-  const pinned = claims.filter((c) => Number(c.pinned || 0) > 0).length;
   const events = g.recentEvents || [];
-  const hits = events.filter((e) => eventKindOf(e) === "local_hit");
-  const misses = events.filter((e) => eventKindOf(e) !== "local_hit");
   const focus = statsFocusLabel();
-  const tier = state.license?.tier || "free";
-  const highDrafts = drafts.filter((d) => d.quality?.label === "high").length;
-  const junkDrafts = drafts.filter((d) => d.quality?.reject || d.quality?.label === "low").length;
-  const topFiles = fileGroups(claims)
-    .slice()
-    .sort((a, b) => b.items.length - a.items.length)
-    .slice(0, 6);
+  const since = Date.now() - 7 * 86_400_000;
+  const usedThisWeek = events.filter((e) => Date.parse(e.created_at) >= since).length;
 
-  renderPageInsight();
+  const recentWork = claims
+    .filter((c) => /worklog|project|decision/i.test(c.kind || ""))
+    .slice()
+    .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
+    .slice(0, 6);
+  const openTasks = (state.tasks || [])
+    .filter((t) => t.status !== "done")
+    .sort((a, b) => ({ doing: 0, next: 1, blocked: 2, backlog: 3 })[a.status] - ({ doing: 0, next: 1, blocked: 2, backlog: 3 })[b.status])
+    .slice(0, 5);
+  const questions = events
+    .filter((e) => !/<scheduled-task|<task-notification|<system-reminder/i.test(eventQueryLabel(e)))
+    .slice(0, 6);
+  const workStatus = (c) => {
+    const m = String(c.text || "").match(/\bworklog \((done|in progress|next|blocked)\)/i);
+    return m ? m[1].toLowerCase() : c.kind;
+  };
+  const stripPrefix = (t) => String(t || "").replace(/^\s*\d{4}-\d{2}-\d{2}(?:\s+worklog\s*\([^)]*\))?\s*:?\s*/i, "");
+
   main.innerHTML = `
-    <section class="dash-page">
-      <header class="dash-head">
+    <section class="page home-page">
+      <header class="page-head">
         <div>
-          <h1>Dashboard</h1>
-          <p class="sub">What matters right now for <strong>${esc(focus)}</strong>. Memory stays on this machine.</p>
+          <h1>${greeting()}</h1>
+          <p class="sub">Here is what your agents remember${focus && focus !== "All memory" ? ` in <strong>${esc(prettyRepoName(focus))}</strong>` : ""}. It all stays on this machine.</p>
         </div>
-        <div class="dash-actions">
-          <button class="btn secondary small" type="button" data-go="brain">Open Memory</button>
-          <button class="btn secondary small" type="button" data-go="tasks">Open Tasks</button>
-          <button class="btn secondary small" type="button" data-go="analytics">Open Analytics</button>
+        <div class="page-actions">
+          <button class="btn small" type="button" data-go="brain">Open memory</button>
         </div>
       </header>
 
-      <div class="dash-kpis">
-        <button type="button" class="dash-kpi" data-go="brain" data-filter="files">
-          <b>${claims.length}</b><span>Facts stored</span>
+      <div class="stat-row">
+        <button type="button" class="stat" data-go="brain" data-filter="files">
+          <span class="stat-num">${claims.length}</span><span class="stat-label">facts remembered</span>
         </button>
-        <button type="button" class="dash-kpi ${pendingTotal ? "warn" : ""}" data-go="brain" data-filter="drafts">
-          <b>${pendingTotal}</b><span>Waiting to approve</span>
+        <button type="button" class="stat ${pendingTotal ? "attention" : ""}" data-go="brain" data-filter="drafts">
+          <span class="stat-num">${pendingTotal}</span><span class="stat-label">${pendingTotal === 1 ? "note" : "notes"} to review</span>
         </button>
-        <button type="button" class="dash-kpi" data-go="brain" data-filter="pinned">
-          <b>${pinned}</b><span>Pinned</span>
+        <button type="button" class="stat" data-go="analytics">
+          <span class="stat-num">${usedThisWeek}</span><span class="stat-label">times agents used memory this week</span>
         </button>
-        <button type="button" class="dash-kpi" data-go="analytics">
-          <b>${formatPct(totals.hitRate)}</b><span>Hit rate · ${totals.localHits ?? 0} hits</span>
+        <button type="button" class="stat" data-go="analytics">
+          <span class="stat-num">~${esc(formatDuration(totals.estimatedMsSaved))}</span><span class="stat-label">saved in the last ${state.usage?.days ?? 30} days</span>
         </button>
-        <div class="dash-kpi static">
-          <b>${esc(String(tier))}</b><span>License</span>
-        </div>
-        <div class="dash-kpi static">
-          <b>${formatUsd(totals.estimatedUsdSaved)}</b><span>Est. $ saved · ${esc(savingsCaveat(agg))}</span>
-        </div>
       </div>
 
-      <div class="dash-grid">
-        <article class="dash-panel">
-          <h2>Needs attention</h2>
+      <div class="home-grid">
+        <article class="card card-tall">
+          <header class="card-head"><h2>Recent work</h2><button type="button" class="linkish small" data-go="brain" data-filter="files">All facts</button></header>
+          ${
+            recentWork.length
+              ? `<ul class="line-list">${recentWork
+                  .map(
+                    (c) => `<li><button type="button" class="line" data-open-claim="${esc(c.id)}">
+                      <span class="tag tag-${esc(String(workStatus(c)).replace(/\s+/g, "-"))}">${esc(workStatus(c))}</span>
+                      <span class="line-text">${esc(cleanLine(stripPrefix(c.text), 120))}</span>
+                      <span class="line-meta">${esc(formatWhen(c.updated_at))}</span>
+                    </button></li>`,
+                  )
+                  .join("")}</ul>`
+              : `<p class="empty">Nothing yet. When an agent saves progress or a decision, it shows up here.</p>`
+          }
+        </article>
+
+        <article class="card">
+          <header class="card-head"><h2>Needs your review</h2>${pendingTotal ? `<button type="button" class="linkish small" data-go="brain" data-filter="drafts">Review all</button>` : ""}</header>
           ${
             pendingTotal
-              ? `<p>${pendingTotal} session capture${pendingTotal === 1 ? "" : "s"} waiting · ${highDrafts} high · ${junkDrafts} junk.</p>
-                 <div class="drawer-actions">
-                   <button class="btn small" type="button" data-go="brain" data-filter="drafts">Review Approve queue</button>
-                 </div>`
-              : `<p class="note">No pending captures. New session-end drafts will show up here.</p>`
-          }
-          ${
-            misses.length
-              ? `<h3>Recent misses</h3><ul class="dash-list">${misses
-                  .slice(0, 5)
+              ? `<ul class="line-list">${drafts
+                  .slice(0, 4)
                   .map(
-                    (e) =>
-                      `<li><strong>${esc(eventQueryLabel(e))}</strong><span class="meta">${esc(e.platform || "agent")} · ${esc(formatWhen(e.created_at))}</span></li>`,
+                    (d) => `<li><button type="button" class="line" data-go="brain" data-filter="drafts">
+                      <span class="line-text">${esc(cleanLine(d.summary || d.title || d.proposal?.claims?.[0]?.text || "Captured note", 100))}</span>
+                    </button></li>`,
                   )
                   .join("")}</ul>`
-              : `<p class="note">No recent misses in the feed.</p>`
+              : `<p class="empty">You're all caught up.</p>`
           }
         </article>
-        <article class="dash-panel">
-          <h2>Working well</h2>
-          <p>${hits.length} local hit${hits.length === 1 ? "" : "s"} in recent uses · ~${formatTokens(totals.estimatedTokensSaved ?? 0)} tokens estimated avoided (${state.usage?.days ?? 30}d).</p>
+
+        <article class="card">
+          <header class="card-head"><h2>Open tasks</h2><button type="button" class="linkish small" data-go="tasks">Board</button></header>
           ${
-            hits.length
-              ? `<ul class="dash-list">${hits
-                  .slice(0, 5)
+            openTasks.length
+              ? `<ul class="line-list">${openTasks
                   .map(
-                    (e) =>
-                      `<li><strong>${esc(eventQueryLabel(e))}</strong><span class="meta">${eventClaimIds(e).length} facts · ${esc(formatWhen(e.created_at))}</span></li>`,
+                    (t) => `<li><button type="button" class="line" data-go="tasks">
+                      <span class="tag tag-${esc(t.status)}">${esc(t.status)}</span>
+                      <span class="line-text">${esc(cleanLine(t.title, 90))}</span>
+                    </button></li>`,
                   )
                   .join("")}</ul>`
-              : `<p class="note">Ask Cursor something in a tracked repo — hits appear after <code>amem context</code> runs.</p>`
+              : `<p class="empty">No open tasks.</p>`
           }
         </article>
-        <article class="dash-panel">
-          <h2>Densest files</h2>
+
+        <article class="card">
+          <header class="card-head"><h2>Your agents asked</h2><button type="button" class="linkish small" data-go="analytics">Insights</button></header>
           ${
-            topFiles.length
-              ? `<ul class="dash-list">${topFiles
-                  .map(
-                    (f) =>
-                      `<li><button type="button" class="linkish" data-file="${esc(f.file)}"><code>${esc(fileLabel(f.file))}</code></button><span class="meta">${f.items.length} fact${f.items.length === 1 ? "" : "s"}</span></li>`,
-                  )
+            questions.length
+              ? `<ul class="line-list">${questions
+                  .map((e) => {
+                    const hit = eventKindOf(e) === "local_hit";
+                    return `<li><div class="line static">
+                      <span class="tag ${hit ? "tag-done" : "tag-miss"}" title="${hit ? "Memory had an answer" : "Memory had nothing useful"}">${hit ? "answered" : "no answer"}</span>
+                      <span class="line-text">${esc(cleanLine(eventQueryLabel(e), 100))}</span>
+                      <span class="line-meta">${esc(formatWhen(e.created_at))}</span>
+                    </div></li>`;
+                  })
                   .join("")}</ul>`
-              : `<p class="note">No facts yet.</p>`
+              : `<p class="empty">Questions appear here once an agent asks amem for context.</p>`
           }
-          <div class="drawer-actions">
-            <button class="btn secondary small" type="button" data-go="brain" data-viz="orbit">View as Orbit</button>
-            <button class="btn secondary small" type="button" data-go="brain" data-filter="pinned">Pinned facts</button>
-          </div>
         </article>
       </div>
     </section>`;
 
   main.querySelectorAll("[data-go]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const tab = btn.dataset.go;
       if (btn.dataset.filter) state.brainFilter = btn.dataset.filter;
-      if (btn.dataset.viz) {
-        setMemoryViz(btn.dataset.viz);
-      }
-      setTab(tab);
+      if (btn.dataset.viz) setMemoryViz(btn.dataset.viz);
+      setTab(btn.dataset.go);
     });
   });
-  main.querySelectorAll("[data-file]").forEach((btn) => {
+  main.querySelectorAll("[data-open-claim]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      state.selectedFile = btn.dataset.file;
+      const claim = claims.find((c) => c.id === btn.dataset.openClaim);
       state.brainFilter = "files";
       setTab("brain");
+      if (claim) {
+        state.selectedNode = { type: "claim", id: claim.id, detail: claim };
+      }
     });
   });
 }
@@ -4023,7 +4265,7 @@ async function downloadSavings(format) {
     a.click();
     URL.revokeObjectURL(a.href);
   } catch (e) {
-    alert(e.message);
+    notify(e.message);
   }
 }
 
@@ -4121,6 +4363,7 @@ function drawChart(days) {
 let renderSeq = 0;
 
 async function render() {
+  mountVaultIn(null);
   const seq = ++renderSeq;
   const stale = () => seq !== renderSeq;
   fillRepoSelect();
@@ -4146,7 +4389,7 @@ async function render() {
     try {
       await loadScan();
     } catch (e) {
-      if (!stale()) alert(e.message);
+      if (!stale()) notify(e.message);
     }
     if (stale()) return;
     fillRepoSelect();
@@ -4169,6 +4412,9 @@ async function render() {
       }),
       refreshUsage(statsScope(), state.statsDays || 30).catch(() => {
         state.usage = null;
+      }),
+      refreshTasks().catch(() => {
+        state.tasks = state.tasks || [];
       }),
     ]);
     if (stale()) return;
@@ -4219,7 +4465,7 @@ async function render() {
   }
 }
 
-document.querySelectorAll("#tabs button[data-tab]").forEach((b) => {
+document.querySelectorAll("button[data-tab]").forEach((b) => {
   b.addEventListener("click", () => setTab(b.dataset.tab));
 });
 $("#brandBtn")?.addEventListener("click", () => setTab(isPaidLicense() ? "dashboard" : "welcome"));
@@ -4233,7 +4479,7 @@ $("#tryRetrievalBtn")?.addEventListener("click", async () => {
   if (state.tab !== "brain") return;
   const q = String($("#brainSearch")?.value || state.brainSearch || "").trim();
   if (!q) {
-    alert("Type a query in the search box first.");
+    notify("Type a query in the search box first.");
     return;
   }
   state.brainSearch = q;
@@ -4280,16 +4526,16 @@ $("#autoApplyAll")?.addEventListener("change", async (e) => {
     renderBrain();
   } catch (err) {
     e.target.checked = !on;
-    alert(err.message);
+    notify(err.message);
   }
 });
 $("#rulesSyncBtn")?.addEventListener("click", async () => {
   if (state.tab !== "brain") return;
   try {
     const result = await api("/api/rules/sync", { method: "POST", body: "{}" });
-    alert(`Wrote ${result.pinned} pinned facts to ${result.path}`);
+    notify(`Wrote ${result.pinned} pinned facts to ${result.path}`);
   } catch (err) {
-    alert(err.message);
+    notify(err.message);
   }
 });
 
@@ -4323,10 +4569,19 @@ $("#repoSelect")?.addEventListener("change", async (e) => {
 $("#addRepoBtn")?.addEventListener("click", () => setAddPanel(true));
 $("#personalBtn")?.addEventListener("click", () => focusPersonal());
 $("#vaultToggle")?.addEventListener("click", () => {
-  $("#vaultPanel")?.classList.toggle("hidden");
-  paintVault();
+  state.focusVault = true;
+  if (state.tab === "setup" && $("#settingsVaultCard")) {
+    state.focusVault = false;
+    $("#settingsVaultCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  state.setupEdit = false;
+  setTab("setup");
 });
-$("#vaultCloseBtn")?.addEventListener("click", () => $("#vaultPanel")?.classList.add("hidden"));
+$("#vaultCloseBtn")?.addEventListener("click", () => {
+  if ($("#vaultPanel")?.classList.contains("in-settings")) return;
+  $("#vaultPanel")?.classList.add("hidden");
+});
 $("#vaultPass")?.addEventListener("input", paintVaultPassButtons);
 $("#vaultPassConfirm")?.addEventListener("input", paintVaultPassButtons);
 $("#vaultBackupBtn")?.addEventListener("click", (e) =>
@@ -4410,7 +4665,7 @@ $("#addRepoPath")?.addEventListener("keydown", (e) => {
   if (e.key === "Enter") openAddedPath();
 });
 
-document.querySelectorAll("#tabs button[data-tab]").forEach((b) => {
+document.querySelectorAll("button[data-tab]").forEach((b) => {
   b.classList.toggle("active", b.dataset.tab === state.tab);
 });
 

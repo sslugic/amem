@@ -106,6 +106,18 @@ export function hostLaunches(home = homedir()): Array<{ host: string; command: s
   } catch {
     // no Claude Code settings
   }
+  try {
+    const cursor = JSON.parse(readFileSync(join(home, ".cursor", "hooks.json"), "utf8")) as {
+      hooks?: Record<string, Array<{ command?: string }>>;
+    };
+    const cmd = Object.values(cursor.hooks ?? {})
+      .flat()
+      .map((h) => h?.command ?? "")
+      .find((c) => /amem/.test(c));
+    if (cmd) out.push({ host: "Cursor hooks", command: cmd, install: resolveCmd(cmd) });
+  } catch {
+    // no Cursor hooks
+  }
   return out;
 }
 
