@@ -187,6 +187,62 @@ body{
 .show-more a{color:var(--accent);text-decoration:none;font-weight:500}
 .show-more a:hover{text-decoration:underline}
 .show[data-paused="true"] .show-kicker::after{content:" · paused"}
+.sec{max-width:1080px;margin:0 auto;padding:3rem 1.25rem 0;width:100%;scroll-margin-top:3.5rem}
+html{scroll-behavior:smooth}
+.sec-head{max-width:44rem;margin:0 0 1.4rem}
+.sec-kicker{margin:0 0 .4rem;color:var(--accent);font-size:.74rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.sec h2{margin:0 0 .5rem;font-size:clamp(1.45rem,3.4vw,1.95rem);letter-spacing:-.03em;line-height:1.15}
+.sec-lead{margin:0;color:var(--muted);font-size:1rem}
+.feat-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.85rem}
+.feat{padding:1.1rem 1.1rem 1.15rem;border:1px solid var(--line);border-radius:16px;background:rgba(20,27,33,.85);
+  display:flex;flex-direction:column;gap:.45rem;transition:border-color .15s,transform .15s}
+.feat:hover{border-color:rgba(46,196,182,.4);transform:translateY(-2px)}
+.feat-ico{width:2.2rem;height:2.2rem;border-radius:.7rem;display:grid;place-items:center;
+  background:rgba(46,196,182,.12);color:var(--accent)}
+.feat-ico svg{width:1.15rem;height:1.15rem;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.feat h3{margin:.2rem 0 0;font-size:1rem;letter-spacing:-.01em}
+.feat p{margin:0;color:var(--muted);font-size:.88rem}
+.feat .tagline{margin-top:auto;padding-top:.35rem;color:var(--claim);font-size:.78rem}
+.dev-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.85rem}
+.dev{display:grid;grid-template-columns:auto 1fr;gap:.25rem .85rem;padding:1.05rem 1.1rem;border:1px solid var(--line);
+  border-radius:16px;background:rgba(20,27,33,.6)}
+.dev-n{grid-row:span 2;width:1.9rem;height:1.9rem;border-radius:999px;display:grid;place-items:center;
+  border:1px solid rgba(46,196,182,.45);color:var(--accent);font-weight:600;font-size:.85rem}
+.dev h3{margin:0;font-size:.98rem}
+.dev p{margin:0;color:var(--muted);font-size:.88rem}
+.value-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.85rem}
+.value{padding:1.25rem 1.2rem;border:1px solid var(--line);border-radius:18px;
+  background:linear-gradient(180deg,rgba(46,196,182,.08),rgba(20,27,33,.85) 55%)}
+.value-k{margin:0;color:var(--accent);font-size:.74rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.value h3{margin:.35rem 0 .45rem;font-size:1.2rem;letter-spacing:-.02em}
+.value ul{margin:0;padding:0 0 0 1.05rem;color:var(--muted);font-size:.88rem}
+.value li+li{margin-top:.35rem}
+.calc{margin:1rem 0 0;padding:1.25rem;border:1px solid var(--line);border-radius:18px;background:rgba(20,27,33,.85);
+  display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:1.25rem;align-items:start}
+.calc h3{margin:0 0 .25rem;font-size:1.05rem}
+.calc-in{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem;margin:.85rem 0 0}
+.calc-in label{display:flex;flex-direction:column;gap:.3rem;color:var(--muted);font-size:.8rem}
+.calc-in input{width:100%;padding:.55rem .65rem;border-radius:10px;border:1px solid var(--line);
+  background:rgba(11,15,18,.8);color:var(--ink);font:inherit;font-variant-numeric:tabular-nums}
+.calc-in input:focus{outline:2px solid rgba(46,196,182,.5);outline-offset:1px}
+.calc-out{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem}
+.calc-stat{padding:.85rem .9rem;border:1px solid var(--line);border-radius:14px;background:rgba(11,15,18,.55)}
+.calc-stat .k{margin:0;color:var(--muted);font-size:.76rem}
+.calc-stat .v{margin:.2rem 0 0;font-size:1.45rem;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.calc-stat.big{grid-column:1/-1;border-color:rgba(46,196,182,.45)}
+.calc-stat.big .v{color:var(--accent);font-size:1.9rem}
+.calc-note{grid-column:1/-1;margin:0;color:var(--muted);font-size:.78rem}
+.closer{max-width:640px;margin:3rem auto 3.5rem;padding:0 1.25rem;width:100%;text-align:center}
+.closer h2{margin:0 0 .45rem;font-size:1.5rem;letter-spacing:-.03em}
+.closer p{margin:0 0 1rem;color:var(--muted)}
+.closer .cmd-box{text-align:left}
+@media(max-width:900px){
+  .feat-grid,.value-grid{grid-template-columns:1fr 1fr}
+  .calc{grid-template-columns:1fr}
+}
+@media(max-width:620px){
+  .feat-grid,.value-grid,.dev-grid,.calc-in{grid-template-columns:1fr}
+}
 .what{max-width:860px;margin:0 auto;padding:2rem 1.25rem 3.5rem;width:100%}
 .what h1{margin:0 0 .4rem;font-size:clamp(1.6rem,4vw,2.1rem);letter-spacing:-.03em}
 .what-lead{margin:0 0 1.75rem;color:var(--muted);max-width:40rem;font-size:1.02rem}
@@ -624,6 +680,29 @@ function cmdScript() {
     go(0, false);
     if (!reduce) timer = setInterval(() => { if (!locked) go(i + 1, false); }, 6500);
   }
+
+  const calc = document.querySelector("[data-calc]");
+  if (calc) {
+    const num = (name) => Math.max(0, Number(calc.querySelector('[name="' + name + '"]')?.value) || 0);
+    const out = (name, text) => {
+      const el = calc.querySelector('[data-out="' + name + '"]');
+      if (el) el.textContent = text;
+    };
+    const money = (v) => "$" + Math.round(v).toLocaleString("en-US");
+    const paint = () => {
+      const days = 21;
+      const sessions = num("sessions") * days;
+      const hours = (sessions * num("minutes")) / 60;
+      const timeCost = hours * num("rate");
+      const tokens = sessions * num("tokens") * 1000;
+      const tokenCost = (tokens / 1e6) * num("price");
+      out("hours", hours.toFixed(1) + " h");
+      out("tokens", (tokens / 1e6).toFixed(1) + "M");
+      out("total", money(timeCost + tokenCost));
+    };
+    calc.addEventListener("input", paint);
+    paint();
+  }
 })();
 </script>`;
 }
@@ -652,6 +731,127 @@ function installCommands() {
 
 function dollars(cents) {
   return `$${(Number(cents) / 100).toFixed(0)}`;
+}
+
+function featureSections() {
+  const ico = (d) => `<span class="feat-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="${d}"/></svg></span>`;
+  const features = [
+    ["M10 3c3.9 0 7 1.3 7 3s-3.1 3-7 3-7-1.3-7-3 3.1-3 7-3zM3 6v8c0 1.7 3.1 3 7 3s7-1.3 7-3V6M3 10c0 1.7 3.1 3 7 3s7-1.3 7-3",
+      "Memory that sticks", "Decisions, constraints, gotchas and owners saved as short facts tied to the files they describe. Your next session starts with them.", "amem_remember · amem_context"],
+    ["M3 10h3l2-5 4 10 2-5h3",
+      "Context on autopilot", "Hooks inject the right facts when a session starts and when you ask a question. No copy-pasting a project brief into every chat.", "Session start + every prompt"],
+    ["M8.5 14a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11zm3.9-1.6L17 17",
+      "Search that finds the right thing", "Keyword search, on-device embeddings, pins and freshness ranked together. A small, focused packet, not a dump of everything.", "Capped packet, no prompt stuffing"],
+    ["M5 3h8l2 2v12H5zM8 8h4M8 11h4M8 14h2",
+      "Skills: how you do it here", "Repeatable procedures (release steps, deploy dance, test setup) saved once. Agents see the name and load the steps only when needed.", "SKILL.md, reviewed before saving"],
+    ["M4 5h2v2H4zm4 .5h8M4 9h2v2H4zm4 .5h8M4 13h2v2H4zm4 .5h8",
+      "Tasks that outlive the chat", "A Backlog → Next → Doing → Done board agents can update. “Do this later” stops disappearing when the tab closes.", "Open tasks ride along in context"],
+    ["M4 4h12v9H4zM8 16h4M10 13v3",
+      "A dashboard you can read", "See what your agents remember, what needs review, open tasks and what they asked. Retire or delete a fact in one click, with undo.", "amem ui · localhost only"],
+    ["M10 3v3M10 14v3M3 10h3M14 10h3M5.5 5.5l2 2M12.5 12.5l2 2M14.5 5.5l-2 2M7.5 12.5l-2 2",
+      "Keeps itself tidy", "Facts tied to edited files are flagged stale. Newer facts retire older ones. Duplicates and chat noise are filtered before they land.", "Stale flags · retire · review queue"],
+    ["M6 9V7a4 4 0 0 1 8 0v2M5 9h10v8H5z",
+      "Private by design", "One SQLite file in ~/.amem. Binds to 127.0.0.1. Optional AES-256-GCM lock and encrypted daily backups. Secrets are blocked from being saved.", "No cloud, no org wiki"],
+    ["M7 7h6v6H7zM3 10h4M13 10h4M10 3v4M10 13v4",
+      "Works with your agents", "Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Windsurf, Continue, Aider and Zed share one memory over MCP.", "One memory, every tool"],
+  ];
+  const featureCards = features
+    .map(([d, h, p, t]) => `<article class="feat">${ico(d)}<h3>${h}</h3><p>${p}</p><p class="tagline">${t}</p></article>`)
+    .join("");
+
+  const dev = [
+    ["Stop re-explaining your project", "The constraints you explained on Monday are already there on Tuesday, in Cursor or in Claude, without a pasted brief."],
+    ["Start on the right files", "Facts point at the files they came from, so agents read three files instead of grepping three hundred."],
+    ["Keep decisions with their reasons", "The “why” behind a choice survives the chat it was made in, so nobody undoes it by accident next week."],
+    ["Hand off between tools and days", "Switch from the editor to the terminal, or pick work up after a weekend. Open tasks and recent work are waiting."],
+    ["Standups and status in a minute", "Work logged as you go means “what did I do yesterday?” is a lookup, not an archaeology session."],
+    ["Fewer repeated mistakes", "A gotcha learned once (a flaky test, a deploy order, a quota) is a fact the next agent sees before it trips on it."],
+  ];
+  const devCards = dev
+    .map(([h, p], i) => `<article class="dev"><span class="dev-n">${i + 1}</span><h3>${h}</h3><p>${p}</p></article>`)
+    .join("");
+
+  return `
+  <section class="sec" id="features">
+    <div class="sec-head">
+      <p class="sec-kicker">Everything in the box</p>
+      <h2>One local memory for every coding agent you use</h2>
+      <p class="sec-lead">amem sits next to your agents and gives them what they learned last time: facts, procedures and open work. Free, open source, and it never leaves your machine.</p>
+    </div>
+    <div class="feat-grid">${featureCards}</div>
+  </section>
+
+  <section class="sec" id="developers">
+    <div class="sec-head">
+      <p class="sec-kicker">For developers</p>
+      <h2>Your agent remembers the project, so you don't have to repeat it</h2>
+      <p class="sec-lead">Every new session today starts cold. amem turns the context you already paid for into something the next session can use.</p>
+    </div>
+    <div class="dev-grid">${devCards}</div>
+  </section>
+
+  <section class="sec" id="value">
+    <div class="sec-head">
+      <p class="sec-kicker">Time, speed, money</p>
+      <h2>Less warm-up, fewer tokens, faster answers</h2>
+      <p class="sec-lead">Most of an agent's first minutes go to finding its bearings. amem replaces that with a small, ranked packet of what it needs.</p>
+    </div>
+    <div class="value-grid">
+      <article class="value">
+        <p class="value-k">Time</p>
+        <h3>Skip the re-briefing</h3>
+        <ul>
+          <li>No retyping project context at the start of each chat</li>
+          <li>Procedures run from a saved skill, not trial and error</li>
+          <li>Follow-ups are on the board, not lost in scrollback</li>
+        </ul>
+      </article>
+      <article class="value">
+        <p class="value-k">Speed</p>
+        <h3>Answers start from the right place</h3>
+        <ul>
+          <li>Context is a local lookup in milliseconds, no network call</li>
+          <li>File anchors send agents straight to the right code</li>
+          <li>Fewer exploration turns before real work begins</li>
+        </ul>
+      </article>
+      <article class="value">
+        <p class="value-k">Money</p>
+        <h3>Spend tokens on work, not discovery</h3>
+        <ul>
+          <li>A capped context packet instead of broad tree searches</li>
+          <li>Embeddings run on-device: no embedding API bill</li>
+          <li>Free and local: no seat fees, no hosted vector database</li>
+        </ul>
+      </article>
+    </div>
+
+    <form class="calc" data-calc onsubmit="return false">
+      <div>
+        <h3>What does re-orienting cost you?</h3>
+        <p class="note">Put in your own numbers. The estimate assumes 21 working days a month.</p>
+        <div class="calc-in">
+          <label>Agent sessions per day<input name="sessions" type="number" min="0" step="1" value="8" inputmode="numeric"/></label>
+          <label>Minutes spent re-orienting each<input name="minutes" type="number" min="0" step="1" value="4" inputmode="numeric"/></label>
+          <label>Your hourly cost ($)<input name="rate" type="number" min="0" step="5" value="75" inputmode="numeric"/></label>
+          <label>Exploration tokens per session (thousands)<input name="tokens" type="number" min="0" step="5" value="30" inputmode="numeric"/></label>
+          <label>Model input price ($ per million tokens)<input name="price" type="number" min="0" step="0.5" value="3" inputmode="decimal"/></label>
+        </div>
+      </div>
+      <div class="calc-out" aria-live="polite">
+        <div class="calc-stat"><p class="k">Time spent re-orienting / month</p><p class="v" data-out="hours">–</p></div>
+        <div class="calc-stat"><p class="k">Exploration tokens / month</p><p class="v" data-out="tokens">–</p></div>
+        <div class="calc-stat big"><p class="k">Monthly cost of starting cold</p><p class="v" data-out="total">–</p></div>
+        <p class="calc-note">This is what starting every session from zero costs at your numbers. amem's job is to cut it down. Your dashboard tracks how often agents used memory and estimates the time saved.</p>
+      </div>
+    </form>
+  </section>
+
+  <section class="closer">
+    <h2>Give your agents a memory</h2>
+    <p>Free. One command. Everything stays on your machine.</p>
+    ${installCommands()}
+  </section>`;
 }
 
 function landing() {
@@ -717,9 +917,10 @@ function landing() {
           <button type="button" data-next aria-label="Next">→</button>
         </div>
       </div>
-      <p class="show-more"><a href="/what">Everything amem does — problems, features, privacy</a></p>
+      <p class="show-more"><a href="#features">See every feature</a> · <a href="/what">How it works and privacy</a></p>
     </div>
   </section>
+  ${featureSections()}
 </main>`,
   );
 }
