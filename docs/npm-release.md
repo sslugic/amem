@@ -36,3 +36,15 @@ This repo does **not** auto-publish on every push.
 ## Pack contents
 
 `package.json#files` includes `dist`, `ui-static`, `docs`, `skills`, `scripts/mdm-offboard.sh`, and `scripts/postinstall.js` (anonymous install ping; opt out with `AMEM_TELEMETRY_DISABLED=1`). Native code is pulled in as the `better-sqlite3` dependency — do not vendor it.
+
+## GitHub Packages
+
+Every `v*` tag also publishes the same build to GitHub Packages as `@sslugic/amem` (GitHub requires the scope to match the owner). It uses the workflow's `GITHUB_TOKEN`, so no extra secret is needed. To publish an older tag there, run the release workflow by hand with `tag` set (for example `v0.4.1`).
+
+Install from GitHub Packages:
+
+```bash
+npm install -g @sslugic/amem --registry=https://npm.pkg.github.com
+```
+
+GitHub Packages needs a GitHub token with `read:packages` to install, even for public packages. Most people should use `npx @iamem/amem setup` from npm.
