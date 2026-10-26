@@ -1,6 +1,22 @@
 # amem
 
-**Personal agent memory that stays on your machine.**
+[![npm version](https://img.shields.io/npm/v/@iamem/amem?color=2ec4b6&label=npm)](https://www.npmjs.com/package/@iamem/amem)
+[![npm downloads](https://img.shields.io/npm/dm/@iamem/amem?color=2ec4b6)](https://www.npmjs.com/package/@iamem/amem)
+[![CI](https://github.com/sslugic/amem/actions/workflows/ci.yml/badge.svg)](https://github.com/sslugic/amem/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node 20+](https://img.shields.io/badge/node-%3E%3D20-339933)](https://nodejs.org)
+[![MCP server](https://img.shields.io/badge/MCP-server-7eb8ff)](https://modelcontextprotocol.io)
+[![Local only](https://img.shields.io/badge/data-stays%20on%20your%20machine-2ec4b6)](#privacy-non-negotiable)
+
+**Personal agent memory that stays on your machine.** Works with Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Windsurf, Continue, Aider and Zed.
+
+```bash
+npx @iamem/amem setup
+```
+
+![amem dashboard: Home, Memory and Tasks](https://raw.githubusercontent.com/sslugic/amem/main/docs/media/amem-demo.gif)
+
+[Website](https://getamem.com) · [Features](https://getamem.com/features) · [Why amem](https://getamem.com/why) · [How it works](https://getamem.com/what)
 
 Coding agents forget between sessions. They re-grep the same tree, re-learn the same constraints, and burn tokens rediscovering decisions you already paid for once.
 

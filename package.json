@@ -1,6 +1,6 @@
 {
   "name": "@iamem/amem",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Local personal agent memory for Cursor and Claude Code. Private to your machine — never shared.",
   "type": "module",
   "bin": {
@@ -20,6 +20,7 @@
     "skills",
     "templates",
     "docs",
+    "!docs/media",
     "ui-static",
     "scripts/mcp-launch.sh",
     "scripts/mdm-offboard.sh",
@@ -48,14 +49,27 @@
     "cursor",
     "claude-code",
     "local",
-    "sqlite"
+    "sqlite",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude",
+    "ai-agents",
+    "memory",
+    "llm",
+    "local-first",
+    "developer-tools",
+    "context",
+    "rag",
+    "windsurf",
+    "copilot"
   ],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sslugic/amem.git"
   },
-  "homepage": "https://github.com/sslugic/amem#readme",
+  "homepage": "https://getamem.com",
   "bugs": {
     "url": "https://github.com/sslugic/amem/issues"
   },
@@ -66,5 +80,6 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.0",
     "typescript": "^5.8.0"
-  }
+  },
+  "mcpName": "io.github.sslugic/amem"
 }
