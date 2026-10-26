@@ -81,7 +81,7 @@ function packageRoot(): string {
   return join(here, "..");
 }
 
-function readVersion(): string {
+export function readVersion(): string {
   try {
     const pkg = JSON.parse(readFileSync(join(packageRoot(), "package.json"), "utf8")) as {
       version?: string;
