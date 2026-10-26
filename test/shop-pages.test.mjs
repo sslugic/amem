@@ -54,32 +54,52 @@ async function get(port, path) {
   return { status: res.status, text, location: res.headers.get("location") };
 }
 
-test("homepage keeps the install hero and adds a click-to-pause slideshow", async () => {
+test("homepage is the install hero with links to the other tabs", async () => {
   await withShop(async (port) => {
     const { status, text } = await get(port, "/");
     assert.equal(status, 200);
     assert.match(text, /Everything is free/);
     assert.match(text, /npx @iamem\/amem setup/);
-    assert.match(text, /data-show/);
-    assert.match(text, /Agents forget\. amem does not/);
+    assert.match(text, /hero-full/);
+    assert.match(text, /href="\/features"/);
+    assert.match(text, /href="\/why"/);
     assert.match(text, /href="\/what"/);
-    assert.match(text, /What it does/);
+    // Details live on their own tabs, not on the front page.
+    assert.doesNotMatch(text, /Everything in the box<\/p>\s*<h2>/);
+    assert.doesNotMatch(text, /<form class="calc"/);
   });
 });
 
-test("what-it-does page covers problems and the main features", async () => {
+test("features tab lists what amem includes", async () => {
+  await withShop(async (port) => {
+    const { status, text } = await get(port, "/features");
+    assert.equal(status, 200);
+    assert.match(text, /Memory that sticks/);
+    assert.match(text, /Skills: how you do it here/);
+    assert.match(text, /Tasks that outlive the chat/);
+    assert.match(text, /amem_context/);
+    assert.match(text, /nav-tab active" href="\/features"/);
+  });
+});
+
+test("why tab covers developer benefits and the cost calculator", async () => {
+  await withShop(async (port) => {
+    const { status, text } = await get(port, "/why");
+    assert.equal(status, 200);
+    assert.match(text, /For developers/);
+    assert.match(text, /Time, speed, money/);
+    assert.match(text, /<form class="calc"/);
+  });
+});
+
+test("how-it-works page covers problems, a day with amem and privacy", async () => {
   await withShop(async (port) => {
     const { status, text } = await get(port, "/what");
     assert.equal(status, 200);
-    assert.match(text, /What amem actually does/);
+    assert.match(text, /How amem works/);
     assert.match(text, /Without it/);
-    assert.match(text, />Memory</);
-    assert.match(text, />Skills</);
-    assert.match(text, />Tasks</);
+    assert.match(text, /How a day goes/);
     assert.match(text, /Never leaves|localhost|~\/\.amem/);
-    assert.match(text, /amem_context/);
-    const alias = await get(port, "/features");
-    assert.equal(alias.status, 302);
-    assert.equal(alias.location, "/what");
+    assert.doesNotMatch(text, /What you get/);
   });
 });
