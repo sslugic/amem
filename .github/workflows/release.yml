@@ -65,3 +65,32 @@ jobs:
           npm publish --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # List the release on the official MCP Registry (registry.modelcontextprotocol.io).
+  # Auth is GitHub OIDC for the io.github.sslugic namespace; the registry checks the
+  # npm package's mcpName, so this runs after the npm publish.
+  mcp-registry:
+    if: github.event_name == 'push'
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+      - name: set server.json version from tag
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          jq --arg v "$v" '.version=$v | .packages[0].version=$v' server.json > server.tmp && mv server.tmp server.json
+      - name: wait for npm
+        run: |
+          for i in $(seq 1 30); do
+            npm view "@iamem/amem@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1 && exit 0
+            sleep 10
+          done
+          echo "npm version not visible yet" && exit 1
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
