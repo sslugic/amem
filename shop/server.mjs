@@ -90,7 +90,9 @@ function siteChrome(active, body, title = "amem — get started") {
     <a class="brand" href="/">amem</a>
     <nav class="nav" aria-label="Site">
       ${tab("start", "/", "Start")}
-      ${tab("what", "/what", "What it does")}
+      ${tab("features", "/features", "Features")}
+      ${tab("why", "/why", "Why amem")}
+      ${tab("what", "/what", "How it works")}
     </nav>
   </header>
   ${body}
@@ -133,8 +135,30 @@ body{
   padding:.4rem .85rem;border-radius:999px;border:1px solid transparent}
 .nav-tab:hover{color:var(--ink)}
 .nav-tab.active{color:var(--ink);border-color:rgba(126,184,255,.55);background:rgba(126,184,255,.08)}
+.nav-tab{white-space:nowrap}
+@media(max-width:620px){
+  .top{padding:.7rem 1rem;gap:.5rem}
+  .nav{gap:.1rem;overflow-x:auto;scrollbar-width:none}
+  .nav-tab{font-size:.8rem;padding:.35rem .55rem}
+}
 .hero{position:relative;flex:0 0 auto;display:grid;align-items:center;min-height:min(68vh, 38rem);
   padding:2rem 1.25rem 2.5rem;overflow:hidden}
+.hero.hero-full{min-height:calc(100vh - 3.3rem);min-height:calc(100svh - 3.3rem);padding:2.5rem 1.25rem}
+.hero-full .hero-panel{width:min(720px,100%);padding:2.4rem 2.2rem 2rem}
+.hero-full .hero-brand{font-size:clamp(3rem,9vw,4.6rem)}
+.hero-full h1{font-size:clamp(1.5rem,4vw,2.1rem)}
+.hero-full .hero-lead{font-size:1.05rem;max-width:36rem;margin-bottom:1.4rem}
+.hero-jumps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.6rem;margin:1.4rem 0 0}
+.hero-jump{display:flex;flex-direction:column;gap:.15rem;padding:.75rem .85rem;border:1px solid var(--line);border-radius:12px;
+  background:rgba(11,15,18,.55);color:var(--ink);text-decoration:none;transition:border-color .15s,background .15s}
+.hero-jump:hover{border-color:rgba(46,196,182,.5);background:rgba(46,196,182,.08)}
+.hero-jump strong{font-size:.92rem}
+.hero-jump span{color:var(--muted);font-size:.8rem}
+.sec-first{padding-top:2.2rem}
+@media(max-width:620px){
+  .hero-jumps{grid-template-columns:1fr}
+  .hero-full .hero-panel{padding:1.6rem 1.2rem 1.4rem}
+}
 .hero-art{position:absolute;inset:0;pointer-events:none}
 .hero-art img{width:100%;height:100%;object-fit:cover;object-position:center 28%;
   opacity:.42;filter:saturate(1.05) contrast(1.05)}
@@ -733,9 +757,9 @@ function dollars(cents) {
   return `$${(Number(cents) / 100).toFixed(0)}`;
 }
 
-function featureSections() {
+function siteSections() {
   const ico = (d) => `<span class="feat-ico" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="${d}"/></svg></span>`;
-  const features = [
+  const featureList = [
     ["M10 3c3.9 0 7 1.3 7 3s-3.1 3-7 3-7-1.3-7-3 3.1-3 7-3zM3 6v8c0 1.7 3.1 3 7 3s7-1.3 7-3V6M3 10c0 1.7 3.1 3 7 3s7-1.3 7-3",
       "Memory that sticks", "Decisions, constraints, gotchas and owners saved as short facts tied to the files they describe. Your next session starts with them.", "amem_remember · amem_context"],
     ["M3 10h3l2-5 4 10 2-5h3",
@@ -755,7 +779,7 @@ function featureSections() {
     ["M7 7h6v6H7zM3 10h4M13 10h4M10 3v4M10 13v4",
       "Works with your agents", "Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Windsurf, Continue, Aider and Zed share one memory over MCP.", "One memory, every tool"],
   ];
-  const featureCards = features
+  const featureCards = featureList
     .map(([d, h, p, t]) => `<article class="feat">${ico(d)}<h3>${h}</h3><p>${p}</p><p class="tagline">${t}</p></article>`)
     .join("");
 
@@ -771,8 +795,15 @@ function featureSections() {
     .map(([h, p], i) => `<article class="dev"><span class="dev-n">${i + 1}</span><h3>${h}</h3><p>${p}</p></article>`)
     .join("");
 
-  return `
-  <section class="sec" id="features">
+  const closer = (title, line) => `
+  <section class="closer">
+    <h2>${title}</h2>
+    <p>${line}</p>
+    ${installCommands()}
+  </section>`;
+
+  const features = `
+  <section class="sec sec-first" id="features">
     <div class="sec-head">
       <p class="sec-kicker">Everything in the box</p>
       <h2>One local memory for every coding agent you use</h2>
@@ -780,8 +811,10 @@ function featureSections() {
     </div>
     <div class="feat-grid">${featureCards}</div>
   </section>
+  ${closer("Give your agents a memory", "Free. One command. Everything stays on your machine.")}`;
 
-  <section class="sec" id="developers">
+  const why = `
+  <section class="sec sec-first" id="developers">
     <div class="sec-head">
       <p class="sec-kicker">For developers</p>
       <h2>Your agent remembers the project, so you don't have to repeat it</h2>
@@ -846,55 +879,26 @@ function featureSections() {
       </div>
     </form>
   </section>
+  ${closer("Stop paying for cold starts", "Free. One command. Everything stays on your machine.")}`;
 
-  <section class="closer">
-    <h2>Give your agents a memory</h2>
-    <p>Free. One command. Everything stays on your machine.</p>
-    ${installCommands()}
-  </section>`;
+  return { features, why };
+}
+
+function featuresPage() {
+  return siteChrome("features", `<main>${siteSections().features}</main>`, "amem — features");
+}
+
+function whyPage() {
+  return siteChrome("why", `<main>${siteSections().why}</main>`, "amem — why it pays off");
 }
 
 function landing() {
-  const slides = [
-    {
-      title: "Agents forget. amem does not.",
-      body: "The next Cursor or Claude session starts with the constraints, gotchas, and file anchors you already paid to discover — not a cold grep of the whole tree.",
-    },
-    {
-      title: "Facts, procedures, and a board",
-      body: "Memory holds what is true. Skills hold how you do it here, loaded only when relevant. Tasks are a Kanban the agent can move so follow-ups survive the chat.",
-    },
-    {
-      title: "It learns at the end of a hard session",
-      body: "amem ships no model. When a session looks like a hard-won procedure, it nudges the agent to write a skill. You approve. The next agent does not rediscover it.",
-    },
-    {
-      title: "Never leaves the laptop",
-      body: "The database lives in <code>~/.amem</code>. The UI binds to localhost. No managed sync, no org wiki, no cloud RAG. Optional lock and encrypted local backups.",
-    },
-    {
-      title: "Cursor, Claude, and the rest",
-      body: "A project rule, stop hooks, and MCP tools (<code>amem_context</code>, <code>amem_remember</code>, skills, tasks). Same local DB for Windsurf, Continue, Aider, and Zed.",
-    },
-  ];
-  const slideHtml = slides
-    .map(
-      (s, i) => `<article class="show-slide${i === 0 ? " active" : ""}" data-slide ${i === 0 ? "" : "hidden"}>
-      <h3>${s.title}</h3>
-      <p>${s.body}</p>
-    </article>`,
-    )
-    .join("");
-  const dots = slides
-    .map(
-      (_, i) =>
-        `<button type="button" class="show-dot${i === 0 ? " active" : ""}" data-dot aria-label="Show slide ${i + 1}"${i === 0 ? ' aria-current="true"' : ""}></button>`,
-    )
-    .join("");
+  const jump = (href, title, line) =>
+    `<a class="hero-jump" href="${href}"><strong>${title}</strong><span>${line}</span></a>`;
   return siteChrome(
     "start",
     `<main>
-  <section class="hero">
+  <section class="hero hero-full">
     <div class="hero-art" aria-hidden="true">
       <img src="/public/amem-ui.png" alt="" width="1600" height="1000"/>
     </div>
@@ -902,25 +906,15 @@ function landing() {
       <p class="hero-kicker">Local agent memory</p>
       <p class="hero-brand">amem</p>
       <h1>Everything is free</h1>
-      <p class="hero-lead">Memory, skills, tasks, and the desktop app — all of it. Facts stay in <code>~/.amem</code> on your machine. One command, then open the UI.</p>
+      <p class="hero-lead">Agents forget. amem does not. Memory, skills, tasks and the desktop app give every coding agent what it learned last time. Facts stay in <code>~/.amem</code> on your machine. One command, then open the UI.</p>
       ${installCommands()}
+      <nav class="hero-jumps" aria-label="Learn more">
+        ${jump("/features", "Features", "Everything in the box")}
+        ${jump("/why", "Why amem", "Time, speed and money")}
+        ${jump("/what", "How it works", "A day with amem, privacy")}
+      </nav>
     </div>
   </section>
-  <section class="show" data-show tabindex="0" aria-roledescription="carousel" aria-label="What amem does">
-    <div class="show-card">
-      <p class="show-kicker">What changes</p>
-      <div class="show-frame">${slideHtml}</div>
-      <div class="show-nav">
-        <div class="show-dots">${dots}</div>
-        <div class="show-arrows">
-          <button type="button" data-prev aria-label="Previous">←</button>
-          <button type="button" data-next aria-label="Next">→</button>
-        </div>
-      </div>
-      <p class="show-more"><a href="#features">See every feature</a> · <a href="/what">How it works and privacy</a></p>
-    </div>
-  </section>
-  ${featureSections()}
 </main>`,
   );
 }
@@ -929,7 +923,7 @@ function whatPage() {
   return siteChrome(
     "what",
     `<main class="what">
-  <h1>What amem actually does</h1>
+  <h1>How amem works</h1>
   <p class="what-lead">Coding agents forget between sessions. They re-grep the same tree, re-learn the same constraints, and burn tokens rediscovering decisions you already paid for. amem is a private local sidecar so the next session starts oriented.</p>
 
   <h2>The problems</h2>
@@ -944,34 +938,6 @@ function whatPage() {
       <tr><th>A flat AGENTS.md that goes stale</th><td>A small graph: components → flows → claims, updated as drafts</td></tr>
     </tbody>
   </table>
-
-  <h2>What you get</h2>
-  <div class="what-grid">
-    <article class="what-card">
-      <h3>Memory</h3>
-      <p>Durable facts (constraints, gotchas, owners, how-tos) ranked by FTS, on-device embeddings, pins, and freshness. Stale anchors get marked. You approve drafts — amem does not silently invent truth.</p>
-    </article>
-    <article class="what-card">
-      <h3>Skills</h3>
-      <p>Multi-step procedures as <code>SKILL.md</code> files. Agents see names and descriptions only, then load a body with <code>amem_skill_view</code>. Session-end can suggest one worth writing. Content is scanned before it is stored.</p>
-    </article>
-    <article class="what-card">
-      <h3>Tasks</h3>
-      <p>Backlog → Next → Doing → Blocked → Done. Open tasks ride in the context packet. Use memory for facts, the board for “do later.” Works across every repo you track.</p>
-    </article>
-    <article class="what-card">
-      <h3>Local UI + desktop</h3>
-      <p><code>amem ui</code> is Setup, Dashboard, Memory, Analytics, Tasks, Skills — localhost only. <code>amem app</code> is the same thing in a window. Optional login item so it comes back after reboot.</p>
-    </article>
-    <article class="what-card">
-      <h3>Hooks and MCP</h3>
-      <p>Cursor and Claude get a project rule plus stop hooks. Any MCP host can call <code>amem_context</code>, <code>amem_remember</code>, skill and task tools. Same SQLite for Windsurf, Continue, Aider, Zed.</p>
-    </article>
-    <article class="what-card">
-      <h3>Lock, backup, policy</h3>
-      <p>Optional AES-256-GCM lock, encrypted local snapshots, a daily timer. Enterprise <code>policy.toml</code> can deny export, lock platforms, and stage skill writes. <code>amem doctor --attest</code> is the IT ticket packet.</p>
-    </article>
-  </div>
 
   <h2>How a day goes</h2>
   <ol class="what-list">
@@ -1021,7 +987,7 @@ function whatPage() {
     ${installCommands()}
   </div>
 </main>`,
-    "amem — what it does",
+    "amem — how it works",
   );
 }
 
@@ -1363,8 +1329,11 @@ async function onRequest(req, res) {
       return;
     }
     if (req.method === "GET" && url.pathname === "/features") {
-      res.writeHead(302, { Location: "/what" });
-      res.end();
+      html(res, 200, featuresPage());
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/why") {
+      html(res, 200, whyPage());
       return;
     }
     if (req.method === "GET" && url.pathname === "/pricing") {
