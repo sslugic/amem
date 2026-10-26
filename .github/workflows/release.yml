@@ -4,9 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish to GitHub Packages (for example v0.4.1)"
+        required: true
 
 jobs:
   publish:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -31,3 +37,31 @@ jobs:
           npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # GitHub Packages only accepts a scope that matches the owner, so the same
+  # build is published there as @sslugic/amem. npm stays @iamem/amem.
+  github-packages:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: "@sslugic"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: publish @sslugic/amem
+        run: |
+          npm pkg set name=@sslugic/amem
+          npm pkg set publishConfig.registry=https://npm.pkg.github.com
+          npm pkg delete publishConfig.access
+          npm publish --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
