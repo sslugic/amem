@@ -1,3 +1,4 @@
+import { readVersion } from "../attest.js";
 import { currentInstall, findInstalls, hostLaunches, installIssues } from "../install-check.js";
 import { contentTokens } from "../search.js";
 import { existsSync } from "node:fs";
@@ -197,7 +198,7 @@ export function normalizeApiPath(pathname: string): string {
 }
 
 export function apiHealth(): { ok: true; version: string; features: string[] } {
-  return { ok: true, version: "0.1.0", features: [...API_FEATURES] };
+  return { ok: true, version: readVersion(), features: [...API_FEATURES] };
 }
 
 export type ApiResponse = {

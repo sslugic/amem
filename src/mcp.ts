@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { readVersion } from "./attest.js";
 import { handleApi } from "./api/routes.js";
 import { getRepoByName } from "./db.js";
 
@@ -636,7 +637,7 @@ export function dispatchMcp(msg: JsonRpc, fallbackWorkspace?: string): JsonRpcRe
         resources: { listChanged: false },
         prompts: { listChanged: false },
       },
-      serverInfo: { name: "amem", version: "0.1.0" },
+      serverInfo: { name: "amem", version: readVersion() },
     });
   }
 
