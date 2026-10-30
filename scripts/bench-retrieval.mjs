@@ -5,10 +5,12 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+// Windows needs file:// URLs for import(); a bare D:\ path is read as a URL scheme.
+const dist = (name) => pathToFileURL(join(root, "dist", name)).href;
 
 export async function runBench(file = join(root, "bench", "retrieval.json")) {
   const data = JSON.parse(readFileSync(file, "utf8"));
@@ -28,11 +30,11 @@ export async function runBench(file = join(root, "bench", "retrieval.json")) {
         }
       }
     }
-    const { closeDb, upsertRepo } = await import(join(root, "dist", "db.js"));
+    const { closeDb, upsertRepo } = await import(dist("db.js"));
     closeDb();
-    const { detectRepoIdentity } = await import(join(root, "dist", "repo-identity.js"));
-    const { applyProposal } = await import(join(root, "dist", "proposal.js"));
-    const { buildContext } = await import(join(root, "dist", "context.js"));
+    const { detectRepoIdentity } = await import(dist("repo-identity.js"));
+    const { applyProposal } = await import(dist("proposal.js"));
+    const { buildContext } = await import(dist("context.js"));
     const repo = upsertRepo(detectRepoIdentity(repoDir), "claude");
     applyProposal(repo.id, {
       claims: data.memories.map((m) => ({ id: m.id, kind: m.kind, text: m.text, code_anchors: m.anchors })),
@@ -78,7 +80,7 @@ export async function runBench(file = join(root, "bench", "retrieval.json")) {
 
 const pct = (n) => `${Math.round(n * 100)}%`;
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const r = await runBench();
   console.log(`Retrieval benchmark: ${r.memories} memories, ${r.prompt.specific} topic questions, ${r.prompt.vague} vague prompts\n`);
   console.log("| Path | Right memory first | Right memory in top 3 | Vague prompts given memory |");
