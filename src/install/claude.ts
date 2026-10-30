@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { copyBundledSkills, readJsonObject, resolveAmemBin, writeJson } from "./skills.js";
+import { copyBundledSkills, isAmemHookCommand, readJsonObject, resolveAmemBin, writeJson } from "./skills.js";
 import { claudeUserConfigPath, registerClaudeMcp, type McpRegistration } from "./mcp-register.js";
 
 export type InstallResult = {
@@ -37,7 +37,7 @@ function mergeClaudeHooks(settingsPath: string): string {
       return !cmds.some(
         (h) =>
           (h.command ?? "").includes("amem session touch") ||
-          (h.command ?? "").includes("amem hook"),
+          isAmemHookCommand(h.command ?? ""),
       );
     });
     hooks[name] = [
@@ -77,7 +77,7 @@ export function claudeInstallHealth(): string[] {
     issues.push(`Missing Claude settings: ${settingsPath}`);
   } else {
     const raw = JSON.stringify(readJsonObject(settingsPath));
-    if (!raw.includes("amem hook") && !/cli\.js\s+hook/.test(raw)) {
+    if (!isAmemHookCommand(raw.replace(/\\"/g, '"'))) {
       issues.push("Claude settings.json does not call `amem hook` — re-run amem init --platform claude");
     }
   }
