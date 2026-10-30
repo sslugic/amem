@@ -695,7 +695,16 @@ function vaultPassphrase() {
 function clearVaultPass() {
   for (const id of ["#vaultPass", "#vaultPassConfirm"]) {
     const input = $(id);
-    if (input) input.value = "";
+    if (input) {
+      input.value = "";
+      input.type = "password";
+    }
+  }
+  const toggle = $("#vaultPassToggle");
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", "false");
+    toggle.setAttribute("aria-label", "Show passphrase");
+    toggle.title = "Show passphrase";
   }
   paintVaultPassButtons();
 }
@@ -4583,6 +4592,17 @@ $("#vaultCloseBtn")?.addEventListener("click", () => {
   $("#vaultPanel")?.classList.add("hidden");
 });
 $("#vaultPass")?.addEventListener("input", paintVaultPassButtons);
+$("#vaultPassToggle")?.addEventListener("click", (e) => {
+  const show = $("#vaultPass")?.type === "password";
+  for (const id of ["#vaultPass", "#vaultPassConfirm"]) {
+    const input = $(id);
+    if (input) input.type = show ? "text" : "password";
+  }
+  const btn = e.currentTarget;
+  btn.setAttribute("aria-pressed", String(show));
+  btn.setAttribute("aria-label", show ? "Hide passphrase" : "Show passphrase");
+  btn.title = btn.getAttribute("aria-label");
+});
 $("#vaultPassConfirm")?.addEventListener("input", paintVaultPassButtons);
 $("#vaultBackupBtn")?.addEventListener("click", (e) =>
   vaultAction("/api/vault/backup", {}, {
