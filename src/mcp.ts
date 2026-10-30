@@ -221,28 +221,37 @@ const TOOLS = [
   {
     name: "amem_task_update",
     description:
-      "Update a task title, notes, anchors, or move its Kanban status (backlog/next/doing/blocked/done).",
+      "Change an existing Kanban task: move it between columns (set status to doing when you start it, blocked when it waits on someone), rename it, or replace its notes or file anchors. Only the fields you pass change. Use amem_task_complete to finish a task and amem_task_add for new work. Returns the updated task as JSON; an unknown id returns an error.",
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string" },
-        workspace: { type: "string" },
-        title: { type: "string" },
-        body: { type: "string" },
-        status: { type: "string" },
-        anchors: { type: "array", items: { type: "string" } },
+        id: { type: "string", description: "Task id from amem_task_list or amem_task_add (task_…)." },
+        workspace: { type: "string", description: "Workspace or repo name. Omit to use the repository the agent is running in." },
+        title: { type: "string", description: "New one-line title." },
+        body: { type: "string", description: "New notes; replaces the old notes entirely." },
+        status: {
+          type: "string",
+          enum: ["backlog", "next", "doing", "blocked", "done"],
+          description: "Kanban column. doing = being worked on now; blocked = waiting on someone or something.",
+        },
+        anchors: {
+          type: "array",
+          items: { type: "string" },
+          description: "Repo-relative files the task touches; replaces the old list.",
+        },
       },
       required: ["id"],
     },
   },
   {
     name: "amem_task_complete",
-    description: "Mark a deferred agent task as done on the Kanban board.",
+    description:
+      "Mark a Kanban task done as soon as its work is finished and verified, so the next session does not pick it up again. Records the completion time and keeps the task in history (amem_task_list with include_done shows it). Same as amem_task_update with status done. Returns the completed task as JSON; an unknown id returns an error.",
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string" },
-        workspace: { type: "string" },
+        id: { type: "string", description: "Task id from amem_task_list or amem_task_add (task_…)." },
+        workspace: { type: "string", description: "Workspace or repo name. Omit to use the repository the agent is running in." },
       },
       required: ["id"],
     },
