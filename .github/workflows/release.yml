@@ -94,3 +94,23 @@ jobs:
           echo "npm version not visible yet" && exit 1
       - run: ./mcp-publisher login github-oidc
       - run: ./mcp-publisher publish
+
+  # A GitHub Release per tag: Glama (and anyone watching releases) rebuilds from these,
+  # and npm tags alone never create one.
+  github-release:
+    if: github.event_name == 'push'
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: create release
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists"
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
