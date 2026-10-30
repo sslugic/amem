@@ -138,8 +138,15 @@ function injectPacket(repo: RepoRow, query: string, session: string, platform: s
     platform,
     sessionId: session,
     query: query || "(session start)",
+    // A prompt only gets memories that are about it; session start gets the overview.
+    strict: query.length > 0,
   });
-  if (packet.claims.length === 0 && packet.notes.length === 0 && (packet.tasks?.length ?? 0) === 0) {
+  if (
+    packet.claims.length === 0 &&
+    packet.notes.length === 0 &&
+    (packet.tasks?.length ?? 0) === 0 &&
+    (query.length === 0 || (packet.skills?.length ?? 0) === 0)
+  ) {
     return null;
   }
   return cap(markdown);
