@@ -138,8 +138,31 @@ describe("stop checkpoint", () => {
     );
     assert.deepEqual(saved, ["Edit", "amem_cli_save"]);
     assert.equal(needsCheckpoint(saved), false);
-    const notSaved = toolCallsInTranscript(line("Bash", "amem context 'billing'") + line("Bash", "echo remember to amem"));
+    const notSaved = toolCallsInTranscript(
+      line("Bash", "amem context 'billing'") + line("Bash", "git commit -m 'remember to amem'"),
+    );
     assert.equal(needsCheckpoint(notSaved), true);
+  });
+
+  it("does not ask for a save after shell commands that only read", async () => {
+    const { toolCallsInTranscript, needsCheckpoint, isMutatingShell } = await import("../dist/checkpoint.js");
+    const line = (command) =>
+      `${JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command } }] } })}\n`;
+    const reads = ["git status", "gh pr checks 23 --watch", "curl -s https://api.npmjs.org/x | grep a", "npm test 2>&1 | tail", "ls 2>/dev/null"];
+    assert.equal(needsCheckpoint(toolCallsInTranscript(reads.map(line).join(""))), false);
+    for (const cmd of reads) assert.equal(isMutatingShell(cmd), false, cmd);
+    for (const cmd of [
+      "gh pr merge 23 --squash",
+      "git push origin main",
+      "npm publish",
+      "sed -i '' s/a/b/ f",
+      "echo x > out.txt",
+      "python3 - <<'EOF'",
+      "aws apprunner start-deployment --region us-east-1",
+      "curl -X POST https://example.com",
+    ]) {
+      assert.equal(isMutatingShell(cmd), true, cmd);
+    }
   });
 
   it("blocks once per changed window, never when off or already continuing", async () => {

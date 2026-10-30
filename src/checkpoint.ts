@@ -18,7 +18,7 @@ export const CHECKPOINT_REASON =
 
 /** Tools that only read: they never make a checkpoint worthwhile on their own. */
 const READ_ONLY_TOOLS = new Set([
-  "Read", "Grep", "Glob", "LS", "ToolSearch", "WebFetch", "WebSearch", "TodoWrite", "Skill",
+  "shell_read", "Read", "Grep", "Glob", "LS", "ToolSearch", "WebFetch", "WebSearch", "TodoWrite", "Skill",
   "AskUserQuestion", "ListAgents", "ReportFindings",
 ]);
 const READ_VERB = /(?:^|[_-])(?:get|list|read|search|query|fetch|describe|view|find|status|whoami|show|stats|context|lookup)(?=[_-]|$)/i;
@@ -32,6 +32,36 @@ function mcpToolName(name: string): string {
 const AMEM_SAVE = /amem_(?:remember|supersede|skill_save|task_add|task_update|task_complete|cli_save)$/;
 /** The same saves made through the CLI from a shell tool (`amem remember "…"`). */
 const AMEM_CLI_SAVE = /(?:^|[\s;&|(/])amem\s+(?:remember|supersede|skills?\s+(?:new|import)|task\s+(?:add|update|complete|delete))\b/;
+
+/**
+ * Shell commands that change something worth remembering: commits, merges, releases,
+ * deploys, file writes, package installs, API writes. Everything else (git status,
+ * gh pr view, curl GETs, grep, ls, npm view, tests) is treated as reading.
+ */
+const SHELL_WRITE = new RegExp(
+  [
+    String.raw`\bgit\s+(?:commit|push|merge|tag|rebase|reset|revert|cherry-pick|am|apply|stash|switch\s+-c|checkout\s+-b|branch\s+-[dDmM])\b`,
+    String.raw`\bgh\s+(?:pr|issue|release|repo|workflow|secret|variable|label|gist|run)\s+(?:create|merge|edit|close|reopen|comment|review|run|set|delete|fork|rerun|cancel|enable|disable|upload|ready)\b`,
+    String.raw`\bgh\s+api\b.*(?:-X\s*|--method\s+)(?:POST|PUT|PATCH|DELETE)\b`,
+    String.raw`\bnpm\s+(?:publish|version|install|i|ci|uninstall|link|unpublish|deprecate)\b`,
+    String.raw`\b(?:pnpm|yarn)\s+(?:add|remove|install|publish)\b`,
+    String.raw`\b(?:rm|mv|cp|mkdir|touch|ln|chmod|chown|tee|truncate)\s`,
+    String.raw`\bsed\s+(?:-[a-zA-Z]*i|--in-place)`,
+    String.raw`\b(?:docker|podman)\s+(?:push|build|buildx|run|rm|rmi|tag|compose)\b`,
+    String.raw`\b(?:aws|gcloud|az)\s+\S+\s+(?:\S+\s+)?(?:create|update|delete|put|start|stop|deploy|apply|set|add|remove|attach|detach|run|invoke)[a-z-]*\b`,
+    String.raw`\b(?:kubectl|helm)\s+(?:apply|delete|create|patch|scale|rollout|install|upgrade|uninstall)\b`,
+    String.raw`\bterraform\s+(?:apply|destroy|import)\b`,
+    String.raw`\bcurl\b.*(?:-X\s*|--request\s+)(?:POST|PUT|PATCH|DELETE)\b`,
+    String.raw`\bcurl\b.*\s(?:-d|--data(?:-raw|-binary)?|-F|--form)\s`,
+    String.raw`\blaunchctl\s+(?:load|unload|kickstart|bootstrap|bootout)\b`,
+    String.raw`<<`, // heredoc into an interpreter or file: assume it writes
+    String.raw`(?:^|[^0-9&>])>>?\s*(?!/dev/null|&)\S`, // redirect into a file
+  ].join("|"),
+);
+
+export function isMutatingShell(command: string): boolean {
+  return SHELL_WRITE.test(command);
+}
 
 export function isMutatingTool(name: string): boolean {
   if (!name || READ_ONLY_TOOLS.has(name)) return false;
@@ -61,8 +91,11 @@ export function toolCallsInTranscript(jsonl: string): string[] {
           const { name, input } = block as { name?: string; input?: { command?: unknown } };
           if (typeof name !== "string") continue;
           const command = typeof input?.command === "string" ? input.command : "";
-          // A shell call that saves to amem counts as a save, not as an unsaved change.
-          names.push(AMEM_CLI_SAVE.test(command) ? "amem_cli_save" : name);
+          // A shell call that saves to amem counts as a save, not as an unsaved change;
+          // a shell call that only reads does not make a checkpoint worthwhile.
+          if (AMEM_CLI_SAVE.test(command)) names.push("amem_cli_save");
+          else if (command && !isMutatingShell(command)) names.push("shell_read");
+          else names.push(name);
         }
       }
     } catch {
