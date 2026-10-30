@@ -131,7 +131,12 @@
                 </header>
                 <p class="vault-line" id="vaultLockLine"></p>
                 <div class="vault-row">
-                  <input id="vaultPass" type="password" autocomplete="new-password" placeholder="Passphrase" />
+                  <div class="field-action">
+                    <input id="vaultPass" type="password" autocomplete="new-password" placeholder="Passphrase" />
+                    <button class="field-toggle" id="vaultPassToggle" type="button" aria-label="Show passphrase" aria-pressed="false" title="Show passphrase">
+                      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
+                  </div>
                 </div>
                 <div class="vault-row" id="vaultPassConfirmRow">
                   <input id="vaultPassConfirm" type="password" autocomplete="new-password" placeholder="Type it again" />
