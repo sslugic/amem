@@ -10,7 +10,7 @@
 
 [![amem MCP server](https://mcprush.com/badge/sslugic-amem-mcp/card.svg)](https://mcprush.com/to/sslugic-amem-mcp?ref=badge) [![amem on Glama](https://glama.ai/mcp/servers/sslugic/amem/badges/score.svg)](https://glama.ai/mcp/servers/sslugic/amem)
 
-**Personal agent memory that stays on your machine.** Works with Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Windsurf, Continue, Aider and Zed.
+**Personal agent memory that stays on your machine.** Works with Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Windsurf, Continue, Aider and Zed, on macOS, Linux and Windows.
 
 ```bash
 npx @iamem/amem setup --platform claude   # or cursor, codex, copilot …
