@@ -1,3 +1,4 @@
+import { wordHit } from "./search.js";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { logContextUsage } from "./api/routes.js";
@@ -104,9 +105,13 @@ function contextResponse(rawEvent: string, text: string): HookResponse {
   return out;
 }
 
+/** Personal memories about how the user works: they apply in every repository. */
+const STANDING_KINDS = new Set(["preference", "feedback", "constraint", "gotcha", "howto", "procedure", "people", "convention"]);
+
 /**
- * Recent personal memories (cross-repo) for session start. Private ones are left out;
- * memories that mention this repository rank first, then newest first.
+ * Recent personal memories (cross-repo) for session start. Private ones are left out.
+ * Worklogs, findings and other facts come only when they mention this repository:
+ * another project's are noise here, and a question about them still finds them.
  */
 export function recentPersonalContext(
   repo?: Pick<RepoRow, "repo_name" | "remote_url"> | null,
@@ -117,11 +122,12 @@ export function recentPersonalContext(
   const tokens = repo ? repoTokens(repo) : [];
   const relevance = (text: string) => {
     const lower = text.toLowerCase();
-    return tokens.reduce((n, t) => n + (lower.includes(t) ? 1 : 0), 0);
+    return tokens.reduce((n, t) => n + (wordHit(lower, t) ? 1 : 0), 0);
   };
   const recent = listWorkPersonalClaims()
     .filter((c) => Date.parse(c.updated_at) >= since)
     .map((c) => ({ c, score: relevance(c.text) }))
+    .filter(({ c, score }) => !repo || score > 0 || STANDING_KINDS.has((c.kind || "").toLowerCase()))
     .sort((a, b) => b.score - a.score || b.c.updated_at.localeCompare(a.c.updated_at))
     .slice(0, limit)
     .map(({ c }) => c);
