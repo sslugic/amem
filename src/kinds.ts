@@ -101,7 +101,13 @@ const QUESTION_LEAD =
 const CHAT_LEAD =
   /^(so|ok|okay|and|but|also|im|i'm|let's|lets|please|thanks|thx|yeah|yep|yes|nope|no|sure|great|cool|alright|perfect|awesome|hmm|wait|actually|btw|oh|hey)\b/i;
 /** Pasted host/system plumbing (task notifications, reminders, agent hand-backs). */
-const SYSTEM_TEXT = /<(?:task-notification|system-reminder|agent-message|tool-use-id)\b|\[SYSTEM NOTIFICATION/i;
+/**
+ * Text the host wrote, not the user: notifications, and the echo of a `!` shell command
+ * or slash command (Claude Code wraps those in <bash-input>, <command-name> …). Treating
+ * a pasted `git push` as a question pulled unrelated memories into the prompt.
+ */
+const SYSTEM_TEXT =
+  /<(?:task-notification|system-reminder|agent-message|tool-use-id|bash-input|bash-stdout|bash-stderr|local-command-stdout|local-command-stderr|command-name|command-message|command-args)\b|\[SYSTEM NOTIFICATION/i;
 /**
  * Residue of an earlier scrub: "lives in and is", "wired via and included". The
  * preposition must be a word of its own (not "stand-in", "log-in") and the next word
