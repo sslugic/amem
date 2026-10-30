@@ -2651,7 +2651,7 @@ function renderBrainMap() {
         const stale = h.stale || [];
         const dups = h.duplicates || [];
         if (!stale.length && !dups.length) {
-          el.innerHTML = `<div class="brain-empty">Nothing to clean up. Unused facts (90 days) and near-duplicates show up here on Pro/IT.${
+          el.innerHTML = `<div class="brain-empty">Nothing to clean up. Unused facts (90 days) and near-duplicates show up here.${
             h.schedule?.installed ? " Weekly hygiene is scheduled." : ""
           }</div>`;
           return;
@@ -3192,7 +3192,7 @@ function showPinRulesCta(claim) {
   box.id = "pinRulesCta";
   box.className = "pin-rules-cta";
   box.innerHTML = `
-    <strong>Sync pinned → Cursor rules (Pro)</strong>
+    <strong>Sync pinned → Cursor rules</strong>
     <p class="note" style="margin:0.35rem 0">Would write a line like: <code>${esc(preview)}${preview.length >= 160 ? "…" : ""}</code> into <code>.cursor/rules/amem-pinned.mdc</code></p>
     <button class="btn small" type="button" id="pinRulesSyncNow">Sync pinned rules</button>`;
   drawer.appendChild(box);

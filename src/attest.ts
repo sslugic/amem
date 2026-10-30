@@ -166,7 +166,7 @@ export function buildAttestReport(cwd: string = process.cwd()): AttestReport {
   issues.push(...license.issues.map((i) => `license: ${i}`));
   const embed = embedStatus();
   if (embed.requested === "ngram" && !embed.licensed) {
-    issues.push("embed_backend ngram requested but license is not Pro/IT — using hash");
+    issues.push("embed_backend ngram requested but not available — using hash");
   }
   try {
     issues.push(...embedIndexIssues(openDb()));

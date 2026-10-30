@@ -1,22 +1,10 @@
-# amem license SKU
+# Licensing
 
-Memory still never leaves the laptop. A license only unlocks **local** extras.
+**Everything in amem is free.** Every feature (n-gram embeddings, hygiene and its weekly schedule, pinned rules sync, the attestation packet) works without a license.
 
-| Tier | What it unlocks |
-| --- | --- |
-| **free** | Memory UI, MCP, stats, backups |
-| **pro** | Local n-gram or **external** embedder, hygiene (inbox + weekly schedule + accept-safe), pin → Cursor rules |
-| **it** | Pro + richer `amem doctor --attest` packet (the exclusive). `amem it-pack` templates are available on Free. |
+The signed license file below is still supported for organisations that want a vendor-signed record for compliance. It unlocks nothing extra. There is no license server and no telemetry.
 
-There is no license server and no telemetry. Pro/IT requires a **vendor-signed** `amem-license.json` (Ed25519). Self-issued / `--dev` unlocks are not accepted.
-
-## Buy + apply
-
-Prices (one-time, live): **Pro $12**, **IT $49** at [getamem.com](https://getamem.com). After pay, download `amem-license.json` from the thank-you page.
-
-**Apply in the UI (recommended):** open `amem ui` → Plans or Setup → paste the JSON or choose the file → Apply license. Then **Turn on Pro retrieval** (n-gram + reindex). Memory tab has a **retrieval showdown** (free hash vs Pro n-gram).
-
-Or from a terminal:
+Apply a license file, and turn on the optional extras:
 
 ```bash
 amem license apply --file ~/Downloads/amem-license.json
