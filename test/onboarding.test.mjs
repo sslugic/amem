@@ -14,7 +14,7 @@ describe("first run", () => {
     const repoDir = makeGitRepo();
     try {
       writeFileSync(join(home, ".claude.json"), JSON.stringify({ theme: "dark", mcpServers: { other: { command: "x" } } }));
-      const env = { ...process.env, AMEM_HOME: join(home, ".amem"), HOME: home };
+      const env = { ...process.env, AMEM_HOME: join(home, ".amem"), HOME: home, USERPROFILE: home };
       delete env.CLAUDE_CONFIG_DIR;
       delete env.CURSOR_HOME;
       const run = (...args) => execFileSync(process.execPath, [cli, ...args], { cwd: repoDir, env, encoding: "utf8" });
