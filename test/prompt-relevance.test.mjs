@@ -31,6 +31,11 @@ describe("prompt injection relevance", () => {
       // Earlier prompts are notes; a filler word memory never uses must not pull them back.
       assert.equal(prompt("ok sounds good, keep going"), "");
       assert.equal(prompt("alright, wonderful, carry on"), "");
+      // A `!` shell command's echo is not a question, even with ticket-like words in it.
+      assert.equal(
+        prompt("<bash-input>git tag -a v0.6.0 && git push origin v0.6.0 KYCLINK-07</bash-input><bash-stdout>ok</bash-stdout>"),
+        "",
+      );
       // A ticket key alone is specific enough.
       assert.match(prompt("why does KYCLINK-07 still fail"), /plain loop/);
       // Two topic words are enough too.
