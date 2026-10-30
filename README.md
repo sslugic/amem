@@ -60,6 +60,8 @@ Anchors: `src/webhooks/stripe.ts`
 
 Any MCP client can use the same memory: `amem mcp --print-config` prints a ready-to-paste config.
 
+Something off? `amem doctor --fix` rewires the current repo's client. To remove amem, run `amem uninstall` to see what it added, then `amem uninstall --yes`. Your memory stays unless you add `--purge`.
+
 ## Privacy (non-negotiable)
 
 - Memory never leaves your machine: no sync, no cloud embeddings, no "share with org" mode.
