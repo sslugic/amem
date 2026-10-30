@@ -64,11 +64,16 @@ export function resolveAmemBin(): string {
 
 export function resolveAmemProgramArgs(...extra: string[]): string[] {
   try {
-    const found = execFileSync("which", ["amem"], {
+    // npx puts its cache bin first on PATH; prefer an install that will still be there.
+    const found = execFileSync("which", ["-a", "amem"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    if (found) return [found, ...extra];
+    })
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const stable = found.find((p) => !/[\\/]_npx[\\/]/.test(p)) ?? found[0];
+    if (stable) return [stable, ...extra];
   } catch {
     // fall through
   }

@@ -2,7 +2,7 @@
 import { installIssues } from "./install-check.js";
 import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { buildAttestReport, formatAttestHuman } from "./attest.js";
+import { buildAttestReport, formatAttestHuman, readVersion } from "./attest.js";
 import { handleApi, logContextUsage } from "./api/routes.js";
 import {
   closeDb,
@@ -38,6 +38,8 @@ import { handleHookPayload } from "./hook.js";
 import { installClaude, claudeInstallHealth } from "./install/claude.js";
 import { installCursor, cursorInstallHealth } from "./install/cursor.js";
 import { installHost } from "./install/hosts.js";
+import { seedRepoIfEmpty } from "./repo-seed.js";
+import { ensureStableCli, type McpRegistration } from "./install/mcp-register.js";
 import {
   allInstructionTargets,
   applyInstructions,
@@ -154,6 +156,12 @@ import {
   writeSkill,
 } from "./skills.js";
 import { buildSbom, writeItPack } from "./it-pack.js";
+
+function printMcp(mcp: McpRegistration | undefined): void {
+  if (!mcp) return;
+  if (mcp.status === "skipped") console.log(`  MCP: not registered. ${mcp.note ?? ""}`);
+  else if (mcp.status !== "unchanged") console.log(`  MCP server amem ${mcp.status}: ${mcp.path} (restart the client to load amem_* tools)`);
+}
 
 function usage(): never {
   console.log(`amem — local personal agent memory
@@ -296,6 +304,8 @@ async function main(): Promise<void> {
   try {
     switch (cmd) {
       case "setup": {
+        const stableNote = ensureStableCli(readVersion());
+        if (stableNote) console.log(stableNote);
         const personal = Boolean(flags.get("personal")) || !platformFlag(flags);
         if (personal || flags.get("personal")) {
           const repo = ensurePersonalWorkspace(platformFlag(flags) ?? "app");
@@ -316,10 +326,12 @@ async function main(): Promise<void> {
           const info = installCursor(identity.rootPath);
           console.log(`Cursor install under ${identity.rootPath}`);
           for (const s of info.skills) console.log(`  skill: ${s}`);
+          printMcp(info.mcp);
         } else if (platform === "claude") {
           const info = installClaude(detectRepoIdentity().rootPath);
           console.log("Claude Code hooks/skills installed");
           for (const s of info.skills) console.log(`  skill: ${s}`);
+          printMcp(info.mcp);
         }
         // Wire the host up AND tell it how to use amem. An MCP endpoint on its
         // own teaches a client nothing about the task board or memory.
@@ -435,6 +447,8 @@ async function main(): Promise<void> {
           );
         }
         upsertSetupState(repo.id, [platform], true);
+        const seeded = seedRepoIfEmpty(repo);
+        if (seeded > 0) console.log(`Seeded ${seeded} facts from the repo's manifests (build, test, CI)`);
         // Teach the host how to use amem. Cursor's rule is written by its own
         // installer (it has collision handling for a hand-written rule file).
         if (platform !== "cursor") {
@@ -459,6 +473,7 @@ async function main(): Promise<void> {
         if ("settingsPath" in installInfo && installInfo.settingsPath) {
           console.log(`Claude settings: ${installInfo.settingsPath}`);
         }
+        if ("mcp" in installInfo) printMcp(installInfo.mcp as McpRegistration | undefined);
         if (installInfo.skills) {
           for (const s of installInfo.skills) console.log(`Skill: ${s}`);
         }

@@ -13,7 +13,7 @@
 **Personal agent memory that stays on your machine.** Works with Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Windsurf, Continue, Aider and Zed.
 
 ```bash
-npx @iamem/amem setup
+npx @iamem/amem setup --platform claude   # or cursor, codex, copilot …
 ```
 
 ![amem dashboard: Home, Memory and Tasks](https://raw.githubusercontent.com/sslugic/amem/main/docs/media/amem-demo.gif)
@@ -37,13 +37,12 @@ Works with Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Wind
 ## Quick start
 
 ```bash
-npx @iamem/amem setup              # Node 20+; installs the amem CLI
 cd ~/code/your-project
-amem init --platform claude        # or: cursor, codex, copilot, windsurf … (amem platforms)
-amem ui                            # open the dashboard at http://127.0.0.1:7843
+npx @iamem/amem setup --platform claude   # or: cursor, codex, copilot, windsurf … (amem platforms)
+amem ui                                   # open the dashboard at http://127.0.0.1:7843
 ```
 
-From then on your agent checks memory before exploring and saves what it learns. You can also do it by hand:
+Setup installs the `amem` CLI, adds the hooks, registers the amem MCP server (restart your client once) and seeds the repo with build, test and CI facts from its manifests, so the first question already has an answer. From then on your agent checks memory before exploring and saves what it learns. You can also do it by hand:
 
 ```bash
 amem remember "Stripe webhooks must be verified with the raw body" --kind gotcha --anchor src/webhooks/stripe.ts
