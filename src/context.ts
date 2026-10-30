@@ -36,7 +36,7 @@ import { FEATURE_LOCAL_EMBED, hasFeature } from "./license.js";
 import { PERSONAL_SLUG } from "./personal.js";
 import { listIndexedSkills, rankSkills, type RankedSkill } from "./skills.js";
 import { loadPolicy } from "./policy.js";
-import { isPrivatePersonalClaim } from "./personal.js";
+import { listWorkPersonalClaims, queryOverlap } from "./personal.js";
 import { clipText } from "./text-clip.js";
 
 /** Reasons are stored as JSON; a malformed row must not break the whole packet. */
@@ -273,8 +273,9 @@ export function buildContext(
   if (includePersonal) {
     const personal = getRepoByName(PERSONAL_SLUG);
     if (personal && personal.id !== repoId) {
-      const personalClaims = listClaims(personal.id).filter(
-        (c) => c.id !== "claim.personal_scope" && !isPrivatePersonalClaim(c),
+      const minOverlap = Math.min(2, new Set(queryTokens.filter((t) => t.length >= 3)).size);
+      const personalClaims = listWorkPersonalClaims(query).filter(
+        (c) => minOverlap > 0 && queryOverlap(c, queryTokens) >= minOverlap,
       );
       if (personalClaims.length > 0) {
         const pFts = new Map<string, number>();

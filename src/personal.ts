@@ -73,9 +73,45 @@ export function isPrivatePersonalClaim(claim: ClaimRow): boolean {
   return claimAnchors(claim).some((a) => PRIVATE_ANCHORS.has(a.toLowerCase()));
 }
 
+/**
+ * Life and career topics (job search, interviews, pay, health) are personal even when
+ * nobody marked them private. They stay out of work repositories unless the question
+ * itself is about them.
+ */
+const SENSITIVE_ANCHORS = new Set([
+  "career", "interview", "job-search", "jobs", "health", "medical", "family", "finance", "salary", "compensation",
+]);
+const SENSITIVE_TEXT =
+  /\b(?:interview(?:s|ing|ed)?|recruiter|hiring manager|job (?:offer|search|application|hunt)|salary|compensation|resume|career|therapy|therapist|medical)\b/i;
+
+export function isSensitivePersonalClaim(claim: ClaimRow): boolean {
+  if (claimAnchors(claim).some((a) => SENSITIVE_ANCHORS.has(a.toLowerCase()))) return true;
+  return SENSITIVE_TEXT.test(claim.text || "");
+}
+
+/** True when the question itself is about a sensitive personal topic. */
+export function mentionsSensitiveTopic(query: string): boolean {
+  return SENSITIVE_TEXT.test(query) || query.toLowerCase().split(/[^a-z-]+/).some((t) => SENSITIVE_ANCHORS.has(t));
+}
+
 /** Personal claims that may be blended into a work repository's context. */
-export function listWorkPersonalClaims(): ClaimRow[] {
-  return listPersonalClaims().filter((c) => c.id !== "claim.personal_scope" && !isPrivatePersonalClaim(c));
+export function listWorkPersonalClaims(query = ""): ClaimRow[] {
+  const sensitiveOk = mentionsSensitiveTopic(query);
+  return listPersonalClaims().filter(
+    (c) =>
+      c.id !== "claim.personal_scope" &&
+      !isPrivatePersonalClaim(c) &&
+      (sensitiveOk || !isSensitivePersonalClaim(c)),
+  );
+}
+
+/**
+ * Distinct query words that a claim actually contains. Personal memories need real
+ * word overlap to enter a work packet: a loose semantic match is not enough.
+ */
+export function queryOverlap(claim: ClaimRow, queryTokens: string[]): number {
+  const hay = `${claim.text || ""} ${claimAnchors(claim).join(" ")}`.toLowerCase();
+  return new Set(queryTokens.filter((t) => t.length >= 3 && hay.includes(t))).size;
 }
 
 /** Words that identify a repository (name and remote path), for ranking personal memory. */
