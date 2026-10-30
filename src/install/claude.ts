@@ -2,10 +2,12 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { copyBundledSkills, readJsonObject, resolveAmemBin, writeJson } from "./skills.js";
+import { claudeUserConfigPath, registerClaudeMcp, type McpRegistration } from "./mcp-register.js";
 
 export type InstallResult = {
   skills: string[];
   settingsPath?: string;
+  mcp?: McpRegistration;
 };
 
 function claudeHome(): string {
@@ -62,7 +64,8 @@ export function installClaude(_repoRoot: string): InstallResult {
   const skills = copyBundledSkills(join(claudeHome(), "skills"));
   const settingsPath = join(claudeHome(), "settings.json");
   mergeClaudeHooks(settingsPath);
-  return { skills, settingsPath };
+  const mcp = registerClaudeMcp();
+  return { skills, settingsPath, mcp };
 }
 
 export function claudeInstallHealth(): string[] {
@@ -77,6 +80,10 @@ export function claudeInstallHealth(): string[] {
     if (!raw.includes("amem hook") && !/cli\.js\s+hook/.test(raw)) {
       issues.push("Claude settings.json does not call `amem hook` — re-run amem init --platform claude");
     }
+  }
+  const mcpServers = readJsonObject(claudeUserConfigPath()).mcpServers as Record<string, unknown> | undefined;
+  if (!mcpServers?.amem) {
+    issues.push("Claude Code has no amem MCP server, so amem_* tools are missing — re-run amem init --platform claude");
   }
   return issues;
 }

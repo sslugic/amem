@@ -4,11 +4,13 @@ import { join } from "node:path";
 import { copyBundledSkills, readJsonObject, resolveAmemBin, writeJson } from "./skills.js";
 import { readFileSync } from "node:fs";
 import { instructionTargets, renderInstructions } from "../instructions.js";
+import { registerCursorMcp, type McpRegistration } from "./mcp-register.js";
 
 export type InstallResult = {
   skills: string[];
   rulePath?: string;
   hooksPath?: string;
+  mcp?: McpRegistration;
 };
 
 function cursorHome(): string {
@@ -67,7 +69,8 @@ export function installCursor(repoRoot: string): InstallResult {
   const skills = copyBundledSkills(join(cursorHome(), "skills"));
   const rulePath = writeCursorRule(repoRoot);
   const hooksPath = writeCursorHooks();
-  return { skills, rulePath, hooksPath };
+  const mcp = registerCursorMcp(cursorHome());
+  return { skills, rulePath, hooksPath, mcp };
 }
 
 export function cursorInstallHealth(repoRoot: string): string[] {

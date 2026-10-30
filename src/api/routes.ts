@@ -2013,6 +2013,7 @@ export function logContextUsage(input: {
   const packet = buildContext(input.repoId, input.query, {
     rootPath: repo?.root_path,
     strict: input.strict,
+    sessionId: input.sessionId,
   });
   const markdown = renderContextMarkdown(packet);
   const metrics = metricsFromPacket(packet, markdown, repo?.root_path);

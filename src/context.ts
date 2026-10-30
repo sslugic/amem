@@ -105,6 +105,8 @@ export type BuildContextOptions = {
    * at all for a prompt like "ok lets do that". An explicit amem_context call stays loose.
    */
   strict?: boolean;
+  /** Leave out this session's own chat notes: the agent already has them. */
+  sessionId?: string;
 };
 
 /** "What did I do yesterday / this week / for standup": recent dated work is the answer. */
@@ -357,6 +359,7 @@ export function buildContext(
   const components = listComponents(repoId).filter((c) => componentIds.has(c.id));
 
   const notesRaw = listConversationNotes(repoId, 40)
+    .filter((n) => !opts.sessionId || n.session_id !== opts.sessionId)
     .map((n) => ({ ...n, score: scoreNote(n, queryTokens) }))
     .filter((n) => (queryTokens.length === 0 ? true : n.score > 0))
     .filter((n) => onTopic(n.text))
