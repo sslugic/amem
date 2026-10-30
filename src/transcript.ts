@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { relative, isAbsolute, resolve } from "node:path";
+import { relative, isAbsolute, resolve, sep } from "node:path";
 
 /**
  * Reading what a session actually opened, out of the host's own transcript.
@@ -112,7 +112,8 @@ export function anchorsOpenedFrom(
     if (!p) continue;
     opened.add(p);
     if (rootPath && isAbsolute(p)) {
-      const rel = relative(rootPath, p);
+      // Anchors are stored with forward slashes; Windows paths come back with backslashes.
+      const rel = relative(rootPath, p).split(sep).join("/");
       // Outside the repo entirely — not one of our anchors.
       if (rel && !rel.startsWith("..")) opened.add(rel);
     }

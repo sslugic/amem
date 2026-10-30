@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, delimiter, join, resolve } from "node:path";
 
 export type ScannedRepo = {
   name: string;
@@ -87,7 +87,7 @@ export function scanRoots(): string[] {
   const fromEnv = process.env.AMEM_SCAN_ROOTS;
   if (fromEnv) {
     return fromEnv
-      .split(":")
+      .split(delimiter)
       .map((p) => p.trim())
       .filter(Boolean);
   }

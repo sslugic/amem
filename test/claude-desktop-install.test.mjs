@@ -8,13 +8,19 @@ import { withAmemHome } from "./helpers.mjs";
 /** Run fn with HOME pointed at a throwaway dir. */
 async function withFakeHome(fn) {
   const home = mkdtempSync(join(tmpdir(), "amem-claude-desktop-"));
-  const prev = process.env.HOME;
+  // Windows resolves the home and Claude's config from USERPROFILE and APPDATA, not HOME.
+  const keys = ["HOME", "USERPROFILE", "APPDATA"];
+  const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  process.env.APPDATA = join(home, "AppData", "Roaming");
   try {
     return await fn(home);
   } finally {
-    if (prev === undefined) delete process.env.HOME;
-    else process.env.HOME = prev;
+    for (const k of keys) {
+      if (prev[k] === undefined) delete process.env[k];
+      else process.env[k] = prev[k];
+    }
   }
 }
 

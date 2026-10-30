@@ -65,7 +65,8 @@ export function resolveAmemBin(): string {
 export function resolveAmemProgramArgs(...extra: string[]): string[] {
   try {
     // npx puts its cache bin first on PATH; prefer an install that will still be there.
-    const found = execFileSync("which", ["-a", "amem"], {
+    const win = process.platform === "win32";
+    const found = execFileSync(win ? "where" : "which", win ? ["amem"] : ["-a", "amem"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     })

@@ -214,7 +214,7 @@ describe("IT tier: IT pack", () => {
       ]) {
         assert.ok(existsSync(join(pack.dir, name)), `missing ${name}`);
       }
-      assert.equal((statSync(pack.dir).mode & 0o777).toString(8), "700");
+      if (process.platform !== "win32") assert.equal((statSync(pack.dir).mode & 0o777).toString(8), "700");
 
       const notes = readFileSync(join(pack.dir, "README.txt"), "utf8");
       assert.match(notes, /no license server and no cloud sync/i);

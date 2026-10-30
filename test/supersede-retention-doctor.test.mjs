@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync, utimesSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter } from "node:path";
 import { withAmemHome, makeGitRepo } from "./helpers.mjs";
 
 describe("supersede outdated memories", () => {
@@ -86,7 +86,7 @@ describe("backup retention", () => {
 });
 
 describe("doctor install check", () => {
-  it("flags two installs and a host on another version", async () => {
+  it("flags two installs and a host on another version", { skip: process.platform === "win32" && "npm bin layout and symlinks differ on Windows" }, async () => {
     const { installIssues } = await import("../dist/install-check.js");
     const base = mkdtempSync(join(tmpdir(), "amem-installs-"));
     const mkPkg = (prefix, version) => {
@@ -106,7 +106,7 @@ describe("doctor install check", () => {
       join(home, ".claude", "settings.json"),
       JSON.stringify({ hooks: { Stop: [{ hooks: [{ command: `${join(base, "b", "bin", "amem")} hook` }] }] } }),
     );
-    const issues = installIssues({ env: { PATH: `${join(base, "a", "bin")}:${join(base, "b", "bin")}` }, home, prefixes: [] });
+    const issues = installIssues({ env: { PATH: `${join(base, "a", "bin")}${delimiter}${join(base, "b", "bin")}` }, home, prefixes: [] });
     assert.ok(issues.some((i) => /More than one amem install/.test(i)), issues.join("\n"));
     assert.ok(issues.some((i) => i.includes("Stop hook runs amem 0.2.0") && i.includes(oldRoot)), issues.join("\n"));
     assert.deepEqual(installIssues({ env: { PATH: join(base, "a", "bin") }, home: join(base, "nohome"), prefixes: [] }), []);

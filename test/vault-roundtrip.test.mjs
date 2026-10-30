@@ -45,7 +45,7 @@ describe("vault: backup and restore", () => {
       closeDb();
       const backup = createBackup({ outDir: join(home, "bk"), passphrase: PASS, label: "test" });
       assert.equal(backup.encrypted, true);
-      assert.equal(mode(backup.path), "600", "an encrypted backup must not be world-readable");
+      if (process.platform !== "win32") assert.equal(mode(backup.path), "600", "an encrypted backup must not be world-readable");
 
       // Prove it is really ciphertext, not a copied SQLite file.
       const blob = readFileSync(backup.path);
@@ -170,7 +170,7 @@ describe("vault: lock and unlock", () => {
       assert.ok(existsSync(locked.encPath));
       assert.equal(existsSync(dbPath()), false, "plaintext DB must be removed on lock");
       assert.equal(isDbEncryptedAtRest(), true);
-      assert.equal(mode(locked.encPath), "600");
+      if (process.platform !== "win32") assert.equal(mode(locked.encPath), "600");
       assert.equal(
         readFileSync(encryptedDbPath()).includes(Buffer.from("locked fact one")),
         false,
