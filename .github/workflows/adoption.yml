@@ -1,0 +1,33 @@
+name: adoption
+
+# Weekly adoption snapshot, posted as a comment on the "Adoption tracking" issue.
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: build report
+        run: node scripts/adoption-report.mjs > report.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: post to tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search 'in:title "Adoption tracking"' --json number -q '.[0].number')
+          if [ -z "$n" ]; then
+            n=$(gh issue create --repo "$GITHUB_REPOSITORY" --title "Adoption tracking" \
+              --body "Weekly npm and GitHub adoption numbers, posted every Monday by the adoption workflow." | grep -o '[0-9]*$')
+          fi
+          gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body-file report.md
