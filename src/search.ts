@@ -43,7 +43,9 @@ const CONVERSATIONAL = new Set(
     "seem seems seemed going gonna wanna gotta able time times today day days week tomorrow " +
     "yesterday everyone someone people user users other others same different whole each every " +
     "since while after before though because cause actually basically probably also too " +
-    "come came find found doesn't don't isn't can't won't it's i'm i've i'd you're that's what's"
+    "come came find found doesn't don't isn't can't won't it's i'm i've i'd you're that's what's " +
+    "sound sounds alright ahead proceed go went gone carry keep going sorry hmm wow lol nice amazing " +
+    "idea ideas plan suggestion suggestions option options question questions answer"
   ).split(" "),
 );
 
@@ -75,8 +77,9 @@ export function wordHit(hay: string, token: string): boolean {
 
 /**
  * Is `text` about the question, judged by topic words? One identifier (TEST-109,
- * src/hook.ts) or one uncommon word (in at most a tenth of the memories) is enough;
- * otherwise two topic words must match.
+ * src/hook.ts) or one uncommon word is enough; otherwise two topic words must match.
+ * "Uncommon" means memory uses the word, but in at most a tenth of it: a word memory
+ * never uses ("sounds") says nothing about the repo, however rare it is.
  */
 export function matchesTopic(
   text: string,
@@ -88,7 +91,11 @@ export function matchesTopic(
   const hits = topics.filter((t) => wordHit(hay, t));
   if (hits.length >= 2) return true;
   return hits.some(
-    (t) => isIdentifierToken(t) || (t.length >= 5 && (docFreq.get(t) ?? 0) <= Math.max(2, total * 0.1)),
+    (t) => {
+      if (isIdentifierToken(t)) return true;
+      const df = docFreq.get(t) ?? 0;
+      return t.length >= 5 && df >= 1 && df <= Math.max(2, total * 0.1);
+    },
   );
 }
 

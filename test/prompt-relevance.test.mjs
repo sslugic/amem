@@ -28,6 +28,9 @@ describe("prompt injection relevance", () => {
       // Conversational prompts share words with memories ("look", "clean", "keep working") but name no topic.
       assert.equal(prompt("ok that looks good, keep working on it"), "");
       assert.equal(prompt("can you make it look nicer and clean it up a bit"), "");
+      // Earlier prompts are notes; a filler word memory never uses must not pull them back.
+      assert.equal(prompt("ok sounds good, keep going"), "");
+      assert.equal(prompt("alright, wonderful, carry on"), "");
       // A ticket key alone is specific enough.
       assert.match(prompt("why does KYCLINK-07 still fail"), /plain loop/);
       // Two topic words are enough too.
