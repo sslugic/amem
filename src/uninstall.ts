@@ -54,7 +54,7 @@ function serverEntryStep(what: string, path: string, key = "mcpServers"): Uninst
 }
 
 function isAmemCommand(command: string): boolean {
-  return isAmemHookCommand(command) || /amem(\.cmd)?"?\s+session touch/.test(command);
+  return isAmemHookCommand(command) || /(amem(\.cmd|\.exe)?|cli\.js)"?\s+session touch/i.test(command);
 }
 
 function claudeHooksStep(): UninstallStep | null {
