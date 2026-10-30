@@ -342,6 +342,7 @@ async function main(): Promise<void> {
         console.log("Teach every other client too: amem instructions --all");
         console.log("Host recipe (any MCP client): amem recipe");
         console.log("Install: npx @iamem/amem setup  (or npm i -g @iamem/amem)");
+        console.log("Finding it useful? Star https://github.com/sslugic/amem · Bugs and ideas: https://github.com/sslugic/amem/issues");
         break;
       }
       case "init": {

@@ -8,6 +8,8 @@
 [![MCP server](https://img.shields.io/badge/MCP-server-7eb8ff)](https://modelcontextprotocol.io)
 [![Local only](https://img.shields.io/badge/data-stays%20on%20your%20machine-2ec4b6)](#privacy-non-negotiable)
 
+[![amem MCP server](https://mcprush.com/badge/sslugic-amem-mcp/card.svg)](https://mcprush.com/to/sslugic-amem-mcp?ref=badge) [![amem on Glama](https://glama.ai/mcp/servers/sslugic/amem/badges/score.svg)](https://glama.ai/mcp/servers/sslugic/amem)
+
 **Personal agent memory that stays on your machine.** Works with Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Windsurf, Continue, Aider and Zed.
 
 ```bash
