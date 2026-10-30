@@ -1,4 +1,5 @@
 import { wordHit } from "./search.js";
+import { seedRepoIfEmpty } from "./repo-seed.js";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { logContextUsage } from "./api/routes.js";
@@ -187,6 +188,7 @@ function handleHookPayloadInner(raw: string): HookResponse {
   const platform = hookPlatform();
 
   if (event === "sessionStart") {
+    seedRepoIfEmpty(repo);
     const packet = injectPacket(repo, "", sid, platform);
     const personal = recentPersonalContext(repo);
     // Hint and personal memory first: the cap trims from the end, and the repo packet is
@@ -203,6 +205,8 @@ function handleHookPayloadInner(raw: string): HookResponse {
 
   if (event === "beforeSubmitPrompt") {
     const prompt = typeof payload.prompt === "string" ? payload.prompt : "";
+    // Build the packet before saving the prompt, or the prompt comes back as a "note".
+    const context = isUsefulCaptureText(prompt) ? injectPacket(repo, prompt, sid, platform) : null;
     if (isUsefulCaptureText(prompt)) {
       insertConversationNote({
         repoId: repo.id,
@@ -212,7 +216,6 @@ function handleHookPayloadInner(raw: string): HookResponse {
         text: prompt,
       });
     }
-    const context = isUsefulCaptureText(prompt) ? injectPacket(repo, prompt, sid, platform) : null;
     return context
       ? contextResponse(
           rawEvent,
