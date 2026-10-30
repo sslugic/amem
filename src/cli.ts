@@ -1003,7 +1003,7 @@ async function main(): Promise<void> {
           const result = installHygieneSchedule({ hour });
           const helper = writeHygieneHelperScript();
           console.log(`Scheduled weekly hygiene (${result.platform}): ${result.path}`);
-          console.log(`Runs Sunday ~${result.hour}:20 local (Pro/IT required at run time)`);
+          console.log(`Runs Sunday ~${result.hour}:20 local`);
           console.log(`Helper script: ${helper}`);
           break;
         }

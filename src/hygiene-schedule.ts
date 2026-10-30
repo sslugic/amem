@@ -1,5 +1,5 @@
 /**
- * Schedule weekly local hygiene (decay + merge). Pro/IT at run time.
+ * Schedule weekly local hygiene (decay + merge).
  * Uses LaunchAgent (macOS), systemd user timer (Linux), or Startup cmd (Windows).
  */
 import { existsSync, mkdirSync, unlinkSync, writeFileSync, chmodSync } from "node:fs";
@@ -175,7 +175,7 @@ WantedBy=timers.target
     mkdirSync(join(path, ".."), { recursive: true });
     writeFileSync(
       path,
-      `@echo off\r\nrem amem weekly hygiene (runs at login; Pro/IT required)\r\n${shellQuote(args)}\r\n`,
+      `@echo off\r\nrem amem weekly hygiene (runs at login)\r\n${shellQuote(args)}\r\n`,
       "utf8",
     );
     return { path, platform: "win32", hour };
