@@ -44,6 +44,13 @@ describe("personal memory in work repositories", () => {
       assert.ok(ids("squash merges for pull requests").includes("claim.pref"));
       // Asking about the interview itself is allowed.
       assert.ok(ids("acme interview loop recap").includes("claim.interview"));
+      // Another project's worklog stays out of session start; this repo's own stays in.
+      applyProposal(personal.id, {
+        claims: [
+          { id: "claim.other", kind: "worklog", text: "2026-10-30 worklog (done): TV Remote 3.1 installed on the phone", code_anchors: ["personal"] },
+        ],
+      });
+      assert.doesNotMatch(recentPersonalContext(repo) || "", /TV Remote/);
       // Session start never lists career notes in a work repository.
       const recent = recentPersonalContext(repo) || "";
       assert.ok(!recent.includes("interview loop"), recent);

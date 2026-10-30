@@ -2006,11 +2006,13 @@ export function logContextUsage(input: {
   platform: string;
   sessionId?: string;
   query: string;
+  strict?: boolean;
 }): { markdown: string; event: UsageEventRow; packet: ReturnType<typeof buildContext> } {
   const started = Date.now();
   const repo = getRepoById(input.repoId);
   const packet = buildContext(input.repoId, input.query, {
     rootPath: repo?.root_path,
+    strict: input.strict,
   });
   const markdown = renderContextMarkdown(packet);
   const metrics = metricsFromPacket(packet, markdown, repo?.root_path);

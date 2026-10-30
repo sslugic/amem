@@ -25,6 +25,79 @@ export function contentTokens(text: string): string[] {
   return content.length > 0 ? content : all;
 }
 
+/**
+ * Conversational words: they say how the user feels or what to do next, not what the
+ * prompt is about. A small repo makes them look rare ("think" in one memory), so rarity
+ * alone cannot tell "is this good?" from "why is TEST-109 failing?".
+ */
+const CONVERSATIONAL = new Set(
+  (
+    "want wants wanted need needs needed like liked love keep kept try tried trying think thought " +
+    "know knew see seen look looks looking looked good great nice nicer better best bad worse fine " +
+    "cool awesome perfect right wrong sure maybe really very much many little bit lot lots thing things " +
+    "stuff way something anything everything nothing one two first next last again still already " +
+    "even only back up down out over here there well yeah yep nope hey hi hello thank thx pls " +
+    "give take put tell show shows help let's ask asked said say says done do doing start continue " +
+    "until reach reaches reached rate rating improve improvements improvement update updated " +
+    "clean cleanup fix fixed change changes changed add added remove check checked feel feels " +
+    "seem seems seemed going gonna wanna gotta able time times today day days week tomorrow " +
+    "yesterday everyone someone people user users other others same different whole each every " +
+    "since while after before though because cause actually basically probably also too " +
+    "come came find found doesn't don't isn't can't won't it's i'm i've i'd you're that's what's"
+  ).split(" "),
+);
+
+/** A ticket key, path, version or name with digits/punctuation: specific on its own. */
+export function isIdentifierToken(token: string): boolean {
+  return /[a-z]/.test(token) && /[0-9_./-]/.test(token) && token.length >= 3;
+}
+
+/** Query words that name a topic: content tokens minus filler, plurals trimmed ("terms" finds "term"). */
+export function topicTokens(text: string): string[] {
+  return [
+    ...new Set(
+      contentTokens(text)
+        .filter((t) => !CONVERSATIONAL.has(t) && !/^[0-9./-]+$/.test(t))
+        .map((t) => (t.length > 4 && /[^s]s$/.test(t) ? t.slice(0, -1) : t)),
+    ),
+  ];
+}
+
+/** Does `token` start a word in `hay` (lower-cased)? "flake" matches "flaky", not "snowflake". */
+export function wordHit(hay: string, token: string): boolean {
+  let i = hay.indexOf(token);
+  while (i !== -1) {
+    if (i === 0 || /[^a-z0-9]/.test(hay[i - 1]!)) return true;
+    i = hay.indexOf(token, i + 1);
+  }
+  return false;
+}
+
+/**
+ * Is `text` about the question, judged by topic words? One identifier (TEST-109,
+ * src/hook.ts) or one uncommon word (in at most a tenth of the memories) is enough;
+ * otherwise two topic words must match.
+ */
+export function matchesTopic(
+  text: string,
+  topics: string[],
+  docFreq: Map<string, number>,
+  total: number,
+): boolean {
+  const hay = text.toLowerCase();
+  const hits = topics.filter((t) => wordHit(hay, t));
+  if (hits.length >= 2) return true;
+  return hits.some(
+    (t) => isIdentifierToken(t) || (t.length >= 5 && (docFreq.get(t) ?? 0) <= Math.max(2, total * 0.1)),
+  );
+}
+
+/** How many of `texts` contain each topic word. */
+export function topicDocFreq(texts: string[], topics: string[]): Map<string, number> {
+  const lower = texts.map((t) => t.toLowerCase());
+  return new Map(topics.map((t) => [t, lower.filter((h) => wordHit(h, t)).length]));
+}
+
 export function tokenize(text: string): string[] {
   return text
     .toLowerCase()

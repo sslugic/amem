@@ -50,6 +50,7 @@ describe("personal memory in work repos", () => {
       assert.equal(remember("Planning a dentist appointment for next Tuesday afternoon", "private"), 200);
       assert.equal(remember("A friend is referring me to a job at another company", "fact", ["private"]), 200);
       assert.equal(remember("Weekly team sync moved to Thursdays at 10am", "fact"), 200);
+      assert.equal(remember("Prefers short PR descriptions with a one-line summary first", "preference"), 200);
       assert.equal(remember("billing-service retries need a 30 minute backoff before paging", "project"), 200);
 
       const text = recentPersonalContext(repo);
@@ -57,7 +58,8 @@ describe("personal memory in work repos", () => {
       assert.doesNotMatch(text, /dentist|referring me/);
       const lines = text.split("\n").filter((l) => l.startsWith("- "));
       assert.match(lines[0], /billing-service/, "repo-relevant memory first");
-      assert.match(text, /team sync/);
+      assert.match(text, /short PR descriptions/, "standing preferences apply everywhere");
+      assert.doesNotMatch(text, /team sync/, "facts about other things wait for a question");
     });
   });
 });

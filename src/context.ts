@@ -1,4 +1,4 @@
-import { contentTokens } from "./search.js";
+import { contentTokens, matchesTopic, topicDocFreq, topicTokens } from "./search.js";
 import {
   getRepoByName,
   listClaims,
@@ -100,11 +100,16 @@ export type BuildContextOptions = {
   includePersonal?: boolean;
   /** Include the ranked skill index (default true). */
   includeSkills?: boolean;
+  /**
+   * Prompt injection: return only what matches the question on topic words, and nothing
+   * at all for a prompt like "ok lets do that". An explicit amem_context call stays loose.
+   */
+  strict?: boolean;
 };
 
 /** "What did I do yesterday / this week / for standup": recent dated work is the answer. */
 const TIME_INTENT =
-  /\b(yesterday|today|tonight|this (?:morning|week|sprint)|last (?:week|sprint|friday|monday)|recent(?:ly)?|lately|stand-?up|recap|catch me up|worked on|what (?:did|have) i)\b/i;
+  /\b(yesterday|today|tonight|this (?:morning|week|sprint)|last (?:week|sprint|friday|monday)|recent(?:ly)?|lately|stand-?up|(?:daily|weekly|quick) recap|recap (?:of|for) (?:my|the|this|last)|catch me up|worked on|what (?:did|have) i)\b/i;
 
 export function hasTimeIntent(query: string): boolean {
   return TIME_INTENT.test(query);
@@ -248,6 +253,19 @@ export function buildContext(
   }
 
   const timeIntent = hasTimeIntent(query);
+  const topics = opts.strict ? topicTokens(query) : [];
+  const docFreq = topicDocFreq(
+    allActive.map((c) => c.text),
+    topics,
+  );
+  // Strict: a claim must name the topic, or answer a time question by date.
+  const onTopic = (text: string, reasons: string[] = []): boolean =>
+    !opts.strict ||
+    reasons.includes("timely") ||
+    matchesTopic(text, topics, docFreq, allActive.length);
+  if (opts.strict && topics.length === 0 && !timeIntent) {
+    return { query, claims: [], flows: [], components: [], notes: [], tasks: [], skills: [], skillDrafts: [] };
+  }
   const scoredAll = rankClaims(allActive, query, queryTokens, {
     rootPath,
     ftsBoost,
@@ -255,12 +273,13 @@ export function buildContext(
     timeIntent,
   })
     .filter((c) => (queryTokens.length === 0 ? true : c.score > 0))
+    .filter((c) => onTopic(c.text, c.reasons))
     .sort((a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at));
   const scored = dropWeakSemanticMatches(scoredAll);
 
   // If no keyword/FTS/embed hits, return newest fresh-leaning claims as weak fallback
   let selected: RankedClaim[] =
-    scored.length > 0
+    scored.length > 0 || opts.strict
       ? dropSupersededUpdates(scored).slice(0, limit)
       : allActive.slice(0, Math.min(5, limit)).map((c) => {
           const freshness = assessClaimFreshness(rootPath, c);
@@ -293,7 +312,7 @@ export function buildContext(
           extraReason: "personal",
           timeIntent,
         })
-          .filter((c) => c.score > 0)
+          .filter((c) => c.score > 0 && onTopic(c.text, c.reasons))
           .sort((a, b) => b.score - a.score)
           .slice(0, Math.max(1, Math.ceil(limit / 2)));
         if (personalRanked.length > 0) {
@@ -340,10 +359,11 @@ export function buildContext(
   const notesRaw = listConversationNotes(repoId, 40)
     .map((n) => ({ ...n, score: scoreNote(n, queryTokens) }))
     .filter((n) => (queryTokens.length === 0 ? true : n.score > 0))
+    .filter((n) => onTopic(n.text))
     .sort((a, b) => b.score - a.score || b.created_at.localeCompare(a.created_at))
     .slice(0, 5);
   const notes =
-    notesRaw.length > 0
+    notesRaw.length > 0 || opts.strict
       ? notesRaw
       : listConversationNotes(repoId, 5).map((n) => ({ ...n, score: 0 }));
 
@@ -354,20 +374,20 @@ export function buildContext(
       ? listOpenTasksForContext(repoId, 8)
       : listOpenTasksForContext(repoId, 24)
           .map((t) => ({ ...t, score: scoreTask(t, queryTokens) }))
-          .filter((t) => t.score >= 3)
+          .filter((t) => t.score >= 3 && onTopic(`${t.title} ${t.body}`))
           .sort((a, b) => b.score - a.score)
           .slice(0, 5);
   const doneTasks =
     queryTokens.length > 0
       ? listTasks(repoId, { status: "done", includeDone: true, limit: 40 })
           .map((t) => ({ ...t, score: scoreTask(t, queryTokens) }))
-          .filter((t) => t.score >= 5)
+          .filter((t) => t.score >= 5 && onTopic(`${t.title} ${t.body}`))
           .sort((a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at))
           .slice(0, 3)
       : [];
   const tasks = [...openTasks, ...doneTasks];
   const skillsOn = opts.includeSkills !== false && loadPolicy().policy.skills_enabled;
-  const skills = skillsOn ? rankSkillsForQuery(query) : [];
+  const skills = skillsOn ? rankSkillsForQuery(opts.strict ? topics.join(" ") : query) : [];
   const skillDrafts = skillsOn ? pendingSkillNudges(repoId) : [];
 
   return { query, claims: selected, flows, components, notes, tasks, skills, skillDrafts };

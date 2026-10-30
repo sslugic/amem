@@ -21,7 +21,7 @@ import { join, resolve, sep } from "node:path";
 import { pruneSkillRows, upsertSkillRow } from "./db.js";
 import { amemHome } from "./paths.js";
 import { compiledDenyPatterns } from "./policy.js";
-import { tokenize } from "./search.js";
+import { contentTokens, wordHit } from "./search.js";
 
 export const SKILL_FILE = "SKILL.md";
 /** Subdirectories a skill may carry, matching the agentskills.io layout. */
@@ -449,7 +449,7 @@ export function rankSkills(
   query: string,
   limit = 3,
 ): RankedSkill[] {
-  const tokens = tokenize(query);
+  const tokens = [...new Set(contentTokens(query))];
   if (tokens.length === 0) return [];
   const ranked: RankedSkill[] = [];
   for (const skill of skills) {
@@ -460,10 +460,10 @@ export function rankSkills(
     const reasons: string[] = [];
     let hits = 0;
     for (const token of tokens) {
-      if (name.includes(token)) {
+      if (wordHit(name, token)) {
         score += 6;
         hits += 1;
-      } else if (haystack.includes(token)) {
+      } else if (wordHit(haystack, token)) {
         score += token.length > 4 ? 3 : 2;
         hits += 1;
       }
