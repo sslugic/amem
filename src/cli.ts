@@ -39,6 +39,7 @@ import { installClaude, claudeInstallHealth } from "./install/claude.js";
 import { installCursor, cursorInstallHealth } from "./install/cursor.js";
 import { installHost } from "./install/hosts.js";
 import { seedRepoIfEmpty } from "./repo-seed.js";
+import { planUninstall } from "./uninstall.js";
 import { ensureStableCli, type McpRegistration } from "./install/mcp-register.js";
 import {
   allInstructionTargets,
@@ -173,7 +174,8 @@ Usage:
   amem init --personal
   amem rename "<display name>" --workspace <slug>
   amem status [--workspace <name>]
-  amem doctor [--attest] [--json]
+  amem doctor [--fix] [--attest] [--json]
+  amem uninstall [--yes] [--purge]        # dry run unless --yes; --purge also deletes memory
   amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna]
   amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>] [--supersedes <id,id>]
   amem supersede <claimId...> [--by <newerClaimId>] [--workspace <name>]
@@ -628,6 +630,35 @@ async function main(): Promise<void> {
         }
         const identity = detectRepoIdentity();
         const repo = getRepoByCwd();
+        if (flags.get("fix")) {
+          // Re-run what setup does for this repo's host. Every step is idempotent, so a
+          // healthy install reports nothing.
+          const fixed: string[] = [];
+          const host = repo?.platform ?? platformFlag(flags);
+          if (repo && !unbindableRootReason(identity.rootPath)) {
+            if (host === "claude" || host === "cursor") {
+              const info = host === "claude" ? installClaude(identity.rootPath) : installCursor(identity.rootPath);
+              if (info.mcp && info.mcp.status !== "unchanged") fixed.push(`MCP server ${info.mcp.status}: ${info.mcp.path}`);
+              if (info.mcp?.status === "skipped") fixed.push(info.mcp.note ?? "");
+              fixed.push(`${host === "claude" ? "Claude Code" : "Cursor"} hooks and skills refreshed`);
+            }
+            const state = getSetupState(repo.id);
+            let bound: string[] = [];
+            try {
+              bound = state ? (JSON.parse(state.platforms) as string[]) : [];
+            } catch {
+              bound = [];
+            }
+            if (!bound.length && repo.platform) bound = [repo.platform];
+            for (const w of applyInstructions(identity.rootPath, instructionTargets(bound))) {
+              if (w.status !== "unchanged") fixed.push(`instructions ${w.status}: ${w.path}`);
+            }
+            const seeded = seedRepoIfEmpty(repo);
+            if (seeded > 0) fixed.push(`seeded ${seeded} facts from the repo's manifests`);
+          }
+          for (const line of fixed) console.log(`fixed: ${line}`);
+          if (fixed.length === 0) console.log("fixed: nothing needed fixing");
+        }
         const issues: string[] = [];
         const loaded = loadPolicy();
         for (const src of loaded.sources) {
@@ -691,6 +722,34 @@ async function main(): Promise<void> {
           process.exitCode = 1;
         }
         for (const note of advice) console.log(`note: ${note}`);
+        break;
+      }
+      case "uninstall": {
+        const steps = planUninstall({
+          repoRoot: unbindableRootReason(detectRepoIdentity().rootPath) ? undefined : detectRepoIdentity().rootPath,
+          purge: Boolean(flags.get("purge")),
+        });
+        const apply = Boolean(flags.get("yes"));
+        if (steps.length === 0) {
+          console.log("Nothing to remove: amem is not wired into any client here.");
+        }
+        for (const step of steps) {
+          const target = step.path ? ` (${step.path})` : "";
+          if (!apply) {
+            console.log(`would remove: ${step.what}${target}`);
+            continue;
+          }
+          try {
+            step.apply();
+            console.log(`removed: ${step.what}${target}`);
+          } catch (err) {
+            console.log(`failed: ${step.what}${target}: ${(err as Error).message}`);
+            process.exitCode = 1;
+          }
+        }
+        if (!apply && steps.length > 0) console.log("Dry run. Re-run with --yes to remove these.");
+        if (apply && !flags.get("purge")) console.log(`Memory kept in ${amemHome()}. Delete it with: amem uninstall --yes --purge`);
+        console.log("Then remove the CLI: npm rm -g @iamem/amem");
         break;
       }
       case "context": {

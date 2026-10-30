@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, writeFileSync, readFileSync } from "n
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { mcpClientConfig, stdioMcpLaunch } from "../mcp.js";
-import { getPackageRoot, resolveAmemBin, writeJson, readJsonObject } from "./skills.js";
+import { getPackageRoot, resolveAmemProgramArgs, writeJson, readJsonObject } from "./skills.js";
 
 export type HostInstallResult = {
   host: string;
@@ -123,12 +123,12 @@ export function installZed(workspace = "personal"): HostInstallResult {
   const path = join(dir, "settings.json");
   const existing = existsSync(path) ? readJsonObject(path) : {};
   const servers = (existing.context_servers as Record<string, unknown>) ?? {};
-  const amem = resolveAmemBin();
+  const [command, ...args] = resolveAmemProgramArgs("mcp", "--workspace", workspace);
   const cfg = mcpClientConfig(workspace);
   servers.amem = {
     source: "custom",
-    command: amem.split(/\s+/)[0],
-    args: amem.split(/\s+/).slice(1).concat(["mcp", "--workspace", workspace]),
+    command,
+    args,
     env: {},
     url: cfg.http.url,
   };
