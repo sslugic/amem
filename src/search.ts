@@ -49,20 +49,35 @@ const CONVERSATIONAL = new Set(
   ).split(" "),
 );
 
+const SUFFIXES = ["ations", "ation", "ings", "ing", "ions", "ion", "ers", "ed", "es", "ly", "s"];
+
+/**
+ * Crude suffix stem, used as a word prefix: "failing" and "failed" both become "fail",
+ * "translation" and "translated" both "translat". Identifiers are left alone.
+ */
+export function stem(token: string): string {
+  if (token.length <= 4 || /[0-9_./-]/.test(token)) return token;
+  for (const suffix of SUFFIXES) {
+    if (token.endsWith(suffix) && token.length - suffix.length >= (suffix === "s" ? 3 : 4)) {
+      return token.slice(0, -suffix.length);
+    }
+  }
+  return token;
+}
+
 /** A ticket key, path, version or name with digits/punctuation: specific on its own. */
 export function isIdentifierToken(token: string): boolean {
   return /[a-z]/.test(token) && /[0-9_./-]/.test(token) && token.length >= 3;
 }
 
-/** Query words that name a topic: content tokens minus filler, plurals trimmed ("terms" finds "term"). */
+/** Query words that name a topic: content tokens minus conversational filler. */
+export function topicWords(text: string): string[] {
+  return [...new Set(contentTokens(text).filter((t) => !CONVERSATIONAL.has(t) && !/^[0-9./-]+$/.test(t)))];
+}
+
+/** Topic words stemmed, for matching as word prefixes ("terms" finds "term"). */
 export function topicTokens(text: string): string[] {
-  return [
-    ...new Set(
-      contentTokens(text)
-        .filter((t) => !CONVERSATIONAL.has(t) && !/^[0-9./-]+$/.test(t))
-        .map((t) => (t.length > 4 && /[^s]s$/.test(t) ? t.slice(0, -1) : t)),
-    ),
-  ];
+  return [...new Set(topicWords(text).map(stem))];
 }
 
 /** Does `token` start a word in `hay` (lower-cased)? "flake" matches "flaky", not "snowflake". */
@@ -257,7 +272,8 @@ export function keywordScoreClaim(claim: ClaimRow, queryTokens: string[]): numbe
   const hay = `${claim.id} ${claim.kind} ${claim.text} ${claim.code_anchors}`.toLowerCase();
   let score = 0;
   for (const token of queryTokens) {
-    if (hay.includes(token)) {
+    // Fall back to the stem as a word start: "failing" finds "failed", "jobs" finds "job".
+    if (hay.includes(token) || (stem(token) !== token && wordHit(hay, stem(token)))) {
       score += token.length > 4 ? 3 : 2;
       if (claim.text.toLowerCase().includes(token)) score += 1;
       if (claim.id.toLowerCase().includes(token)) score += 2;

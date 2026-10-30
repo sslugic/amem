@@ -1,6 +1,6 @@
 {
   "name": "@iamem/amem",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Local personal agent memory for Cursor and Claude Code. Private to your machine — never shared.",
   "type": "module",
   "bin": {
@@ -35,6 +35,7 @@
     "app": "node dist/cli.js app",
     "app:setup": "npm install --prefix desktop && node desktop/scripts/ensure-electron.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "bench": "npm run build && node scripts/bench-retrieval.mjs",
     "pack:check": "npm run build && node scripts/check-pack.mjs",
     "prepublishOnly": "npm test && node scripts/check-pack.mjs",
     "test": "npm run build && node --test --test-concurrency=1 test/*.test.mjs",

@@ -1,4 +1,4 @@
-import { contentTokens, matchesTopic, topicDocFreq, topicTokens } from "./search.js";
+import { contentTokens, matchesTopic, topicDocFreq, topicTokens, topicWords } from "./search.js";
 import {
   getRepoByName,
   listClaims,
@@ -240,10 +240,14 @@ export function buildContext(
   const rootPath = opts.rootPath;
   const includePersonal = opts.includePersonal !== false;
 
-  const queryTokens = contentTokens(query);
+  // Rank on the words that name the topic: "how do I add a column" is about columns,
+  // and "add" would otherwise match every memory that says "do not add …".
+  const words = topicWords(query);
+  const rankQuery = words.length > 0 ? words.join(" ") : query;
+  const queryTokens = words.length > 0 ? words : contentTokens(query);
   const db = openDb();
   const allActive = listClaims(repoId);
-  const ftsHits = searchClaimsFts(db, repoId, query, Math.max(limit * 2, 24));
+  const ftsHits = searchClaimsFts(db, repoId, rankQuery, Math.max(limit * 2, 24));
   const ftsBoost = new Map<string, number>();
   for (const hit of ftsHits) {
     ftsBoost.set(hit.id, ftsBoostFromBm25(hit.bm25));
@@ -300,7 +304,7 @@ export function buildContext(
       );
       if (personalClaims.length > 0) {
         const pFts = new Map<string, number>();
-        for (const hit of searchClaimsFts(db, personal.id, query, 12)) {
+        for (const hit of searchClaimsFts(db, personal.id, rankQuery, 12)) {
           pFts.set(hit.id, ftsBoostFromBm25(hit.bm25));
         }
         const pEmbed = new Map<string, number>();

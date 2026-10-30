@@ -62,6 +62,17 @@ Any MCP client can use the same memory: `amem mcp --print-config` prints a ready
 
 Something off? `amem doctor --fix` rewires the current repo's client. To remove amem, run `amem uninstall` to see what it added, then `amem uninstall --yes`. Your memory stays unless you add `--purge`.
 
+## How well it finds things
+
+`npm run bench` loads 36 memories from a sample web shop and asks 32 questions phrased the way people ask, often without the memory's words. It also sends 8 vague prompts ("ok sounds good, go ahead") that name no topic. CI fails if these numbers drop.
+
+| Path | Right memory first | Right memory in top 3 | Vague prompts given memory |
+|---|---|---|---|
+| Prompt hook (automatic) | 88% | 97% | 0% |
+| `amem_context` (agent asks) | 81% | 94% | n/a |
+
+The data is in [`bench/retrieval.json`](bench/retrieval.json). Add your own cases and run `npm run bench -- --misses` to see what it gets wrong.
+
 ## Privacy (non-negotiable)
 
 - Memory never leaves your machine: no sync, no cloud embeddings, no "share with org" mode.
