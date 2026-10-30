@@ -57,22 +57,31 @@ export function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+/** Does a hook command run amem's hook? Matches `amem hook`, `amem.cmd" hook`, `cli.js hook`. */
+export function isAmemHookCommand(command: string): boolean {
+  return /amem(\.cmd|\.exe)?"?\s+hook\b|cli\.js"?\s+hook\b/i.test(command);
+}
+
 export function resolveAmemBin(): string {
   const args = resolveAmemProgramArgs();
-  return args.length === 1 ? args[0]! : args.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ");
+  // Hooks run this through a shell: "C:\Program Files\nodejs\amem.cmd" needs its quotes.
+  return args.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ");
 }
 
 export function resolveAmemProgramArgs(...extra: string[]): string[] {
   try {
     // npx puts its cache bin first on PATH; prefer an install that will still be there.
-    const found = execFileSync("which", ["-a", "amem"], {
+    const win = process.platform === "win32";
+    const found = execFileSync(win ? "where" : "which", win ? ["amem"] : ["-a", "amem"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     })
       .split("\n")
       .map((l) => l.trim())
       .filter(Boolean);
-    const stable = found.find((p) => !/[\\/]_npx[\\/]/.test(p)) ?? found[0];
+    // Windows lists npm's extensionless sh shim before amem.cmd; only the .cmd runs from a hook.
+    const runnable = win ? found.filter((p) => /\.(cmd|exe)$/i.test(p)) : found;
+    const stable = runnable.find((p) => !/[\\/]_npx[\\/]/.test(p)) ?? runnable[0];
     if (stable) return [stable, ...extra];
   } catch {
     // fall through

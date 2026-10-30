@@ -102,6 +102,8 @@ function sha256File(path: string): string | null {
 }
 
 function modeOctal(path: string): string | null {
+  // Windows guards files with ACLs; POSIX mode bits there are always 666/777 and meaningless.
+  if (process.platform === "win32") return null;
   try {
     if (!existsSync(path)) return null;
     return (statSync(path).mode & 0o777).toString(8).padStart(3, "0");

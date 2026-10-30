@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { withAmemHome } from "./helpers.mjs";
 
 /** Write a SKILL.md into the live AMEM_HOME skills dir. */
@@ -243,7 +243,7 @@ test("skill names cannot escape the skills directory", async () => {
     for (const evil of ["../escape", "../../etc/passwd", "/etc/passwd", "foo/../../bar"]) {
       const written = writeSkill(evil, "# x");
       assert.ok(
-        written.path.startsWith(skillsRoot + "/"),
+        written.path.startsWith(skillsRoot + sep),
         `${evil} wrote outside the skills dir: ${written.path}`,
       );
       assert.ok(!written.name.includes("/") && !written.name.includes(".."));

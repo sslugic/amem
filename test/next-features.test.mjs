@@ -304,7 +304,9 @@ describe("continue / zed host adapters", () => {
     await withAmemHome(async () => {
       const fakeHome = mkdtempSync(join(tmpdir(), "amem-host-next-"));
       const prev = process.env.HOME;
+      const prevProfile = process.env.USERPROFILE;
       process.env.HOME = fakeHome;
+      process.env.USERPROFILE = fakeHome;
       try {
         const { installHost, continueInstallHealth, zedInstallHealth } = await import(
           "../dist/install/hosts.js"
@@ -326,6 +328,8 @@ describe("continue / zed host adapters", () => {
       } finally {
         if (prev === undefined) delete process.env.HOME;
         else process.env.HOME = prev;
+        if (prevProfile === undefined) delete process.env.USERPROFILE;
+        else process.env.USERPROFILE = prevProfile;
         rmSync(fakeHome, { recursive: true, force: true });
       }
     });
