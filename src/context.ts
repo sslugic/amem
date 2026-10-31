@@ -20,6 +20,7 @@ import {
 } from "./db.js";
 import {
   assessClaimFreshness,
+  freshnessPass,
   freshnessScoreMultiplier,
   type ClaimFreshness,
   type FreshnessStatus,
@@ -229,7 +230,11 @@ function rankClaims(
   });
 }
 
-export function buildContext(
+export function buildContext(...args: Parameters<typeof buildContextUnpassed>): ReturnType<typeof buildContextUnpassed> {
+  return freshnessPass(() => buildContextUnpassed(...args));
+}
+
+function buildContextUnpassed(
   repoId: string,
   query: string,
   limitOrOpts: number | BuildContextOptions = 12,
