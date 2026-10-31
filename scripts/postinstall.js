@@ -1,29 +1,43 @@
 #!/usr/bin/env node
 /**
  * Anonymous install ping for @iamem/amem (package version, Node, OS/arch only).
- * Opt out: AMEM_TELEMETRY_DISABLED=1  — skipped automatically in CI / NODE_ENV=test.
- * Never throws; always exits 0 so install is never blocked.
+ * Opt-in, like the daily usage ping: sent only when `telemetry = true` in
+ * ~/.amem/policy.toml (`amem telemetry on`), so a fresh install sends nothing.
+ * Also skipped with AMEM_TELEMETRY_DISABLED / DO_NOT_TRACK, in CI / NODE_ENV=test, and
+ * under a managed policy. Never throws; always exits 0 so install is never blocked.
  */
+import http from "node:http";
 import https from "node:https";
 import os from "node:os";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const DEFAULT_URL = "https://getamem.com/api/beacon/npm-install";
 
 function done() {
   process.exit(0);
 }
 
-try {
+const truthy = (v) => v !== undefined && v !== "" && v !== "0" && v.toLowerCase() !== "false";
+
+async function main() {
   if (
-    process.env.AMEM_TELEMETRY_DISABLED ||
-    process.env.CI ||
+    truthy(process.env.AMEM_TELEMETRY_DISABLED) ||
+    truthy(process.env.DO_NOT_TRACK) ||
+    truthy(process.env.CI) ||
     process.env.NODE_ENV === "test"
   ) {
-    done();
+    return done();
   }
 
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  // The same switch as the daily ping. No built policy module means no opt-in to read: stay quiet.
+  const policyModule = join(root, "dist", "policy.js");
+  if (!existsSync(policyModule)) return done();
+  const { telemetryEnabled } = await import(pathToFileURL(policyModule).href);
+  if (!telemetryEnabled()) return done();
+
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const body = JSON.stringify({
     event: "npm_install",
@@ -35,10 +49,10 @@ try {
     ts: Date.now(),
   });
 
-  const req = https.request(
+  const url = new URL(process.env.AMEM_INSTALL_PING_URL || DEFAULT_URL);
+  const req = (url.protocol === "http:" ? http : https).request(
+    url,
     {
-      hostname: "getamem.com",
-      path: "/api/beacon/npm-install",
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -57,6 +71,6 @@ try {
   setTimeout(done, 2000);
   req.write(body);
   req.end();
-} catch {
-  done();
 }
+
+main().catch(() => done());

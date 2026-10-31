@@ -29,7 +29,7 @@ Guarantees:
 - `~/.amem` is created with mode `0700`
 - Local UI binds to `127.0.0.1` only
 - Memory never leaves the machine — no managed sync, no “share with org” mode
-- Anonymous install and daily usage pings only (see [Telemetry](#telemetry)); opt out anytime
+- No network calls by default; an anonymous usage ping is opt-in (see [Telemetry](#telemetry))
 - Agents are instructed to store **repo facts**, not proprietary prompting strategy
 - Optional AES-256-GCM lock and encrypted local backups — still no cloud
 
@@ -66,15 +66,16 @@ If `npm install` fails compiling native code, install Xcode CLT (macOS) or `buil
 
 ### Telemetry
 
-amem sends two kinds of anonymous ping to `getamem.com`:
+Off by default. `amem setup` asks once; you can also turn it on with `amem telemetry on`, which writes `telemetry = true` to `~/.amem/policy.toml`. That setting is the only switch. Once on, amem sends two kinds of anonymous ping to `getamem.com`:
 
 - **Install ping** (`npm install`, when npm runs install scripts): package name and version, Node.js version, OS and CPU architecture.
 - **Usage ping** (from the CLI): one on first run, then at most one a day while amem is in use. It carries a random install id (stored in `~/.amem/telemetry.json`), the amem version, Node.js version, OS and CPU architecture, the date amem was first used, and how many times each part ran since the last ping (MCP server, agent hooks, dashboard, CLI commands, setup). It is sent from a background process and never slows a command down.
 
-No memory contents, repo names, paths, usernames, emails or IP addresses are stored. Pings are off in CI and tests, when `DO_NOT_TRACK=1` is set, and always under a managed policy (`/etc/amem/policy.toml` or `AMEM_POLICY_PATH`). Turn them off yourself with:
+No memory contents, repo names, paths, usernames, emails or IP addresses are stored. Pings are off in CI and tests, when `DO_NOT_TRACK=1` is set, and always under a managed policy (`/etc/amem/policy.toml` or `AMEM_POLICY_PATH`). Even when you opted in, `AMEM_TELEMETRY_DISABLED=1` stops them.
 
 ```bash
-amem telemetry off            # or: AMEM_TELEMETRY_DISABLED=1
+amem telemetry on             # opt in
+amem telemetry off
 amem telemetry status
 ```
 
@@ -637,7 +638,7 @@ Every claim is grounded with file anchors (`code_anchors`). During context gener
 
 ### Does amem expose an unauthenticated network server or upload code?
 - **Strict Loopback Binding:** The local HTTP UI / MCP daemon binds exclusively to `127.0.0.1`. Non-loopback bindings are blocked by hardcoded policy rules.
-- **Zero External Egress:** Telemetry is hardcoded off (`telemetry: false`). All SQLite databases (`graph.db`), vectors, and logs stay under `~/.amem` with `0700` local filesystem permissions.
+- **Zero External Egress:** Telemetry is off by default and forced off under a managed policy (`telemetry = false`). All SQLite databases (`graph.db`), vectors, and logs stay under `~/.amem` with `0700` local filesystem permissions.
 - **Optional At-Rest Encryption:** The local database can be encrypted using AES-256-GCM (`amem lock --passphrase '...'`).
 
 ---

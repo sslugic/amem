@@ -29,9 +29,9 @@ export type AttestReport = {
   };
   attested_at: string;
   privacy: {
-    /** Memory telemetry: never, hard-stopped by policy. */
-    telemetry: false;
-    /** Anonymous usage ping (telemetry.ts); off under a managed policy. */
+    /** The opt-in usage ping (policy.telemetry), as `amem telemetry status` reports it. Memory is never sent. */
+    telemetry: boolean;
+    /** Anonymous usage ping (telemetry.ts); off by default and under a managed policy. */
     usage_ping: { enabled: boolean; reason: string };
     network_egress: "none" | "usage-ping";
     ui_bind: string;
@@ -127,8 +127,8 @@ export function buildAttestReport(cwd: string = process.cwd()): AttestReport {
     if (src.error) issues.push(`Policy ${src.role} (${src.path}): ${src.error}`);
   }
 
-  if (loaded.policy.telemetry) {
-    issues.push("telemetry unexpectedly enabled (hard-stop failed)");
+  if (loaded.policy.telemetry && loaded.sources.some((s) => s.applied && (s.role === "system" || s.role === "env"))) {
+    issues.push("telemetry enabled under a managed policy (hard-stop failed)");
   }
   if (loaded.policy.ui_bind !== "127.0.0.1" && loaded.policy.ui_bind !== "localhost") {
     issues.push(`ui_bind must be loopback, got ${loaded.policy.ui_bind}`);
@@ -205,7 +205,7 @@ export function buildAttestReport(cwd: string = process.cwd()): AttestReport {
     },
     attested_at: new Date().toISOString(),
     privacy: {
-      telemetry: false,
+      telemetry: ping.enabled,
       usage_ping: { enabled: ping.enabled, reason: ping.reason },
       network_egress: ping.enabled ? "usage-ping" : "none",
       ui_bind: loaded.policy.ui_bind,

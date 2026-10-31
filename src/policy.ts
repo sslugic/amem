@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { platform as osPlatform } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { amemHome } from "./paths.js";
 
 import { KNOWN_PLATFORMS, resolvePlatformId } from "./platforms.js";
@@ -226,11 +226,15 @@ export function loadPolicy(forceReload = false): LoadedPolicy {
     }
   }
 
-  // Privacy hard-stops: never allow non-loopback UI or enabling telemetry via policy.
+  // Privacy hard-stops: never allow a non-loopback UI. The usage ping is opt-in: only the
+  // user's own policy can turn it on, and a managed (system / AMEM_POLICY_PATH) policy
+  // always keeps it off.
   if (policy.ui_bind !== "127.0.0.1" && policy.ui_bind !== "localhost") {
     policy = { ...policy, ui_bind: "127.0.0.1" };
   }
-  policy = { ...policy, telemetry: false };
+  if (sources.some((s) => s.applied && (s.role === "system" || s.role === "env"))) {
+    policy = { ...policy, telemetry: false };
+  }
 
   // A policy file we could not read must not silently relax into permissive defaults:
   // an admin deploying deny-default would otherwise get allow_export back on a typo.
@@ -314,7 +318,33 @@ export function assertUiAllowed(policy: AmemPolicy = loadPolicy().policy): void 
   }
 }
 
-/** Unused today — kept so attest / docs can prove the knob exists and is forced off. */
+/**
+ * The one switch for every network ping (daily usage ping and install ping). Off unless
+ * the user turned it on (`amem telemetry on`, or `telemetry = true` in ~/.amem/policy.toml).
+ */
 export function telemetryEnabled(policy: AmemPolicy = loadPolicy().policy): boolean {
   return policy.telemetry === true;
+}
+
+/** Has the user's own policy file decided telemetry either way? Setup asks only when not. */
+export function userTelemetryChoice(): boolean | null {
+  const read = readPartial(userPolicyPath());
+  return typeof read.partial?.telemetry === "boolean" ? read.partial.telemetry : null;
+}
+
+/** Set `telemetry = true|false` in ~/.amem/policy.toml, keeping every other line. */
+export function setUserTelemetry(enabled: boolean): void {
+  const path = userPolicyPath();
+  const line = `telemetry = ${enabled}`;
+  const raw = existsSync(path) ? readFileSync(path, "utf8") : "";
+  const lines = raw.split(/\r?\n/);
+  const at = lines.findIndex((l) => /^\s*telemetry\s*=/.test(l));
+  if (at >= 0) lines[at] = line;
+  else {
+    while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    lines.push(line);
+  }
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, `${lines.join("\n")}\n`, { mode: 0o600 });
+  clearPolicyCache();
 }

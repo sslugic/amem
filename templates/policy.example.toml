@@ -3,7 +3,7 @@
 # Or set AMEM_POLICY_PATH for tests / alternate locations.
 #
 # Precedence (later wins): defaults → ~/.amem/policy.toml → /etc/amem/policy.toml → AMEM_POLICY_PATH
-# Telemetry cannot be enabled. UI bind is forced to loopback.
+# A managed policy always keeps the opt-in usage ping off. UI bind is forced to loopback.
 
 telemetry = false
 ui_enabled = true
