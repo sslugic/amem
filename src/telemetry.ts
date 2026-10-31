@@ -94,7 +94,7 @@ export function telemetryStatus(): TelemetryStatus {
   const state = readState();
   if (blocked) return { enabled: false, reason: blocked, id: state?.id ?? null };
   if (state && !state.enabled) return { enabled: false, reason: "turned off (amem telemetry off)", id: state.id };
-  return { enabled: true, reason: "on (anonymous daily usage ping)", id: state?.id ?? null };
+  return { enabled: true, reason: "anonymous daily usage ping", id: state?.id ?? null };
 }
 
 /** `amem telemetry on|off`. Off also drops counts not yet sent. */
