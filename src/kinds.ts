@@ -96,8 +96,23 @@ function scrubCodeNoise(text: string): string {
     .trim();
 }
 
-const QUESTION_LEAD =
-  /^(can|could|would|should|is|are|was|were|do|does|did|how|what|why|when|where|who|which|will|shall|may|might|am|have|has|had)\b/i;
+/** "Can you …", "Could we …", "can yo u…": a request, wherever it sits in the text. */
+const ASK = /\b(?:can|could|would)\s+(?:you|yo|u|we)\b|^(?:can|could|would|will)\s+(?:i|it|someone|they)\b/i;
+/** "What does …", "How would …": a question that lost its "?". */
+const WH_QUESTION = /^(?:what|how|why|where|when|which|who)\s+(?:does|do|did|would|could|should|can|is|are|was|were|will)\b/i;
+/** "users ask why X?" reports a question; it does not ask one. */
+const REPORTED_QUESTION = /\b(?:ask|asks|asked|asking|wonder|wonders|wondered)\s+(?:why|how|what|whether|if|when|where|which|who)\b[^?]*\?/gi;
+/** Quoted text (an error message, a UI label) is not the writer's own words. */
+const QUOTED = /"[^"]*"|“[^”]*”|`[^`]*`|(^|\s)'[^']+'(?=[\s.,;:)]|$)/g;
+/** A request or hand-off, not a statement: "fix it for me please", "figure out …". */
+const REQUEST = /\b(?:please|pls|for me|can you|could you|let me know|figure out|look into|whatever)\b/i;
+/** Hedging and progress chatter: "I think maybe …", "will report back", "…okay". */
+const HEDGE = /\b(?:i think|i guess|i believe|maybe we|kind of|sort of|honestly|report back|will report)\b|\b(?:okay|ok)\s*[.!]?$/i;
+/** Notes to self that look like facts: "TODO: …". */
+const TODO_LEAD = /^(?:todo|fixme|tbd|wip)\b/i;
+/** Someone talking ("I think", "I'll"), not a statement about the code. */
+const FIRST_PERSON_LEAD = /^i(?:'m|'ll|'d|'ve)?\s/i;
+const HAS_ANCHOR = /[\w-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|swift|md|json|ya?ml|toml|sql|sh)\b|\b[\w.-]+\/[\w./-]+/;
 const CHAT_LEAD =
   /^(so|ok|okay|and|but|also|im|i'm|let's|lets|please|thanks|thx|yeah|yep|yes|nope|no|sure|great|cool|alright|perfect|awesome|hmm|wait|actually|btw|oh|hey)\b/i;
 /** Pasted host/system plumbing (task notifications, reminders, agent hand-backs). */
@@ -177,13 +192,23 @@ export function nonFactReason(text: string): string | null {
   return null;
 }
 
+/**
+ * Statements read like statements whatever word they open with ("Do not run …",
+ * "Will owns …", "Has no retry: …"); the shapes rejected are questions, requests,
+ * hedged chatter and notes to self. A fact may quote a question as long as it does
+ * not end on one.
+ */
 export function isFactLike(text: string): boolean {
   const t = (text ?? "").replace(/\s+/g, " ").trim();
-  if (t.length < 40) return false;
+  // Short facts are fine when they point at code ("WAL mode is set in src/db.ts:359.").
+  if (t.length < (HAS_ANCHOR.test(t) ? 24 : 40)) return false;
   if (SYSTEM_TEXT.test(t)) return false;
-  if (QUESTION_MARK.test(t)) return false;
-  if (QUESTION_LEAD.test(t)) return false;
-  if (CHAT_LEAD.test(t)) return false;
+  const own = t.replace(QUOTED, "$1''").replace(REPORTED_QUESTION, "");
+  const sentences = own.split(/(?<=[.!?])\s+/);
+  if (sentences.some((s) => QUESTION_MARK.test(s) || QUESTION_SHAPE.test(s) || WH_QUESTION.test(s))) return false;
+  if (ASK.test(own)) return false;
+  if (CHAT_LEAD.test(t) && !/^also known as\b/i.test(t)) return false;
+  if (REQUEST.test(own) || HEDGE.test(own) || TODO_LEAD.test(t) || FIRST_PERSON_LEAD.test(t)) return false;
   if (DANGLING.test(t)) return false;
   // Mid-thought lowercase openings are transcript fragments — unless the
   // sentence opens on an identifier, which is normal for a real fact.

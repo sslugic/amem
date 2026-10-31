@@ -45,6 +45,39 @@ describe("isFactLike", () => {
     const { isFactLike } = await import("../dist/kinds.js");
     assert.equal(isFactLike("Uses src/db.ts."), false);
   });
+
+  it("accepts statements whatever word they open with", async () => {
+    const { isFactLike } = await import("../dist/kinds.js");
+    for (const fact of [
+      "Do not run migrations outside src/db.ts; openDb() applies them on every connection.",
+      "Will is the owner of the payments service and approves every change to src/billing.",
+      "Has no retry: src/webhook.ts drops events when the upstream returns a 5xx response.",
+      "Also known as the vault, src/vault.ts encrypts graph.db with AES-256-GCM at rest.",
+      "WAL mode is set in src/db.ts:359.",
+      "Users often ask why sync is slow? The cause is the fs.statSync loop in src/freshness.ts.",
+      "The dashboard lives at http://127.0.0.1:7843/ui?view=claims and reads src/api/routes.ts.",
+      "Do NOT disable Profile D on it: the nightly profile-d job in ci.yml depends on it.",
+      "Bridge push fails with 'Please resubmit the following documents' when the tax ID is missing.",
+    ]) {
+      assert.equal(isFactLike(fact), true, fact);
+    }
+  });
+
+  it("rejects requests, hedges, notes to self and questions anywhere in the text", async () => {
+    const { isFactLike } = await import("../dist/kinds.js");
+    for (const noise of [
+      "I think maybe we should look at the thing in src/hook.ts later when we have time",
+      "Look into src/db.ts and fix whatever is causing the busy errors for me please",
+      "Running the tests now and will report back once src/db.ts compiles cleanly okay",
+      "TODO: figure out src/context.ts ranking, it is kind of broken I guess honestly",
+      "In testera, we have lots of tasks in progress. Can we do a scan and clean it up first?",
+      "Testera already has Gemini enabled. Where you refering too? The Slack message failed.",
+      "What does the term Orbi mean at my company, search Slack and Notion for it",
+      "When done with this, can we also fix the images in src/journal.tsx to match the theme",
+    ]) {
+      assert.equal(isFactLike(noise), false, noise);
+    }
+  });
 });
 
 describe("savings basis", () => {
