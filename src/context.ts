@@ -1,4 +1,5 @@
-import { contentTokens, matchesTopic, topicDocFreq, topicTokens, topicWords } from "./search.js";
+import { contentTokens, matchesTopic, topicDocFreq, topicTokens, topicWords, wordHit } from "./search.js";
+import { basename } from "node:path";
 import {
   getRepoByName,
   listClaims,
@@ -7,6 +8,7 @@ import {
   listEdges,
   listFlows,
   listOpenTasksForContext,
+  listRepos,
   listTasks,
   openDb,
   type AgentTaskRow,
@@ -14,6 +16,7 @@ import {
   type ComponentRow,
   type ConversationNoteRow,
   type FlowRow,
+  type RepoRow,
   type UsageEventRow,
   listSkillDrafts,
   type SkillDraftRow,
@@ -37,7 +40,13 @@ import { FEATURE_LOCAL_EMBED, hasFeature } from "./license.js";
 import { PERSONAL_SLUG } from "./personal.js";
 import { listIndexedSkills, rankSkills, type RankedSkill } from "./skills.js";
 import { loadPolicy } from "./policy.js";
-import { listWorkPersonalClaims, queryOverlap } from "./personal.js";
+import {
+  isPrivatePersonalClaim,
+  isSensitivePersonalClaim,
+  listWorkPersonalClaims,
+  mentionsSensitiveTopic,
+  queryOverlap,
+} from "./personal.js";
 import { clipText } from "./text-clip.js";
 
 /** Reasons are stored as JSON; a malformed row must not break the whole packet. */
@@ -230,6 +239,40 @@ function rankClaims(
   });
 }
 
+/** Repository names too generic to mean "that repository" when they appear in a prompt. */
+const GENERIC_SCOPE_NAMES = new Set([
+  "app", "apps", "api", "web", "docs", "doc", "test", "tests", "server", "client", "src", "lib",
+  "code", "development", "dev", "meetings", "meeting", "notes", "personal", "workspace", "project",
+  "projects", "scratch", "tmp", "temp", "home", "work", "main", "repo", "data",
+]);
+
+/** Slugs a repository answers to: its name and its folder name. */
+function repoScopeNames(repo: RepoRow): string[] {
+  const names = new Set<string>();
+  for (const raw of [repo.repo_name, basename(repo.root_path || "")]) {
+    const slug = (raw || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    if (slug.length >= 3 && !GENERIC_SCOPE_NAMES.has(slug)) names.add(slug);
+  }
+  return [...names];
+}
+
+/**
+ * Other repositories the question names ("how would you rate amem" asked from another
+ * repo). Naming a project is the clearest sign of what a question is about, so its own
+ * memories should answer it, wherever the question is asked from.
+ */
+function namedRepos(repoId: string, topics: string[]): { repo: RepoRow; scope: string }[] {
+  if (topics.length === 0) return [];
+  const wanted = new Set(topics);
+  const out: { repo: RepoRow; scope: string }[] = [];
+  for (const repo of listRepos()) {
+    if (repo.id === repoId || repo.repo_name === PERSONAL_SLUG) continue;
+    const scope = repoScopeNames(repo).find((n) => wanted.has(n));
+    if (scope) out.push({ repo, scope });
+  }
+  return out;
+}
+
 export function buildContext(...args: Parameters<typeof buildContextUnpassed>): ReturnType<typeof buildContextUnpassed> {
   return freshnessPass(() => buildContextUnpassed(...args));
 }
@@ -269,10 +312,14 @@ function buildContextUnpassed(
     allActive.map((c) => c.text),
     topics,
   );
-  // Strict: a claim must name the topic, or answer a time question by date.
+  const named = namedRepos(repoId, topicTokens(query));
+  const scopeNames = [...new Set(named.map((n) => n.scope))];
+  // Strict: a claim must name the topic, or answer a time question by date. Naming
+  // another repo counts on its own, even when this repo's memory never uses that word.
   const onTopic = (text: string, reasons: string[] = []): boolean =>
     !opts.strict ||
     reasons.includes("timely") ||
+    scopeNames.some((n) => wordHit(text.toLowerCase(), n)) ||
     matchesTopic(text, topics, docFreq, allActive.length);
   if (opts.strict && topics.length === 0 && !timeIntent) {
     return { query, claims: [], flows: [], components: [], notes: [], tasks: [], skills: [], skillDrafts: [] };
@@ -335,6 +382,60 @@ function buildContextUnpassed(
           ).slice(0, limit);
         }
       }
+    }
+  }
+
+  // Memories of a repository the question names. They get their own slots: a few, so
+  // the packet stays about the question, but they are not crowded out by this repo.
+  if (named.length > 0) {
+    const scopeSet = new Set(scopeNames);
+    const rest = queryTokens.filter((t) => !scopeSet.has(t));
+    const sensitiveOk = mentionsSensitiveTopic(query);
+    const fromNamed: RankedClaim[] = [];
+    for (const { repo, scope } of named) {
+      const claims = listClaims(repo.id).filter(
+        (c) => !isPrivatePersonalClaim(c) && (sensitiveOk || !isSensitivePersonalClaim(c)),
+      );
+      if (claims.length === 0) continue;
+      const nFts = new Map<string, number>();
+      const nEmbed = new Map<string, number>();
+      if (rest.length > 0) {
+        for (const hit of searchClaimsFts(db, repo.id, rest.join(" "), 12)) {
+          nFts.set(hit.id, ftsBoostFromBm25(hit.bm25));
+        }
+        for (const hit of searchClaimsEmbed(db, repo.id, query, 12)) {
+          nEmbed.set(hit.id, embedBoostFromScore(hit.score));
+        }
+      }
+      const ranked = rankClaims(claims, query, rest, {
+        rootPath: repo.root_path,
+        ftsBoost: nFts,
+        embedBoost: nEmbed,
+        extraReason: `repo:${scope}`,
+        timeIntent,
+      })
+        .filter((c) => c.score > 0)
+        .sort((a, b) => b.score - a.score || b.updated_at.localeCompare(a.updated_at));
+      // Only the name matched ("rate amem"): the repo's newest memories are the answer.
+      const picked =
+        ranked.length > 0
+          ? ranked
+          : claims
+              .slice()
+              .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+              .map((c) => ({
+                ...c,
+                score: 0,
+                freshness: assessClaimFreshness(repo.root_path, c),
+                reasons: [`repo:${scope}`, "fallback:recent"],
+              }));
+      fromNamed.push(...picked);
+    }
+    const cap = Math.max(1, Math.ceil(limit / 3));
+    const namedTop = dropSupersededUpdates(fromNamed).slice(0, cap);
+    if (namedTop.length > 0) {
+      const ids = new Set(namedTop.map((c) => c.id));
+      selected = [...namedTop, ...selected.filter((c) => !ids.has(c.id)).slice(0, limit - namedTop.length)];
     }
   }
 
