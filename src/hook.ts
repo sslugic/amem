@@ -1,7 +1,8 @@
 import { wordHit } from "./search.js";
 import { seedRepoIfEmpty } from "./repo-seed.js";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { amemHome } from "./paths.js";
 import { logContextUsage } from "./api/routes.js";
 import {
   captureMissLearnDraft,
@@ -162,8 +163,22 @@ function injectPacket(repo: RepoRow, query: string, session: string, platform: s
 export function handleHookPayload(raw: string): HookResponse {
   try {
     return handleHookPayloadInner(raw);
-  } catch {
+  } catch (err) {
+    logHookError(err);
     return { continue: true };
+  }
+}
+
+/** A hook must never block the agent, but a failure should leave a trace. Kept under 256 KB. */
+export function logHookError(err: unknown): void {
+  try {
+    mkdirSync(amemHome(), { recursive: true });
+    const path = join(amemHome(), "hook.err.log");
+    const line = `${new Date().toISOString()} ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`;
+    if (existsSync(path) && statSync(path).size > 256 * 1024) writeFileSync(path, line);
+    else appendFileSync(path, line);
+  } catch {
+    // Nowhere left to report it.
   }
 }
 

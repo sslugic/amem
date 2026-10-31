@@ -464,6 +464,33 @@ function migrateClaimsFtsBootstrap(db: Database.Database): void {
   ).run();
 }
 
+/** SQLITE_BUSY / SQLITE_LOCKED and their extended codes (BUSY_SNAPSHOT, …). */
+export function isBusyError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === "string" && /^SQLITE_(BUSY|LOCKED)/.test(code);
+}
+
+const WRITE_ATTEMPTS = 5;
+const sleepCell = new Int32Array(new SharedArrayBuffer(4));
+
+/**
+ * Run a write as one IMMEDIATE transaction. IMMEDIATE takes the write lock up front, so
+ * busy_timeout applies. A plain BEGIN that reads first and writes later fails at once with
+ * SQLITE_BUSY when another process committed in between — which is what crashed concurrent
+ * MCP servers. The retry covers the few busy cases the timeout does not.
+ */
+export function writeTx<T>(fn: () => T): T {
+  const db = openDb();
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return db.transaction(fn).immediate();
+    } catch (err) {
+      if (db.inTransaction || !isBusyError(err) || attempt >= WRITE_ATTEMPTS) throw err;
+      Atomics.wait(sleepCell, 0, 0, 20 * 2 ** attempt + Math.random() * 40);
+    }
+  }
+}
+
 export function closeDb(): void {
   if (cached) {
     cached.close();
@@ -475,7 +502,11 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-export function upsertRepo(
+export function upsertRepo(...args: Parameters<typeof upsertRepoUnlocked>): ReturnType<typeof upsertRepoUnlocked> {
+  return writeTx(() => upsertRepoUnlocked(...args));
+}
+
+function upsertRepoUnlocked(
   identity: RepoIdentity = detectRepoIdentity(),
   platform?: string,
 ): RepoRow {
@@ -620,7 +651,11 @@ export function getClaim(repoId: string, claimId: string): ClaimRow | null {
   );
 }
 
-export function updateClaim(
+export function updateClaim(...args: Parameters<typeof updateClaimUnlocked>): ReturnType<typeof updateClaimUnlocked> {
+  return writeTx(() => updateClaimUnlocked(...args));
+}
+
+function updateClaimUnlocked(
   repoId: string,
   claimId: string,
   patch: {
@@ -660,7 +695,11 @@ export function setClaimPinned(repoId: string, claimId: string, pinned: boolean)
   return updateClaim(repoId, claimId, { pinned });
 }
 
-export function setClaimStatus(
+export function setClaimStatus(...args: Parameters<typeof setClaimStatusUnlocked>): ReturnType<typeof setClaimStatusUnlocked> {
+  return writeTx(() => setClaimStatusUnlocked(...args));
+}
+
+function setClaimStatusUnlocked(
   repoId: string,
   claimId: string,
   status: "active" | "decayed" | "superseded",
@@ -680,7 +719,11 @@ export function setClaimStatus(
   return updated;
 }
 
-export function deleteClaim(repoId: string, claimId: string): boolean {
+export function deleteClaim(...args: Parameters<typeof deleteClaimUnlocked>): ReturnType<typeof deleteClaimUnlocked> {
+  return writeTx(() => deleteClaimUnlocked(...args));
+}
+
+function deleteClaimUnlocked(repoId: string, claimId: string): boolean {
   const db = openDb();
   removeClaimFts(db, repoId, claimId);
   removeClaimEmbed(db, repoId, claimId);
@@ -725,7 +768,11 @@ export function listEdgesAll(): EdgeRow[] {
   return openDb().prepare("SELECT * FROM edges").all() as EdgeRow[];
 }
 
-export function wipeRepo(repoId: string): void {
+export function wipeRepo(...args: Parameters<typeof wipeRepoUnlocked>): ReturnType<typeof wipeRepoUnlocked> {
+  return writeTx(() => wipeRepoUnlocked(...args));
+}
+
+function wipeRepoUnlocked(repoId: string): void {
   const db = openDb();
   const claimIds = db
     .prepare("SELECT id FROM claims WHERE repo_id = ?")
@@ -738,7 +785,11 @@ export function wipeRepo(repoId: string): void {
 }
 
 /** Delete every bound repo (cascade clears claims/flows/usage). Returns count wiped. */
-export function wipeAllRepos(): number {
+export function wipeAllRepos(...args: Parameters<typeof wipeAllReposUnlocked>): ReturnType<typeof wipeAllReposUnlocked> {
+  return writeTx(() => wipeAllReposUnlocked(...args));
+}
+
+function wipeAllReposUnlocked(): number {
   const db = openDb();
   const row = db.prepare("SELECT COUNT(*) AS c FROM repos").get() as { c: number };
   const repos = db.prepare("SELECT id FROM repos").all() as Array<{ id: string }>;
@@ -771,7 +822,11 @@ export function touchSession(
     .run(platform, sessionId, repoId, nowIso());
 }
 
-export function insertUsageEvent(input: {
+export function insertUsageEvent(...args: Parameters<typeof insertUsageEventUnlocked>): ReturnType<typeof insertUsageEventUnlocked> {
+  return writeTx(() => insertUsageEventUnlocked(...args));
+}
+
+function insertUsageEventUnlocked(input: {
   repoId: string;
   platform: string;
   sessionId?: string | null;
@@ -1085,7 +1140,11 @@ export function renameWorkspace(repoId: string, displayName: string): RepoRow {
   return getRepoById(repoId)!;
 }
 
-export function insertConversationNote(input: {
+export function insertConversationNote(...args: Parameters<typeof insertConversationNoteUnlocked>): ReturnType<typeof insertConversationNoteUnlocked> {
+  return writeTx(() => insertConversationNoteUnlocked(...args));
+}
+
+function insertConversationNoteUnlocked(input: {
   repoId: string;
   platform: string;
   sessionId?: string | null;
@@ -1275,7 +1334,11 @@ export function getSkillRow(name: string): SkillRow | null {
  * Index one skill found on disk. Disk is the source of truth, so this only ever refreshes
  * derived columns — it must not clobber the repo tag or usage counters a user built up.
  */
-export function upsertSkillRow(input: {
+export function upsertSkillRow(...args: Parameters<typeof upsertSkillRowUnlocked>): ReturnType<typeof upsertSkillRowUnlocked> {
+  return writeTx(() => upsertSkillRowUnlocked(...args));
+}
+
+function upsertSkillRowUnlocked(input: {
   name: string;
   path: string;
   description?: string;
@@ -1667,7 +1730,11 @@ export function insertTask(input: {
   return getTask(input.repoId, id)!;
 }
 
-export function updateTask(
+export function updateTask(...args: Parameters<typeof updateTaskUnlocked>): ReturnType<typeof updateTaskUnlocked> {
+  return writeTx(() => updateTaskUnlocked(...args));
+}
+
+function updateTaskUnlocked(
   repoId: string,
   id: string,
   patch: {

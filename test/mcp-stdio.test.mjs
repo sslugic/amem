@@ -129,16 +129,16 @@ describe("MCP stdio transport", () => {
     );
   });
 
-  it("skips a malformed line without dropping the connection", async () => {
+  it("answers a malformed line with a parse error without dropping the connection", async () => {
     const { messages, code } = await mcpSession([
       "{ this is not json }\n",
       `${rpc(2, "ping")}\n`,
     ]);
     assert.equal(code, 0, "a bad line must not crash the server");
     assert.deepEqual(
-      messages.map((m) => m.msg.id),
-      [2],
-      "only the well-formed request gets a reply",
+      messages.map((m) => [m.msg.id, m.msg.error?.code]),
+      [[null, -32700], [2, undefined]],
+      "JSON-RPC 2.0 requires a -32700 reply with a null id",
     );
   });
 

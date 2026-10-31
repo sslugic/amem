@@ -7,6 +7,7 @@ import {
   nowIso,
   openDb,
   reindexClaimsSearch,
+  writeTx,
   type ClaimRow,
   type ComponentRow,
   type EdgeRow,
@@ -401,7 +402,12 @@ export type ApplyResult = {
   superseded: number;
 };
 
-export function applyProposal(
+export function applyProposal(...args: Parameters<typeof applyProposalUnlocked>): ApplyResult {
+  // Validation reads existing claims, so it runs under the same write lock as the writes.
+  return writeTx(() => applyProposalUnlocked(...args));
+}
+
+function applyProposalUnlocked(
   repoId: string,
   proposal: Proposal,
   policy?: AmemPolicy,
@@ -461,53 +467,46 @@ export function applyProposal(
 
   const supersedeMap = collectSupersedeTargets(proposal);
 
-  db.exec("BEGIN");
-  try {
-    for (const c of proposal.components ?? []) {
-      upsertComponent.run(repoId, c.id, c.name, c.code_anchor ?? null);
-      components += 1;
-    }
-    for (const f of proposal.flows ?? []) {
-      upsertFlow.run(repoId, f.id, f.name);
-      flows += 1;
-    }
-    for (const claim of proposal.claims ?? []) {
-      const prior = db
-        .prepare("SELECT created_at FROM claims WHERE repo_id = ? AND id = ?")
-        .get(repoId, claim.id) as { created_at: string } | undefined;
-      upsertClaim.run(
-        repoId,
-        claim.id,
-        claim.kind,
-        claim.text,
-        JSON.stringify(claim.code_anchors ?? []),
-        claim.source_ref ?? null,
-        prior?.created_at ?? ts,
-        ts,
-      );
-      claims += 1;
-    }
-    for (const [oldId, newId] of supersedeMap) {
-      const result = markSuperseded.run(newId, ts, repoId, oldId, newId);
-      superseded += Number(result.changes ?? 0);
-    }
-    for (const edge of proposal.edges ?? []) {
-      const id = edge.id ?? newId("edge");
-      upsertEdge.run(
-        repoId,
-        id,
-        edge.from_id,
-        edge.from_type,
-        edge.to_id,
-        edge.to_type,
-        edge.kind,
-      );
-      edges += 1;
-    }
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
+  for (const c of proposal.components ?? []) {
+    upsertComponent.run(repoId, c.id, c.name, c.code_anchor ?? null);
+    components += 1;
+  }
+  for (const f of proposal.flows ?? []) {
+    upsertFlow.run(repoId, f.id, f.name);
+    flows += 1;
+  }
+  for (const claim of proposal.claims ?? []) {
+    const prior = db
+      .prepare("SELECT created_at FROM claims WHERE repo_id = ? AND id = ?")
+      .get(repoId, claim.id) as { created_at: string } | undefined;
+    upsertClaim.run(
+      repoId,
+      claim.id,
+      claim.kind,
+      claim.text,
+      JSON.stringify(claim.code_anchors ?? []),
+      claim.source_ref ?? null,
+      prior?.created_at ?? ts,
+      ts,
+    );
+    claims += 1;
+  }
+  for (const [oldId, newId] of supersedeMap) {
+    const result = markSuperseded.run(newId, ts, repoId, oldId, newId);
+    superseded += Number(result.changes ?? 0);
+  }
+  for (const edge of proposal.edges ?? []) {
+    const id = edge.id ?? newId("edge");
+    upsertEdge.run(
+      repoId,
+      id,
+      edge.from_id,
+      edge.from_type,
+      edge.to_id,
+      edge.to_type,
+      edge.kind,
+    );
+    edges += 1;
   }
 
   reindexClaimsSearch(repoId);
