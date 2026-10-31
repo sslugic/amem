@@ -356,54 +356,88 @@ export function openDb(): Database.Database {
     }
   }
   const db = new Database(dbPath());
-  db.pragma("journal_mode = WAL");
+  // busy_timeout first: switching to WAL needs a lock that another process may hold.
+  // On a brand-new file SQLite can still return SQLITE_BUSY without waiting, so retry.
   db.pragma("busy_timeout = 5000");
+  retryBusy(() => db.pragma("journal_mode = WAL"), () => true);
   db.pragma("foreign_keys = ON");
-  db.exec(SCHEMA);
-  migrateUsageEvents(db);
-  migrateClaimsColumns(db);
-  ensureClaimsFts(db);
-  migrateClaimsFtsBootstrap(db);
-  ensureProposalDrafts(db);
-  ensureAgentTasks(db);
-  ensureClaimsEmbed(db);
+  migrate(db);
   cached = db;
   return db;
+}
+
+/**
+ * Schema steps, applied in order and recorded in PRAGMA user_version. Each step is also
+ * idempotent, because databases from before the ladder start at version 0 with some or
+ * all of it already in place. Append new steps; never edit or reorder old ones.
+ */
+const MIGRATIONS: Array<(db: Database.Database) => void> = [
+  (db) => {
+    db.exec(SCHEMA);
+    migrateUsageEvents(db);
+    migrateClaimsColumns(db);
+    ensureClaimsFts(db);
+    migrateClaimsFtsBootstrap(db);
+    ensureProposalDrafts(db);
+    ensureAgentTasks(db);
+    ensureClaimsEmbed(db);
+  },
+];
+
+export const SCHEMA_VERSION = MIGRATIONS.length;
+
+function schemaVersion(db: Database.Database): number {
+  return Number(db.pragma("user_version", { simple: true }) ?? 0);
+}
+
+/**
+ * Bring the schema up to date. Several processes can start at once on a new database
+ * (hooks, MCP servers, the dashboard), so the steps run under the write lock and the
+ * version is read again once the lock is held: whoever got there first already did the work.
+ */
+function migrate(db: Database.Database): void {
+  if (schemaVersion(db) >= SCHEMA_VERSION) return;
+  immediateWithRetry(db, () => {
+    const from = schemaVersion(db);
+    if (from >= SCHEMA_VERSION) return;
+    for (const step of MIGRATIONS.slice(from)) step(db);
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  });
+}
+
+/** ALTER TABLE … ADD COLUMN that treats an existing column as already applied. */
+function addColumn(db: Database.Database, table: string, column: string, type: string): void {
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  } catch (err) {
+    if (!/duplicate column name/i.test(String((err as Error)?.message))) throw err;
+  }
 }
 
 function migrateUsageEvents(db: Database.Database): void {
   const cols = db.prepare("PRAGMA table_info(usage_events)").all() as { name: string }[];
   const have = new Set(cols.map((c) => c.name));
-  if (!have.has("local_ms")) db.exec("ALTER TABLE usage_events ADD COLUMN local_ms INTEGER");
-  if (!have.has("estimated_ms_saved")) {
-    db.exec("ALTER TABLE usage_events ADD COLUMN estimated_ms_saved INTEGER");
-  }
-  if (!have.has("kind")) db.exec("ALTER TABLE usage_events ADD COLUMN kind TEXT");
+  const add = (column: string, type: string) => {
+    if (!have.has(column)) addColumn(db, "usage_events", column, type);
+  };
+  add("local_ms", "INTEGER");
+  add("estimated_ms_saved", "INTEGER");
+  add("kind", "TEXT");
   // Attestation: what amem handed over, and what the agent still had to open.
   // Without the anchor list a reported saving cannot be recomputed or audited.
-  if (!have.has("anchors_json")) db.exec("ALTER TABLE usage_events ADD COLUMN anchors_json TEXT");
-  if (!have.has("anchor_tokens")) {
-    db.exec("ALTER TABLE usage_events ADD COLUMN anchor_tokens INTEGER");
-  }
-  if (!have.has("anchors_opened_json")) {
-    db.exec("ALTER TABLE usage_events ADD COLUMN anchors_opened_json TEXT");
-  }
-  if (!have.has("answered")) db.exec("ALTER TABLE usage_events ADD COLUMN answered INTEGER");
-  if (!have.has("attested_at")) db.exec("ALTER TABLE usage_events ADD COLUMN attested_at TEXT");
+  add("anchors_json", "TEXT");
+  add("anchor_tokens", "INTEGER");
+  add("anchors_opened_json", "TEXT");
+  add("answered", "INTEGER");
+  add("attested_at", "TEXT");
 }
 
 function migrateClaimsColumns(db: Database.Database): void {
   const cols = db.prepare("PRAGMA table_info(claims)").all() as { name: string }[];
   const have = new Set(cols.map((c) => c.name));
-  if (!have.has("status")) {
-    db.exec(`ALTER TABLE claims ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`);
-  }
-  if (!have.has("superseded_by")) {
-    db.exec(`ALTER TABLE claims ADD COLUMN superseded_by TEXT`);
-  }
-  if (!have.has("pinned")) {
-    db.exec(`ALTER TABLE claims ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
-  }
+  if (!have.has("status")) addColumn(db, "claims", "status", "TEXT NOT NULL DEFAULT 'active'");
+  if (!have.has("superseded_by")) addColumn(db, "claims", "superseded_by", "TEXT");
+  if (!have.has("pinned")) addColumn(db, "claims", "pinned", "INTEGER NOT NULL DEFAULT 0");
 }
 
 function ensureProposalDrafts(db: Database.Database): void {
@@ -480,12 +514,19 @@ const sleepCell = new Int32Array(new SharedArrayBuffer(4));
  * MCP servers. The retry covers the few busy cases the timeout does not.
  */
 export function writeTx<T>(fn: () => T): T {
-  const db = openDb();
+  return immediateWithRetry(openDb(), fn);
+}
+
+function immediateWithRetry<T>(db: Database.Database, fn: () => T): T {
+  return retryBusy(() => db.transaction(fn).immediate(), () => !db.inTransaction);
+}
+
+function retryBusy<T>(fn: () => T, canRetry: () => boolean): T {
   for (let attempt = 1; ; attempt++) {
     try {
-      return db.transaction(fn).immediate();
+      return fn();
     } catch (err) {
-      if (db.inTransaction || !isBusyError(err) || attempt >= WRITE_ATTEMPTS) throw err;
+      if (!isBusyError(err) || !canRetry() || attempt >= WRITE_ATTEMPTS) throw err;
       Atomics.wait(sleepCell, 0, 0, 20 * 2 ** attempt + Math.random() * 40);
     }
   }

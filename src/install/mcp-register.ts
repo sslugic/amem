@@ -31,7 +31,7 @@ export function mergeMcpServer(path: string, server: Record<string, unknown>): M
   const before = servers.amem === undefined ? null : JSON.stringify(servers.amem);
   if (before === JSON.stringify(server)) return { path, status: "unchanged" };
   config.mcpServers = { ...servers, amem: server };
-  const tmp = `${path}.amem-tmp`;
+  const tmp = `${path}.amem-tmp-${process.pid}-${Date.now()}`;
   writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   renameSync(tmp, path);
   return { path, status: before === null ? "added" : "updated" };

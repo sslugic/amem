@@ -33,7 +33,7 @@ function readJson(path: string): Record<string, unknown> | null {
 }
 
 function writeJsonAtomic(path: string, value: unknown): void {
-  const tmp = `${path}.amem-tmp`;
+  const tmp = `${path}.amem-tmp-${process.pid}-${Date.now()}`;
   writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   renameSync(tmp, path);
 }
