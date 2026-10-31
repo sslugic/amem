@@ -17,6 +17,7 @@ import { compiledDenyPatterns, type AmemPolicy } from "./policy.js";
 import { newId } from "./repo-identity.js";
 import { parseAnchors } from "./freshness.js";
 import { tokenJaccard } from "./search.js";
+import { redactSecrets } from "./secret-detect.js";
 
 export type ProposalComponent = {
   id: string;
@@ -483,7 +484,7 @@ function applyProposalUnlocked(
       repoId,
       claim.id,
       claim.kind,
-      claim.text,
+      redactSecrets(claim.text),
       JSON.stringify(claim.code_anchors ?? []),
       claim.source_ref ?? null,
       prior?.created_at ?? ts,

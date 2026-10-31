@@ -23,7 +23,7 @@ import { stopCheckpoint } from "./checkpoint.js";
 import { listWorkPersonalClaims, repoTokens } from "./personal.js";
 import { clipText } from "./text-clip.js";
 import { captureSkillRevision, captureSkillSuggestion } from "./skill-capture.js";
-import { looksLikeSecretValue } from "./secret-detect.js";
+import { redactSecrets } from "./secret-detect.js";
 
 export type HookPayload = {
   hook_event_name?: string;
@@ -219,7 +219,8 @@ function handleHookPayloadInner(raw: string): HookResponse {
   }
 
   if (event === "beforeSubmitPrompt") {
-    const prompt = typeof payload.prompt === "string" ? payload.prompt : "";
+    // A prompt with a key in it is still a real question: redact, don't drop.
+    const prompt = redactSecrets(typeof payload.prompt === "string" ? payload.prompt : "");
     // Build the packet before saving the prompt, or the prompt comes back as a "note".
     const context = isUsefulCaptureText(prompt) ? injectPacket(repo, prompt, sid, platform) : null;
     if (isUsefulCaptureText(prompt)) {
@@ -240,8 +241,8 @@ function handleHookPayloadInner(raw: string): HookResponse {
   }
 
   if (event === "afterAgentResponse") {
-    const text = typeof payload.text === "string" ? payload.text : "";
-    if (text.trim().length > 40 && !looksLikeSecretValue(text)) {
+    const text = redactSecrets(typeof payload.text === "string" ? payload.text : "");
+    if (text.trim().length > 40) {
       insertConversationNote({
         repoId: repo.id,
         platform,

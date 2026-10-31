@@ -11,6 +11,7 @@ import {
   upsertClaimEmbed,
 } from "./embed.js";
 import { isDbEncryptedAtRest, resolvePassphrase, unlockDatabase } from "./crypto.js";
+import { redactDeep, redactSecrets } from "./secret-detect.js";
 
 export type RepoRow = {
   id: string;
@@ -382,7 +383,40 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
     ensureAgentTasks(db);
     ensureClaimsEmbed(db);
   },
+  // 2: secrets written before every write path redacted them.
+  (db) => redactStoredSecrets(db),
 ];
+
+function redactStoredSecrets(db: Database.Database): void {
+  const notes = db.prepare(`SELECT id, text FROM conversation_notes`).all() as Array<{ id: string; text: string }>;
+  const setNote = db.prepare(`UPDATE conversation_notes SET text = ? WHERE id = ?`);
+  for (const n of notes) {
+    const clean = redactSecrets(n.text);
+    if (clean !== n.text) setNote.run(clean, n.id);
+  }
+  const events = db.prepare(`SELECT id, query FROM usage_events`).all() as Array<{ id: string; query: string }>;
+  const setQuery = db.prepare(`UPDATE usage_events SET query = ? WHERE id = ?`);
+  for (const e of events) {
+    const clean = redactSecrets(e.query ?? "");
+    if (clean !== (e.query ?? "")) setQuery.run(clean, e.id);
+  }
+  const tasks = db.prepare(`SELECT repo_id, id, title, body FROM agent_tasks`).all() as Array<{ repo_id: string; id: string; title: string; body: string }>;
+  const setTask = db.prepare(`UPDATE agent_tasks SET title = ?, body = ? WHERE repo_id = ? AND id = ?`);
+  for (const t of tasks) {
+    const title = redactSecrets(t.title);
+    const body = redactSecrets(t.body);
+    if (title !== t.title || body !== t.body) setTask.run(title, body, t.repo_id, t.id);
+  }
+  const claims = db.prepare(`SELECT * FROM claims`).all() as ClaimRow[];
+  const setClaim = db.prepare(`UPDATE claims SET text = ? WHERE repo_id = ? AND id = ?`);
+  for (const c of claims) {
+    const text = redactSecrets(c.text);
+    if (text === c.text) continue;
+    setClaim.run(text, c.repo_id, c.id);
+    upsertClaimFts(db, { ...c, text });
+    if ((c.status ?? "active") === "active") upsertClaimEmbed(db, { ...c, text });
+  }
+}
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
 
@@ -718,12 +752,13 @@ function updateClaimUnlocked(
   const pinned =
     patch.pinned !== undefined ? (patch.pinned ? 1 : 0) : (existing.pinned ?? 0);
   if (!text || !kind) throw new Error("claim text and kind are required");
+  const clean = redactSecrets(text);
   openDb()
     .prepare(
       `UPDATE claims SET text = ?, kind = ?, code_anchors = ?, pinned = ?, updated_at = ?
        WHERE repo_id = ? AND id = ?`,
     )
-    .run(text, kind, anchors, pinned, ts, repoId, claimId);
+    .run(clean, kind, anchors, pinned, ts, repoId, claimId);
   const updated = getClaim(repoId, claimId);
   if (updated) {
     upsertClaimFts(openDb(), updated);
@@ -903,7 +938,7 @@ function insertUsageEventUnlocked(input: {
       input.repoId,
       input.platform,
       input.sessionId ?? null,
-      input.query,
+      redactSecrets(input.query),
       JSON.stringify(input.claimIds),
       input.anchorsCount,
       input.claimsCount,
@@ -1194,7 +1229,7 @@ function insertConversationNoteUnlocked(input: {
 }): ConversationNoteRow {
   const id = newId("note");
   const ts = nowIso();
-  const text = input.text.trim().slice(0, 2000);
+  const text = redactSecrets(input.text.trim()).slice(0, 2000);
   openDb()
     .prepare(
       `INSERT INTO conversation_notes (id, repo_id, platform, session_id, role, text, created_at)
@@ -1250,8 +1285,8 @@ export function insertProposalDraft(input: {
       input.repoId,
       input.platform,
       input.sessionId ?? null,
-      input.title.slice(0, 200),
-      JSON.stringify(input.proposal),
+      redactSecrets(input.title).slice(0, 200),
+      JSON.stringify(redactDeep(input.proposal)),
       input.source ?? "session-end",
       ts,
       ts,
@@ -1400,7 +1435,7 @@ function upsertSkillRowUnlocked(input: {
       )
       .run(
         input.path,
-        input.description ?? "",
+        redactSecrets(input.description ?? ""),
         input.version ?? null,
         tags,
         input.contentHash,
@@ -1420,7 +1455,7 @@ function upsertSkillRowUnlocked(input: {
     .run(
       input.name,
       input.path,
-      input.description ?? "",
+      redactSecrets(input.description ?? ""),
       input.version ?? null,
       tags,
       input.repoId ?? null,
@@ -1540,9 +1575,9 @@ export function insertSkillDraft(input: {
       id,
       input.repoId ?? null,
       input.name ?? null,
-      input.title,
-      input.summary ?? "",
-      input.content ?? null,
+      redactSecrets(input.title),
+      redactSecrets(input.summary ?? ""),
+      input.content == null ? null : redactSecrets(input.content),
       input.kind ?? "suggestion",
       input.targetSkill ?? null,
       input.source ?? "session-end",
@@ -1742,9 +1777,7 @@ export function insertTask(input: {
   anchors?: string[];
   source?: string;
 }): AgentTaskRow {
-  const title = String(input.title || "")
-    .trim()
-    .slice(0, 200);
+  const title = redactSecrets(String(input.title || "").trim()).slice(0, 200);
   if (!title) throw new Error("title is required");
   const status = normalizeTaskStatus(input.status) || "backlog";
   const id = newId("task");
@@ -1760,7 +1793,7 @@ export function insertTask(input: {
       input.repoId,
       id,
       title,
-      String(input.body || "").slice(0, 4000),
+      redactSecrets(String(input.body || "")).slice(0, 4000),
       status,
       encodeTaskAnchors(input.anchors),
       String(input.source || "ui").slice(0, 80),
@@ -1795,11 +1828,11 @@ function updateTaskUnlocked(
   let completedAt = existing.completed_at;
 
   if (typeof patch.title === "string") {
-    const t = patch.title.trim().slice(0, 200);
+    const t = redactSecrets(patch.title.trim()).slice(0, 200);
     if (!t) throw new Error("title cannot be empty");
     title = t;
   }
-  if (typeof patch.body === "string") body = patch.body.slice(0, 4000);
+  if (typeof patch.body === "string") body = redactSecrets(patch.body).slice(0, 4000);
   if (patch.status !== undefined) {
     const next = normalizeTaskStatus(patch.status);
     if (!next) throw new Error("invalid status");
