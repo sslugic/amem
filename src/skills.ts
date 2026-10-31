@@ -22,6 +22,7 @@ import { pruneSkillRows, upsertSkillRow } from "./db.js";
 import { amemHome } from "./paths.js";
 import { compiledDenyPatterns } from "./policy.js";
 import { contentTokens, wordHit } from "./search.js";
+import { redactSecrets } from "./secret-detect.js";
 
 export const SKILL_FILE = "SKILL.md";
 /** Subdirectories a skill may carry, matching the agentskills.io layout. */
@@ -278,7 +279,8 @@ export function writeSkill(
   const dir = join(root, slug);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, SKILL_FILE);
-  const body = content.endsWith("\n") ? content : `${content}\n`;
+  const clean = redactSecrets(content);
+  const body = clean.endsWith("\n") ? clean : `${clean}\n`;
   writeFileSync(path, body, { mode: 0o600 });
   return { name: slug, path, hash: hashSkillContent(body) };
 }
