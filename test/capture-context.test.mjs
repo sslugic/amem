@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { appendFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { withAmemHome, makeGitRepo, touchFuture } from "./helpers.mjs";
 
@@ -88,7 +88,8 @@ describe("capture + context ranking", () => {
         const otherPacket = buildContext(repo.id, "boot initializes api", { rootPath: repoDir });
         assert.ok(!otherPacket.claims.some((c) => c.id === "claim.unrelated"));
 
-        // Make api claim stale
+        // Make api claim stale: the file really changes (a bare touch keeps it fresh now)
+        appendFileSync(join(repoDir, "src", "api.ts"), "\nexport const changed = true;\n");
         touchFuture(join(repoDir, "src", "api.ts"));
         const stalePacket = buildContext(repo.id, "boot api", { rootPath: repoDir });
         const boot = stalePacket.claims.find((c) => c.id === "claim.boot_order");

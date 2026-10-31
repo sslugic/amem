@@ -12,6 +12,7 @@ import {
 } from "./embed.js";
 import { isDbEncryptedAtRest, resolvePassphrase, unlockDatabase } from "./crypto.js";
 import { redactDeep, redactSecrets } from "./secret-detect.js";
+import { anchorsOutsideRoot, hashAnchors, parseAnchors } from "./freshness.js";
 
 export type RepoRow = {
   id: string;
@@ -39,6 +40,8 @@ export type ClaimRow = {
   superseded_by: string | null;
   /** 1 when pinned — boosted in retrieval and sorted first in Memory */
   pinned: number;
+  /** JSON {anchor: sha256} of the file anchors when the claim was written; drives freshness. */
+  anchor_hashes?: string | null;
 };
 
 export type ProposalDraftRow = {
@@ -388,6 +391,8 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
   },
   // 2: secrets written before every write path redacted them.
   (db) => redactStoredSecrets(db),
+  // 3: content hashes of code anchors, so freshness compares bytes rather than mtimes.
+  (db) => addColumn(db, "claims", "anchor_hashes", "TEXT"),
 ];
 
 function redactStoredSecrets(db: Database.Database): void {
@@ -752,6 +757,16 @@ function updateClaimUnlocked(
     patch.code_anchors !== undefined
       ? JSON.stringify(patch.code_anchors)
       : existing.code_anchors;
+  const root = getRepoById(repoId)?.root_path;
+  if (patch.code_anchors !== undefined && root) {
+    const outside = anchorsOutsideRoot(root, patch.code_anchors);
+    if (outside.length) throw new Error(`code anchors must be inside the repo: ${outside.join(", ")}`);
+  }
+  // New text or anchors re-assert the claim against the files as they are now.
+  const anchorHashes =
+    patch.text !== undefined || patch.code_anchors !== undefined
+      ? JSON.stringify(hashAnchors(root, parseAnchors(anchors)))
+      : (existing.anchor_hashes ?? null);
   const pinned =
     patch.pinned !== undefined ? (patch.pinned ? 1 : 0) : (existing.pinned ?? 0);
   if (!text || !kind) throw new Error("claim text and kind are required");
@@ -762,10 +777,10 @@ function updateClaimUnlocked(
   const clean = redactSecrets(text);
   openDb()
     .prepare(
-      `UPDATE claims SET text = ?, kind = ?, code_anchors = ?, pinned = ?, updated_at = ?
+      `UPDATE claims SET text = ?, kind = ?, code_anchors = ?, anchor_hashes = ?, pinned = ?, updated_at = ?
        WHERE repo_id = ? AND id = ?`,
     )
-    .run(clean, kind, anchors, pinned, ts, repoId, claimId);
+    .run(clean, kind, anchors, anchorHashes, pinned, ts, repoId, claimId);
   const updated = getClaim(repoId, claimId);
   if (updated) {
     upsertClaimFts(openDb(), updated);

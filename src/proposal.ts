@@ -7,6 +7,7 @@ import {
   nowIso,
   openDb,
   CLAIM_TEXT_MAX_CHARS,
+  getRepoById,
   reindexClaimsSearch,
   writeTx,
   type ClaimRow,
@@ -16,7 +17,7 @@ import {
 } from "./db.js";
 import { compiledDenyPatterns, type AmemPolicy } from "./policy.js";
 import { newId } from "./repo-identity.js";
-import { parseAnchors } from "./freshness.js";
+import { anchorsOutsideRoot, hashAnchors, parseAnchors } from "./freshness.js";
 import { tokenJaccard } from "./search.js";
 import { redactSecrets } from "./secret-detect.js";
 
@@ -204,7 +205,7 @@ export function applySupersedes(proposal: Proposal, otherIds: string[]): Proposa
 export function validateProposal(
   proposal: Proposal,
   policy?: AmemPolicy,
-  opts: { existingClaims?: ClaimRow[] } = {},
+  opts: { existingClaims?: ClaimRow[]; rootPath?: string | null } = {},
 ): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -225,6 +226,10 @@ export function validateProposal(
       errors.push(`claim ${claim.id ?? "(missing id)"} requires id, kind, and text`);
     } else {
       claimIds.add(claim.id);
+      const outside = opts.rootPath ? anchorsOutsideRoot(opts.rootPath, claim.code_anchors ?? []) : [];
+      if (outside.length > 0) {
+        errors.push(`claim ${claim.id} has code anchors outside the repo: ${outside.join(", ")}`);
+      }
       if (claim.text.length > CLAIM_TEXT_MAX_CHARS) {
         errors.push(
           `claim ${claim.id} is ${claim.text.length} characters; the limit is ${CLAIM_TEXT_MAX_CHARS}. Split it into smaller facts.`,
@@ -420,7 +425,8 @@ function applyProposalUnlocked(
   policy?: AmemPolicy,
 ): ApplyResult {
   const existing = listClaims(repoId, { includeSuperseded: true });
-  const validated = validateProposal(proposal, policy, { existingClaims: existing });
+  const rootPath = getRepoById(repoId)?.root_path ?? null;
+  const validated = validateProposal(proposal, policy, { existingClaims: existing, rootPath });
   if (!validated.ok) {
     throw new Error(`Invalid proposal:\n- ${validated.errors.join("\n- ")}`);
   }
@@ -446,12 +452,13 @@ function applyProposalUnlocked(
      ON CONFLICT(repo_id, id) DO UPDATE SET name = excluded.name`,
   );
   const upsertClaim = db.prepare(
-    `INSERT INTO claims (repo_id, id, kind, text, code_anchors, source_ref, created_at, updated_at, status, superseded_by, pinned)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 0)
+    `INSERT INTO claims (repo_id, id, kind, text, code_anchors, anchor_hashes, source_ref, created_at, updated_at, status, superseded_by, pinned)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 0)
      ON CONFLICT(repo_id, id) DO UPDATE SET
        kind = excluded.kind,
        text = excluded.text,
        code_anchors = excluded.code_anchors,
+       anchor_hashes = excluded.anchor_hashes,
        source_ref = COALESCE(excluded.source_ref, claims.source_ref),
        updated_at = excluded.updated_at,
        status = 'active',
@@ -492,6 +499,7 @@ function applyProposalUnlocked(
       claim.kind,
       redactSecrets(claim.text),
       JSON.stringify(claim.code_anchors ?? []),
+      JSON.stringify(hashAnchors(rootPath, claim.code_anchors ?? [])),
       claim.source_ref ?? null,
       prior?.created_at ?? ts,
       ts,
