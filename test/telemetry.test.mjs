@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -36,6 +36,19 @@ async function withCollector(fn) {
   }
 }
 
+/**
+ * Run postinstall without blocking this process: the collector lives here, and a
+ * spawnSync would stall it until postinstall gives up (Windows then drops the request).
+ */
+function runPostinstall(env) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [POSTINSTALL], { env, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (c) => (stderr += c));
+    child.on("close", (status) => resolve({ status, stderr }));
+  });
+}
+
 async function waitFor(pred, ms = 5000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -49,7 +62,7 @@ test("fresh install with default policy sends nothing, from the CLI or from post
   await withCollector(async (url, pings) => {
     const home = mkdtempSync(join(tmpdir(), "amem-tel-"));
     const env = cleanEnv({ AMEM_HOME: home, AMEM_TELEMETRY_URL: url, AMEM_INSTALL_PING_URL: url });
-    spawnSync(process.execPath, [POSTINSTALL], { env, timeout: 30000 });
+    await runPostinstall(env);
     for (const args of [["platforms"], ["setup"], ["context", "anything"], ["mcp", "--print-config"]]) {
       spawnSync(process.execPath, [CLI, ...args], { env, input: "", timeout: 15000 });
     }
@@ -74,11 +87,7 @@ test("`amem telemetry on` sets policy.telemetry and every report agrees; postins
     assert.equal(attest.privacy.telemetry, true);
     assert.equal(attest.privacy.usage_ping.enabled, true);
 
-    const install = spawnSync(process.execPath, [POSTINSTALL], {
-      env: { ...env, AMEM_POSTINSTALL_DEBUG: "1" },
-      timeout: 30000,
-      encoding: "utf8",
-    });
+    const install = await runPostinstall({ ...env, AMEM_POSTINSTALL_DEBUG: "1" });
     assert.equal(install.status, 0, `postinstall: ${install.stderr}`);
     assert.ok(
       await waitFor(() => pings.some((p) => p.body.event === "npm_install"), 15000),
@@ -133,7 +142,7 @@ test("usage ping never runs under a managed policy or DO_NOT_TRACK, even when op
       writeFileSync(join(home, "policy.toml"), "telemetry = true\n");
       const env = cleanEnv({ AMEM_HOME: home, AMEM_TELEMETRY_URL: url, AMEM_INSTALL_PING_URL: url, ...extra });
       spawnSync(process.execPath, [CLI, "platforms"], { env });
-      spawnSync(process.execPath, [POSTINSTALL], { env, timeout: 30000 });
+      await runPostinstall(env);
       const status = spawnSync(process.execPath, [CLI, "telemetry"], { env, encoding: "utf8" }).stdout;
       assert.match(status, /telemetry: off/);
       assert.equal(existsSync(join(home, "telemetry.json")), false);
