@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,11 +32,33 @@ export function copyBundledSkills(targetSkillsDir: string): string[] {
     const from = join(source, name);
     const to = join(targetSkillsDir, name);
     if (existsSync(from)) {
-      cpSync(from, to, { recursive: true });
+      copyDirSafely(from, to);
       installed.push(to);
     }
   }
   return installed;
+}
+
+/**
+ * Copy a skill folder file by file through a temp name and a rename, skipping files that
+ * are already identical. Two setups running at once (or an agent reading the skill) never
+ * see a half-written file, which cpSync's copy-then-chmod allowed.
+ */
+function copyDirSafely(from: string, to: string): void {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const src = join(from, entry.name);
+    const dest = join(to, entry.name);
+    if (entry.isDirectory()) {
+      copyDirSafely(src, dest);
+      continue;
+    }
+    const content = readFileSync(src);
+    if (existsSync(dest) && readFileSync(dest).equals(content)) continue;
+    const tmp = `${dest}.amem-tmp-${process.pid}-${Date.now()}`;
+    writeFileSync(tmp, content);
+    renameSync(tmp, dest);
+  }
 }
 
 export function readJsonObject(path: string): Record<string, unknown> {
