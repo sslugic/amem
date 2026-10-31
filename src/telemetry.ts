@@ -4,9 +4,11 @@
  * each entry point (MCP, hooks, UI, CLI, setup) ran since the last ping. Never memory
  * content, repo names, paths, usernames or emails.
  *
- * Off when AMEM_TELEMETRY_DISABLED / DO_NOT_TRACK is set, in CI and tests, under a managed
- * (system or AMEM_POLICY_PATH) policy, or after `amem telemetry off`. Never throws and never
- * blocks the command: the request runs in a detached child process.
+ * Opt-in: nothing is sent until the user turns it on (`amem setup` asks once, or
+ * `amem telemetry on`), which sets `telemetry = true` in ~/.amem/policy.toml. That policy
+ * value is the only switch. Even when on, it stays off when AMEM_TELEMETRY_DISABLED /
+ * DO_NOT_TRACK is set, in CI and tests, and under a managed (system or AMEM_POLICY_PATH)
+ * policy. Never throws and never blocks the command: the request runs in a detached child.
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -15,24 +17,23 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readVersion } from "./attest.js";
 import { amemHome } from "./paths.js";
-import { loadPolicy } from "./policy.js";
+import { loadPolicy, setUserTelemetry, telemetryEnabled } from "./policy.js";
 
 export const TELEMETRY_FEATURES = ["mcp", "hook", "ui", "cli", "setup"] as const;
 export type TelemetryFeature = (typeof TELEMETRY_FEATURES)[number];
 
+/** Bookkeeping only (install id, last ping, unsent counts); on/off lives in policy. */
 type TelemetryState = {
   id: string;
-  enabled: boolean;
   firstSeen: string;
   lastPing?: string;
-  noticeShown?: boolean;
   pending: Partial<Record<TelemetryFeature, number>>;
 };
 
 const DEFAULT_ENDPOINT = "https://getamem.com/api/beacon/usage";
 
 export const TELEMETRY_NOTICE =
-  "amem sends an anonymous daily usage ping (version, OS, which features ran; never memory content). Turn it off: amem telemetry off";
+  "amem can send an anonymous daily usage ping (version, OS, which features ran; never memory content). It is off unless you turn it on: amem telemetry on";
 
 function statePath(): string {
   return join(amemHome(), "telemetry.json");
@@ -55,10 +56,8 @@ function readState(): TelemetryState | null {
     if (typeof raw.id !== "string" || !raw.id) return null;
     return {
       id: raw.id,
-      enabled: raw.enabled !== false,
       firstSeen: typeof raw.firstSeen === "string" ? raw.firstSeen : today(),
       lastPing: typeof raw.lastPing === "string" ? raw.lastPing : undefined,
-      noticeShown: raw.noticeShown === true,
       pending: raw.pending && typeof raw.pending === "object" ? raw.pending : {},
     };
   } catch {
@@ -90,20 +89,23 @@ export function telemetryBlockedReason(): string | null {
 export type TelemetryStatus = { enabled: boolean; reason: string; id: string | null };
 
 export function telemetryStatus(): TelemetryStatus {
-  const blocked = telemetryBlockedReason();
   const state = readState();
+  if (!telemetryEnabled(loadPolicy(true).policy)) {
+    return { enabled: false, reason: "opt-in: amem telemetry on", id: state?.id ?? null };
+  }
+  const blocked = telemetryBlockedReason();
   if (blocked) return { enabled: false, reason: blocked, id: state?.id ?? null };
-  if (state && !state.enabled) return { enabled: false, reason: "turned off (amem telemetry off)", id: state.id };
   return { enabled: true, reason: "anonymous daily usage ping", id: state?.id ?? null };
 }
 
-/** `amem telemetry on|off`. Off also drops counts not yet sent. */
+/** `amem telemetry on|off`: writes the policy switch. Off also drops counts not yet sent. */
 export function setTelemetryEnabled(enabled: boolean): void {
-  const state = readState() ?? { id: randomUUID(), enabled, firstSeen: today(), pending: {} };
-  state.enabled = enabled;
-  state.noticeShown = true;
-  if (!enabled) state.pending = {};
-  writeState(state);
+  setUserTelemetry(enabled);
+  const state = readState();
+  if (state && !enabled) {
+    state.pending = {};
+    writeState(state);
+  }
 }
 
 export function featureForCommand(cmd: string): TelemetryFeature | null {
@@ -143,17 +145,12 @@ function send(payload: Record<string, unknown>): void {
 /** Count one run of `feature`; sends the first-run or daily ping when one is due. */
 export function noteUsage(feature: TelemetryFeature): void {
   try {
-    if (telemetryBlockedReason()) return;
+    if (!telemetryEnabled() || telemetryBlockedReason()) return;
     let state = readState();
     let event: "first_run" | "active" | null = null;
     if (!state) {
-      state = { id: randomUUID(), enabled: true, firstSeen: today(), pending: {} };
+      state = { id: randomUUID(), firstSeen: today(), pending: {} };
       event = "first_run";
-    }
-    if (!state.enabled) return;
-    if (!state.noticeShown && process.stderr.isTTY) {
-      process.stderr.write(`${TELEMETRY_NOTICE}\n`);
-      state.noticeShown = true;
     }
     state.pending[feature] = (state.pending[feature] ?? 0) + 1;
     if (!event && state.lastPing !== today()) event = "active";

@@ -54,6 +54,7 @@ import {
   assertRemoteAllowed,
   assertUiAllowed,
   loadPolicy,
+  userTelemetryChoice,
 } from "./policy.js";
 import {
   applyProposal,
@@ -77,7 +78,15 @@ import {
   isAddrInUse,
   probeUiHealth,
 } from "./ui/server.js";
-import { featureForCommand, noteUsage, setTelemetryEnabled, telemetryStatus, TELEMETRY_NOTICE } from "./telemetry.js";
+import { createInterface } from "node:readline/promises";
+import {
+  featureForCommand,
+  noteUsage,
+  setTelemetryEnabled,
+  telemetryBlockedReason,
+  telemetryStatus,
+  TELEMETRY_NOTICE,
+} from "./telemetry.js";
 import { installLoginService, isServiceInstalled, isServiceSupported, uninstallLoginService } from "./service.js";
 import { mcpClientConfig, runMcpServer } from "./mcp.js";
 import { provisionWorkspace } from "./workspace-setup.js";
@@ -222,7 +231,7 @@ Usage:
   amem mcp [--print-config] [--workspace <name>]
   amem license status|apply|clear|issue|keys
   amem embed status|use hash|use ngram|use external|reindex
-  amem telemetry [status|on|off]          # anonymous daily usage ping
+  amem telemetry [status|on|off]          # opt-in anonymous usage ping (off by default)
 
 Install:
   npx @iamem/amem setup
@@ -232,8 +241,8 @@ Install:
 Privacy:
   All memory stays in ${amemHome()} on this machine.
   Nothing is uploaded or written into the product git history.
-  An anonymous daily usage ping (version, OS, features used) is on by default:
-  amem telemetry off, or AMEM_TELEMETRY_DISABLED=1.
+  Nothing is sent over the network unless you opt in to an anonymous usage ping
+  (version, OS, features used; never memory): amem telemetry on.
 
 Enterprise:
   Policy file: /etc/amem/policy.toml (system) or ~/.amem/policy.toml (user)
@@ -294,6 +303,26 @@ async function readStdin(): Promise<string> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * Setup asks once whether to share the anonymous usage ping; no answer means no.
+ * Not asked without a terminal, or once the user has chosen either way.
+ */
+async function askTelemetryOnce(): Promise<void> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY || userTelemetryChoice() !== null) return;
+  if (telemetryBlockedReason()) return;
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question(
+      "Share an anonymous daily usage ping (version, OS, which features ran; never memory)? [y/N] ",
+    );
+    const yes = /^y(es)?$/i.test(answer.trim());
+    setTelemetryEnabled(yes);
+    console.log(yes ? "Usage ping on. Turn it off any time: amem telemetry off" : "Usage ping stays off. Turn it on any time: amem telemetry on");
+  } finally {
+    rl.close();
+  }
 }
 
 async function main(): Promise<void> {
@@ -358,6 +387,7 @@ async function main(): Promise<void> {
             // setup should not fail over guidance files
           }
         }
+        await askTelemetryOnce();
         console.log(`Memory DB: ${dbPath()}`);
         console.log("Next: amem ui   or   amem context \"What should I know?\"");
         console.log("Teach every other client too: amem instructions --all");
@@ -1697,7 +1727,7 @@ async function main(): Promise<void> {
         else if (sub !== "status") throw new Error("Usage: amem telemetry [status|on|off]");
         const status = telemetryStatus();
         console.log(`telemetry: ${status.enabled ? "on" : "off"} (${status.reason})`);
-        if (status.enabled) console.log(TELEMETRY_NOTICE);
+        if (!status.enabled && sub === "status") console.log(TELEMETRY_NOTICE);
         break;
       }
       case "help":
