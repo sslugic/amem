@@ -29,16 +29,19 @@ amem license apply --file ~/Downloads/amem-license.json
 amem license status
 ```
 
-### Admin analytics (seller only)
+### Admin analytics (admin only)
 
 First-party metrics only (no third-party analytics). **Visitors** come from a small client **beacon** (`POST /api/beacon` after DOM ready) — almost no scanners run JS. Server-side HTTP logs are stored separately as raw requests for security monitoring and are filtered out of headline counts (404s, asset/probe paths, bot UAs, empty UA, non-GET/HEAD, datacenter CIDRs). Sessions are deduped via `amem_vid` / hashed IP+UA+daily salt; **raw IPs are never stored**.
 
 1. Set `AMEM_ADMIN_TOKEN` in Secrets Manager `amem/shop` (long random string) and redeploy.
-2. Optional: set `AMEM_HITS_S3_BUCKET` (e.g. `amem-shop-hits`) so `beacons/`, `raw/`, and `npm-beacons/` survive App Runner redeploys; grant the service instance role `s3:GetObject` + `s3:PutObject` on that bucket.
+2. Optional: set `AMEM_HITS_S3_BUCKET` (e.g. `amem-shop-hits`) so `beacons/`, `raw/`, `npm-beacons/` and `usage-beacons/` survive App Runner redeploys; grant the service instance role `s3:GetObject` + `s3:PutObject` on that bucket.
 3. Open **https://getamem.com/admin**, paste the token once (sets an HttpOnly cookie), or use `Authorization: Bearer …` / `?token=`.
-4. Dashboard: Visitors today / 7-day, pageviews, NPM installs (7-day), bot/scanner volume, **Pro/IT sales from Stripe** (all-time + window), heat map (datacenter muted; “show unfiltered” toggle), top paths, and a security panel of top 404 probes. JSON: `GET /admin/api/stats`. `/health`, `/webhook`, and `/api/beacon*` are not counted as page hits. Do not link `/admin` from the public homepage.
+4. Dashboard (7- or 30-day window via `?days=30`):
+   - **Usage**: active installs today / 7d / 30d, new installs, returning installs, a daily active/new chart, which parts run (MCP, hooks, dashboard, CLI, setup), versions, OS/CPU, Node and countries. Source: CLI usage pings (`POST /api/beacon/usage`, see `src/telemetry.ts`), counted per random install id.
+   - **npm**: registry downloads 7d / 30d with a daily chart (public `api.npmjs.org`, cached 1h; includes CI and mirrors) and postinstall pings.
+   - **Website**: visitors, pageviews, bot/scanner volume, heat map (datacenter muted; “show unfiltered” toggle), top paths, and a security panel of top 404 probes. JSON: `GET /admin/api/stats`. `/health`, `/webhook`, and `/api/beacon*` are not counted as page hits. Do not link `/admin` from the public homepage.
 
-Locally: put `AMEM_ADMIN_TOKEN` in `shop/.env`; data appends to `shop/.data/beacons.jsonl`, `shop/.data/raw-requests.jsonl`, and `shop/.data/npm-beacons.jsonl`.
+Locally: put `AMEM_ADMIN_TOKEN` in `shop/.env`; data appends to `shop/.data/beacons.jsonl`, `shop/.data/raw-requests.jsonl`, `shop/.data/npm-beacons.jsonl` and `shop/.data/usage-beacons.jsonl`.
 
 ## What it reads from another `.env` (local)
 

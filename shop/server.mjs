@@ -23,7 +23,7 @@ import {
   writeIssuedLicense,
 } from "./fulfill.mjs";
 import { getHitStats, recordBeacon, recordNpmInstall, recordRawRequest, beaconScript } from "./hits.mjs";
-import { getSalesStats } from "./sales.mjs";
+import { getNpmDownloads, getUsageStats, recordUsage } from "./usage.mjs";
 import { sendLicenseMail } from "./mail.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -326,7 +326,20 @@ pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:
 .admin-wrap h1{margin:0 0 .35rem;font-size:1.5rem;letter-spacing:-.02em}
 .admin-meta{margin:0 0 1.25rem;color:var(--muted);font-size:.85rem}
 .admin-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:.75rem;margin:0 0 1.25rem}
-.admin-grid.sales{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:0}
+.admin-grid.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+.admin-stat .sub{margin:.2rem 0 0;color:var(--muted);font-size:.75rem}
+.admin-h2{font-size:1.05rem;margin:1.75rem 0 .35rem}
+.admin-cols{display:flex;align-items:flex-end;gap:2px;height:120px;padding:.5rem;border:1px solid var(--line);border-radius:14px;background:rgba(20,27,33,.55)}
+.admin-cols .col{flex:1;display:flex;flex-direction:column-reverse;min-width:0;height:100%}
+.admin-cols .col i{display:block;border-radius:2px 2px 0 0}
+.admin-cols .col i.a{background:var(--accent)}
+.admin-cols .col i.n{background:#f0b429}
+.admin-cols .col i.d{background:rgba(143,163,176,.55)}
+.admin-legend{display:flex;gap:1rem;margin:.4rem 0 0;color:var(--muted);font-size:.78rem}
+.admin-legend b{display:inline-block;width:.6rem;height:.6rem;border-radius:2px;margin-right:.3rem;vertical-align:middle}
+.admin-split.three{grid-template-columns:repeat(3,1fr)}
+.admin-split.three .admin-bars li{grid-template-columns:minmax(5rem,9.5rem) 1fr 2rem}
+.admin-toggle a{color:var(--accent)}
 .admin-stat{padding:1rem;border:1px solid var(--line);border-radius:14px;background:rgba(20,27,33,.85)}
 .admin-stat.muted{opacity:.72}
 .admin-stat .k{margin:0;color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.06em}
@@ -352,8 +365,8 @@ pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:
 .admin-sec h2{margin:0 0 .35rem;font-size:1.05rem}
 .admin-sec .warn{color:#f0b429;font-size:.82rem;margin:0 0 .75rem}
 @media(max-width:800px){
-  .admin-grid,.admin-grid.sales{grid-template-columns:1fr 1fr}
-  .admin-split{grid-template-columns:1fr}
+  .admin-grid,.admin-grid.four{grid-template-columns:1fr 1fr}
+  .admin-split,.admin-split.three{grid-template-columns:1fr}
 }
 </style></head><body>${body}${track ? beaconScript() : ""}</body></html>`;
 }
@@ -412,7 +425,7 @@ function adminLoginPage(message = "") {
   return htmlPage(
     "amem admin",
     `<div class="admin-login">
-  <p class="hero-kicker">Seller only</p>
+  <p class="hero-kicker">Admin only</p>
   <h1 style="margin:0 0 .75rem;font-size:1.35rem">Admin</h1>
   ${message ? `<p class="note" style="margin:0 0 .75rem">${message}</p>` : ""}
   <form method="get" action="/admin">
@@ -428,23 +441,48 @@ function adminDashboardPage() {
   return htmlPage(
     "amem admin",
     `<div class="admin-wrap">
-  <h1>Shop analytics</h1>
+  <h1>amem analytics</h1>
   <p class="admin-meta" id="meta">Loading…</p>
-  <label class="admin-toggle"><input type="checkbox" id="show-raw"/> Show unfiltered (includes bots / scanners / datacenter)</label>
+  <p class="admin-toggle">Window: <a href="/admin?days=7">7 days</a> · <a href="/admin?days=30">30 days</a></p>
+
+  <h2 class="admin-h2">Usage</h2>
+  <p class="admin-meta">Anonymous CLI pings (first run + at most one a day per install). Install = random id, so one machine counts once.</p>
   <div class="admin-grid">
-    <div class="admin-stat"><p class="k">Visitors today</p><p class="v" id="vis-today">—</p></div>
-    <div class="admin-stat"><p class="k">Visitors 7-day</p><p class="v" id="vis-win">—</p></div>
-    <div class="admin-stat"><p class="k">Pageviews 7-day</p><p class="v" id="pv-win">—</p></div>
-    <div class="admin-stat"><p class="k">NPM installs 7-day</p><p class="v" id="npm-win">—</p></div>
-    <div class="admin-stat muted"><p class="k">Bot / scanner (7d)</p><p class="v" id="bots-win">—</p></div>
+    <div class="admin-stat"><p class="k">Active today</p><p class="v" id="u-today">—</p></div>
+    <div class="admin-stat"><p class="k">Active 7d</p><p class="v" id="u-7">—</p></div>
+    <div class="admin-stat"><p class="k">Active 30d</p><p class="v" id="u-30">—</p></div>
+    <div class="admin-stat"><p class="k" id="u-new-k">New installs</p><p class="v" id="u-new">—</p><p class="sub" id="u-new-today"></p></div>
+    <div class="admin-stat"><p class="k">Returning</p><p class="v" id="u-ret">—</p><p class="sub">first seen before window</p></div>
   </div>
-  <h2 style="font-size:1.05rem;margin:0 0 .5rem">Sales (Stripe)</h2>
-  <p class="admin-meta" id="sales-meta" style="margin-top:-.35rem">Paid Checkout · Pro / IT</p>
-  <div class="admin-grid sales">
-    <div class="admin-stat"><p class="k">Pro (all-time)</p><p class="v" id="pro-all">—</p></div>
-    <div class="admin-stat"><p class="k">IT (all-time)</p><p class="v" id="it-all">—</p></div>
-    <div class="admin-stat"><p class="k">Pro (7-day)</p><p class="v" id="pro-win">—</p></div>
-    <div class="admin-stat"><p class="k">IT (7-day)</p><p class="v" id="it-win">—</p></div>
+  <div class="admin-cols" id="usage-cols" aria-label="Daily active and new installs"></div>
+  <p class="admin-legend"><span><b style="background:var(--accent)"></b>active</span><span><b style="background:#f0b429"></b>new</span><span id="u-dc"></span></p>
+  <div class="admin-split three">
+    <div><h2 class="admin-h2">How it's used</h2><p class="admin-meta">Share of active installs that ran each part</p><ul class="admin-bars" id="u-features"></ul></div>
+    <div><h2 class="admin-h2">Versions</h2><p class="admin-meta">Latest per active install</p><ul class="admin-bars" id="u-versions"></ul></div>
+    <div><h2 class="admin-h2">Platforms</h2><p class="admin-meta">OS / CPU</p><ul class="admin-bars" id="u-platforms"></ul></div>
+  </div>
+  <div class="admin-split">
+    <div><h2 class="admin-h2">Countries</h2><ul class="admin-bars" id="u-countries"></ul></div>
+    <div><h2 class="admin-h2">Node.js</h2><ul class="admin-bars" id="u-nodes"></ul></div>
+  </div>
+
+  <h2 class="admin-h2">npm</h2>
+  <p class="admin-meta" id="npm-meta">Registry downloads (includes CI and mirrors) · install-script pings are often skipped by npm</p>
+  <div class="admin-grid four">
+    <div class="admin-stat"><p class="k">Downloads 7d</p><p class="v" id="npm-7">—</p></div>
+    <div class="admin-stat"><p class="k">Downloads 30d</p><p class="v" id="npm-30">—</p></div>
+    <div class="admin-stat"><p class="k">Avg / day (30d)</p><p class="v" id="npm-avg">—</p></div>
+    <div class="admin-stat muted"><p class="k" id="npm-win-k">Install-script pings</p><p class="v" id="npm-win">—</p></div>
+  </div>
+  <div class="admin-cols" id="npm-cols" aria-label="Daily npm downloads"></div>
+
+  <h2 class="admin-h2">Website</h2>
+  <label class="admin-toggle"><input type="checkbox" id="show-raw"/> Show unfiltered (includes bots / scanners / datacenter)</label>
+  <div class="admin-grid four">
+    <div class="admin-stat"><p class="k">Visitors today</p><p class="v" id="vis-today">—</p></div>
+    <div class="admin-stat"><p class="k" id="vis-win-k">Visitors</p><p class="v" id="vis-win">—</p></div>
+    <div class="admin-stat"><p class="k" id="pv-win-k">Pageviews</p><p class="v" id="pv-win">—</p></div>
+    <div class="admin-stat muted"><p class="k" id="bots-win-k">Bot / scanner</p><p class="v" id="bots-win">—</p></div>
   </div>
   <p class="admin-meta" id="raw-line" style="display:none"></p>
   <h2 style="font-size:1.05rem;margin:0 0 .5rem">Where visitors are</h2>
@@ -484,27 +522,68 @@ function adminDashboardPage() {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-  const res = await fetch("/admin/api/stats", { credentials: "same-origin" });
+  const days = new URLSearchParams(location.search).get("days") === "30" ? 30 : 7;
+  const res = await fetch("/admin/api/stats?days=" + days, { credentials: "same-origin" });
   if (!res.ok) {
     document.getElementById("meta").textContent = "Unauthorized or stats unavailable (" + res.status + ").";
     return;
   }
   const data = await res.json();
-  document.getElementById("meta").textContent =
-    "Storage: " + (data.storage || "?") + " · " + (data.note || "");
-  document.getElementById("vis-today").textContent = String(data.visitors?.today ?? data.today?.visitors ?? 0);
-  document.getElementById("vis-win").textContent = String(data.visitors?.window ?? data.window?.visitors ?? 0);
-  document.getElementById("pv-win").textContent = String(data.pageviews?.window ?? data.window?.pageviews ?? 0);
-  document.getElementById("npm-win").textContent = String(data.npmInstalls?.window ?? 0);
-  document.getElementById("bots-win").textContent = String(data.bots?.window ?? 0);
-  const sales = data.sales || {};
-  document.getElementById("pro-all").textContent = String(sales.pro?.all ?? "—");
-  document.getElementById("it-all").textContent = String(sales.it?.all ?? "—");
-  document.getElementById("pro-win").textContent = String(sales.pro?.window ?? "—");
-  document.getElementById("it-win").textContent = String(sales.it?.window ?? "—");
-  document.getElementById("sales-meta").textContent =
-    (sales.note || "Paid Checkout · Pro / IT") +
-    (sales.source ? " · source: " + sales.source : "");
+  const set = (id, v) => { document.getElementById(id).textContent = String(v ?? "—"); };
+  const win = days + "d";
+  document.getElementById("meta").textContent = "Window: " + days + " days · storage: " + (data.storage || "?");
+
+  const u = data.usage || {};
+  set("u-today", u.active?.today);
+  set("u-7", u.active?.d7);
+  set("u-30", u.active?.d30);
+  set("u-new-k", "New installs " + win);
+  set("u-new", u.newInstalls?.window);
+  set("u-new-today", (u.newInstalls?.today ?? 0) + " today");
+  set("u-ret", u.returning);
+  set("u-dc", u.datacenter ? u.datacenter + " active installs on cloud/datacenter networks" : "");
+
+  function columns(id, rows, parts, title) {
+    const el = document.getElementById(id);
+    el.innerHTML = "";
+    const max = Math.max(1, ...rows.map((r) => parts.reduce((n, p) => n + (r[p.key] || 0), 0)));
+    for (const r of rows) {
+      const col = document.createElement("div");
+      col.className = "col";
+      col.title = title(r);
+      for (const p of parts) {
+        const i = document.createElement("i");
+        i.className = p.cls;
+        i.style.height = ((r[p.key] || 0) / max) * 100 + "%";
+        col.appendChild(i);
+      }
+      el.appendChild(col);
+    }
+  }
+  // Stacked: "active" already includes new installs, so draw new on top of the rest.
+  columns(
+    "usage-cols",
+    (u.daily || []).map((d) => ({ ...d, rest: Math.max(0, d.active - d.new) })),
+    [{ key: "rest", cls: "a" }, { key: "new", cls: "n" }],
+    (d) => d.day + ": " + d.active + " active, " + d.new + " new",
+  );
+
+  const npm = data.npm || {};
+  if (npm.error) set("npm-meta", "npm registry unavailable: " + npm.error);
+  set("npm-7", npm.d7);
+  set("npm-30", npm.d30);
+  set("npm-avg", npm.d30 != null ? Math.round(npm.d30 / Math.max(1, (npm.daily || []).length || 30)) : "—");
+  set("npm-win-k", "Install-script pings " + win);
+  set("npm-win", data.npmInstalls?.window ?? 0);
+  columns("npm-cols", npm.daily || [], [{ key: "downloads", cls: "d" }], (d) => d.day + ": " + d.downloads + " downloads");
+
+  set("vis-today", data.visitors?.today ?? data.today?.visitors ?? 0);
+  set("vis-win-k", "Visitors " + win);
+  set("vis-win", data.visitors?.window ?? data.window?.visitors ?? 0);
+  set("pv-win-k", "Pageviews " + win);
+  set("pv-win", data.pageviews?.window ?? data.window?.pageviews ?? 0);
+  set("bots-win-k", "Bot / scanner " + win);
+  set("bots-win", data.bots?.window ?? 0);
   const rawLine = document.getElementById("raw-line");
   const uf = data.unfiltered;
   if (uf) {
@@ -529,6 +608,22 @@ function adminDashboardPage() {
       el.appendChild(li);
     }
   }
+  const featureNames = { mcp: "MCP server", hook: "Agent hooks", ui: "Dashboard", cli: "CLI commands", setup: "Setup / init" };
+  const active = Math.max(1, u.active?.window || 0);
+  fillBars(
+    "u-features",
+    (u.features || [])
+      .map((f) => ({
+        label: (featureNames[f.feature] || f.feature) + " · " + Math.round((f.installs / active) * 100) + "%",
+        count: f.installs,
+      }))
+      .sort((a, b) => b.count - a.count),
+    "label",
+  );
+  fillBars("u-versions", u.versions || [], "version");
+  fillBars("u-platforms", u.platforms || [], "platform");
+  fillBars("u-countries", u.countries || [], "country");
+  fillBars("u-nodes", u.nodes || [], "node");
   fillBars("countries", data.topCountries || [], "country");
   fillBars("cities", data.topCities || [], "city");
 
@@ -1226,10 +1321,19 @@ function servePublic(res, rel) {
   res.end(readFileSync(file));
 }
 
-function readRaw(req) {
+function readRaw(req, maxBytes = Infinity) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (c) => chunks.push(c));
+    let size = 0;
+    req.on("data", (c) => {
+      size += c.length;
+      if (size > maxBytes) {
+        reject(new Error("body too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -1291,8 +1395,12 @@ async function onRequest(req, res) {
         return;
       }
       const days = Number(url.searchParams.get("days") || 7);
-      const [hits, sales] = await Promise.all([getHitStats({ days }), getSalesStats({ days })]);
-      json(res, 200, { ...hits, sales });
+      const [hits, usage, npm] = await Promise.all([
+        getHitStats({ days }),
+        getUsageStats({ days }),
+        getNpmDownloads(),
+      ]);
+      json(res, 200, { ...hits, usage, npm });
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/beacon") {
@@ -1305,6 +1413,19 @@ async function onRequest(req, res) {
       }
       recordBeacon(req, body && typeof body === "object" ? body : {});
       res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/beacon/usage") {
+      let body = null;
+      try {
+        const raw = await readRaw(req, 8192);
+        body = JSON.parse(raw.toString("utf8"));
+      } catch {
+        body = null;
+      }
+      const row = body && typeof body === "object" ? recordUsage(req, body) : null;
+      res.writeHead(row ? 204 : 400);
       res.end();
       return;
     }

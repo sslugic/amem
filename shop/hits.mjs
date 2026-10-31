@@ -284,6 +284,59 @@ function persist(hit, localFile, s3Prefix) {
   }
 }
 
+/** Local jsonl file for a record prefix (used when AMEM_HITS_S3_BUCKET is unset). */
+export function localRecordFile(prefix) {
+  return join(ROOT, ".data", `${prefix}.jsonl`);
+}
+
+/** Append one record under `<prefix>/` (S3 day file, or the local jsonl). */
+export function appendRecord(prefix, row) {
+  persist(row, localRecordFile(prefix), prefix);
+}
+
+/**
+ * Raw parsed rows for the last `days` days under `<prefix>/`.
+ * @returns {Promise<Record<string, unknown>[]>}
+ */
+export async function readRecords(prefix, days) {
+  /** @type {Record<string, unknown>[]} */
+  const out = [];
+  const parse = (text) => {
+    for (const raw of String(text || "").split("\n")) {
+      const line = raw.trim();
+      if (!line) continue;
+      try {
+        const row = JSON.parse(line);
+        if (row && typeof row === "object") out.push(row);
+      } catch {
+        /* skip */
+      }
+    }
+  };
+  if (!String(process.env.AMEM_HITS_S3_BUCKET || "").trim()) {
+    const file = localRecordFile(prefix);
+    if (existsSync(file)) parse(readFileSync(file, "utf8"));
+    return out;
+  }
+  const s3 = await getS3();
+  if (!s3) return out;
+  const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+  const now = Date.now();
+  for (let i = 0; i < days; i++) {
+    const key = `${prefix}/${new Date(now - i * 86400000).toISOString().slice(0, 10)}.jsonl`;
+    try {
+      const got = await s3.client.send(new GetObjectCommand({ Bucket: s3.bucket, Key: key }));
+      parse(await got.Body.transformToString());
+    } catch (err) {
+      const code = err && (err.name || err.Code || err.$metadata?.httpStatusCode);
+      if (code !== "NoSuchKey" && code !== 404) {
+        console.warn("[shop/hits] S3 read failed:", err instanceof Error ? err.message : err);
+      }
+    }
+  }
+  return out;
+}
+
 function normalizeHit(row) {
   return {
     ts: String(row.ts),
@@ -807,9 +860,9 @@ export async function getHitStats(opts = {}) {
     },
     unfiltered,
     storage: bucket
-      ? `s3:${bucket} (beacons/ + raw/ + npm-beacons/)`
+      ? `s3:${bucket} (beacons/ + raw/ + npm-beacons/ + usage-beacons/)`
       : existsSync(LOCAL_BEACONS) || existsSync(LOCAL_RAW) || existsSync(LOCAL_NPM)
-        ? "local:.data/{beacons,raw-requests,npm-beacons}.jsonl"
+        ? "local:.data/{beacons,raw-requests,npm-beacons,usage-beacons}.jsonl"
         : "memory",
     processStartedAt: process.env.AMEM_SHOP_STARTED_AT || null,
     note: "Visitors = JS beacons, deduped by session, excluding datacenter/bots. NPM installs = postinstall pings (filtered). Raw requests kept for security.",

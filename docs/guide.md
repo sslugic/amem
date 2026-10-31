@@ -29,7 +29,7 @@ Guarantees:
 - `~/.amem` is created with mode `0700`
 - Local UI binds to `127.0.0.1` only
 - Memory never leaves the machine — no managed sync, no “share with org” mode
-- Optional anonymous install ping only (see [Telemetry](#telemetry)); opt out anytime
+- Anonymous install and daily usage pings only (see [Telemetry](#telemetry)); opt out anytime
 - Agents are instructed to store **repo facts**, not proprietary prompting strategy
 - Optional AES-256-GCM lock and encrypted local backups — still no cloud
 
@@ -66,16 +66,16 @@ If `npm install` fails compiling native code, install Xcode CLT (macOS) or `buil
 
 ### Telemetry
 
-On `npm install` / `npx` (outside CI and tests), amem may send a single anonymous POST to `https://getamem.com/api/beacon/npm-install` with:
+amem sends two kinds of anonymous ping to `getamem.com`:
 
-- package name and version
-- Node.js version
-- OS platform and CPU architecture
+- **Install ping** (`npm install`, when npm runs install scripts): package name and version, Node.js version, OS and CPU architecture.
+- **Usage ping** (from the CLI): one on first run, then at most one a day while amem is in use. It carries a random install id (stored in `~/.amem/telemetry.json`), the amem version, Node.js version, OS and CPU architecture, the date amem was first used, and how many times each part ran since the last ping (MCP server, agent hooks, dashboard, CLI commands, setup). It is sent from a background process and never slows a command down.
 
-No code, paths, usernames, emails, IPs, or memory contents are included. Opt out:
+No memory contents, repo names, paths, usernames, emails or IP addresses are stored. Pings are off in CI and tests, when `DO_NOT_TRACK=1` is set, and always under a managed policy (`/etc/amem/policy.toml` or `AMEM_POLICY_PATH`). Turn them off yourself with:
 
 ```bash
-AMEM_TELEMETRY_DISABLED=1 npm i -g @iamem/amem
+amem telemetry off            # or: AMEM_TELEMETRY_DISABLED=1
+amem telemetry status
 ```
 
 Memory under `~/.amem` still never leaves your machine.
@@ -692,7 +692,7 @@ IT / DevEx can govern the **fleet**: approved install, policy, attestation, offb
 Hard guarantees (not configurable away):
 
 - No memory telemetry or claim upload — `~/.amem` stays local  
-- Optional anonymous npm install ping only (opt out: `AMEM_TELEMETRY_DISABLED=1`)  
+- Anonymous install and daily usage pings only (opt out: `amem telemetry off` or `AMEM_TELEMETRY_DISABLED=1`)  
 - UI binds to loopback only (`127.0.0.1`)  
 - Memory stays under `~/.amem` (mode `0700`)  
 
