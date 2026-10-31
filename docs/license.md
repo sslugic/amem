@@ -2,7 +2,7 @@
 
 **Everything in amem is free.** Every feature (n-gram embeddings, hygiene and its weekly schedule, pinned rules sync, the attestation packet) works without a license.
 
-The signed license file below is still supported for organisations that want a vendor-signed record for compliance. It unlocks nothing extra. There is no license server and no telemetry.
+The signed license file below is still supported for organisations that want a vendor-signed record for compliance. It unlocks nothing extra. There is no license server; the license is never checked online.
 
 Apply a license file, and turn on the optional extras:
 

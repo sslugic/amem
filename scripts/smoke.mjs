@@ -154,6 +154,7 @@ try {
   const { handleApi } = await import(join(root, "dist", "api", "routes.js"));
   process.chdir(repoDir);
   process.env.AMEM_HOME = amemHome;
+  process.env.AMEM_TELEMETRY_DISABLED = "1";
 
   const graph = handleApi({
     method: "GET",

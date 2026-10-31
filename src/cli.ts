@@ -77,6 +77,7 @@ import {
   isAddrInUse,
   probeUiHealth,
 } from "./ui/server.js";
+import { featureForCommand, noteUsage, setTelemetryEnabled, telemetryStatus, TELEMETRY_NOTICE } from "./telemetry.js";
 import { installLoginService, isServiceInstalled, isServiceSupported, uninstallLoginService } from "./service.js";
 import { mcpClientConfig, runMcpServer } from "./mcp.js";
 import { provisionWorkspace } from "./workspace-setup.js";
@@ -221,6 +222,7 @@ Usage:
   amem mcp [--print-config] [--workspace <name>]
   amem license status|apply|clear|issue|keys
   amem embed status|use hash|use ngram|use external|reindex
+  amem telemetry [status|on|off]          # anonymous daily usage ping
 
 Install:
   npx @iamem/amem setup
@@ -230,6 +232,8 @@ Install:
 Privacy:
   All memory stays in ${amemHome()} on this machine.
   Nothing is uploaded or written into the product git history.
+  An anonymous daily usage ping (version, OS, features used) is on by default:
+  amem telemetry off, or AMEM_TELEMETRY_DISABLED=1.
 
 Enterprise:
   Policy file: /etc/amem/policy.toml (system) or ~/.amem/policy.toml (user)
@@ -302,6 +306,9 @@ async function main(): Promise<void> {
     console.log(`Home: ${amemHome()}`);
     process.exit(0);
   }
+
+  const feature = featureForCommand(cmd);
+  if (feature && !(cmd === "mcp" && flags.get("print-config"))) noteUsage(feature);
 
   try {
     switch (cmd) {
@@ -1682,6 +1689,15 @@ async function main(): Promise<void> {
         const aliasCount = Object.keys(PLATFORM_ALIASES).length;
         console.log(`Aliases: ${aliasCount} extra spellings resolve to these ids (claude-code → claude, vscode → copilot, …).`);
         console.log("Clients with no installer connect over MCP: amem recipe");
+        break;
+      }
+      case "telemetry": {
+        const sub = positional[1] || "status";
+        if (sub === "on" || sub === "off") setTelemetryEnabled(sub === "on");
+        else if (sub !== "status") throw new Error("Usage: amem telemetry [status|on|off]");
+        const status = telemetryStatus();
+        console.log(`telemetry: ${status.enabled ? "on" : "off"} (${status.reason})`);
+        if (status.enabled) console.log(TELEMETRY_NOTICE);
         break;
       }
       case "help":

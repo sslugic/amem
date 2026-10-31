@@ -79,7 +79,7 @@ The data is in [`bench/retrieval.json`](bench/retrieval.json). Add your own case
 - The UI and HTTP MCP endpoint bind to `127.0.0.1` only, and `~/.amem` is created with mode `0700`.
 - Credentials and tokens are blocked from being saved. Personal notes stay out of work projects unless you ask about them.
 - Optional AES-256-GCM lock (`amem lock`) and encrypted local backups (`amem backup schedule`).
-- The only network call is an optional anonymous install ping; turn it off with `AMEM_TELEMETRY_DISABLED=1`.
+- The only network calls are anonymous pings: one at install and first run, then at most one a day with the version, OS and which parts ran (MCP, hooks, UI, CLI). No memory, repos, paths or names. Turn them off with `amem telemetry off` or `AMEM_TELEMETRY_DISABLED=1`; managed (IT policy) installs never send them.
 
 ## Learn more
 

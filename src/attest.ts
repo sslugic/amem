@@ -19,6 +19,7 @@ import { vaultStatus } from "./vault.js";
 import { hostInstallHealth } from "./install/hosts.js";
 import { listSkillDrafts } from "./db.js";
 import { scanSkills, skillsDir } from "./skills.js";
+import { telemetryStatus } from "./telemetry.js";
 
 export type AttestReport = {
   tool: "amem";
@@ -28,8 +29,11 @@ export type AttestReport = {
   };
   attested_at: string;
   privacy: {
+    /** Memory telemetry: never, hard-stopped by policy. */
     telemetry: false;
-    network_egress: "none";
+    /** Anonymous usage ping (telemetry.ts); off under a managed policy. */
+    usage_ping: { enabled: boolean; reason: string };
+    network_egress: "none" | "usage-ping";
     ui_bind: string;
     ui_enabled: boolean;
     memory_home: string;
@@ -192,6 +196,7 @@ export function buildAttestReport(cwd: string = process.cwd()): AttestReport {
       }
     : undefined;
 
+  const ping = telemetryStatus();
   return {
     tool: "amem",
     version: readVersion(),
@@ -201,7 +206,8 @@ export function buildAttestReport(cwd: string = process.cwd()): AttestReport {
     attested_at: new Date().toISOString(),
     privacy: {
       telemetry: false,
-      network_egress: "none",
+      usage_ping: { enabled: ping.enabled, reason: ping.reason },
+      network_egress: ping.enabled ? "usage-ping" : "none",
       ui_bind: loaded.policy.ui_bind,
       ui_enabled: loaded.policy.ui_enabled,
       memory_home: amemHome(),
@@ -282,6 +288,7 @@ export function formatAttestHuman(report: AttestReport): string {
     `memory_home: ${report.privacy.memory_home} (mode ${report.privacy.memory_home_mode ?? "n/a"})`,
     `db: ${report.privacy.db_path} (${report.privacy.db_exists ? "present" : "absent"})`,
     `telemetry: ${report.privacy.telemetry}`,
+    `usage_ping: ${report.privacy.usage_ping.enabled ? "on" : "off"} (${report.privacy.usage_ping.reason})`,
     `network_egress: ${report.privacy.network_egress}`,
     `ui: enabled=${report.privacy.ui_enabled} bind=${report.privacy.ui_bind}`,
     `allow_export: ${report.policy.effective.allow_export}`,
