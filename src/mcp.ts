@@ -12,7 +12,7 @@ export type JsonRpc = {
 
 export type JsonRpcResponse = {
   jsonrpc: "2.0";
-  id: number | string;
+  id: number | string | null;
   result?: unknown;
   error?: { code: number; message: string };
 };
@@ -406,7 +406,16 @@ function compactStats(body: unknown) {
   };
 }
 
+/** A tool that throws (a locked database, a bad argument) reports the error; it never ends the server. */
 function callTool(name: string, args: Record<string, unknown>, fallbackWorkspace?: string) {
+  try {
+    return runTool(name, args, fallbackWorkspace);
+  } catch (err) {
+    return textResult(err instanceof Error ? err.message : String(err), true);
+  }
+}
+
+function runTool(name: string, args: Record<string, unknown>, fallbackWorkspace?: string) {
   const workspace = defaultWorkspace(args.workspace, fallbackWorkspace);
   if (name === "amem_context") {
     const query = typeof args.query === "string" ? args.query : "";
@@ -620,7 +629,7 @@ function rpcResult(id: number | string, result: unknown): JsonRpcResponse {
   return { jsonrpc: "2.0", id, result };
 }
 
-function rpcError(id: number | string, message: string, code = -32601): JsonRpcResponse {
+function rpcError(id: number | string | null, message: string, code = -32601): JsonRpcResponse {
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
 
@@ -719,8 +728,10 @@ function looksLikeJsonStart(buf: Buffer): boolean {
   return false;
 }
 
-function parseStdio(buf: Buffer): { rest: Buffer; items: { msg: JsonRpc; framing: Framing }[] } {
-  const items: { msg: JsonRpc; framing: Framing }[] = [];
+type StdioItem = { msg: JsonRpc; framing: Framing } | { parseError: true; framing: Framing };
+
+function parseStdio(buf: Buffer): { rest: Buffer; items: StdioItem[] } {
+  const items: StdioItem[] = [];
   let rest = buf;
 
   while (rest.length) {
@@ -733,7 +744,7 @@ function parseStdio(buf: Buffer): { rest: Buffer; items: { msg: JsonRpc; framing
       try {
         items.push({ msg: JSON.parse(line) as JsonRpc, framing: "ndjson" });
       } catch {
-        // skip malformed line
+        items.push({ parseError: true, framing: "ndjson" });
       }
       continue;
     }
@@ -754,7 +765,7 @@ function parseStdio(buf: Buffer): { rest: Buffer; items: { msg: JsonRpc; framing
     try {
       items.push({ msg: JSON.parse(raw) as JsonRpc, framing: "lsp" });
     } catch {
-      // skip malformed
+      items.push({ parseError: true, framing: "lsp" });
     }
   }
 
@@ -799,7 +810,18 @@ export async function runMcpServer(): Promise<void> {
     buf = Buffer.from(parsed.rest);
     for (const item of parsed.items) {
       framing = item.framing;
-      const response = dispatchMcp(item.msg);
+      let response: JsonRpcResponse | null;
+      if ("parseError" in item) {
+        response = rpcError(null, "Parse error", -32700);
+      } else {
+        // One bad message must not end the session for every later one.
+        try {
+          response = dispatchMcp(item.msg);
+        } catch (err) {
+          const id = typeof item.msg?.id === "string" || typeof item.msg?.id === "number" ? item.msg.id : null;
+          response = rpcError(id, err instanceof Error ? err.message : String(err), -32603);
+        }
+      }
       if (response) process.stdout.write(encodeMessage(response, framing));
     }
   }
