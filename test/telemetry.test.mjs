@@ -74,9 +74,16 @@ test("`amem telemetry on` sets policy.telemetry and every report agrees; postins
     assert.equal(attest.privacy.telemetry, true);
     assert.equal(attest.privacy.usage_ping.enabled, true);
 
-    const install = spawnSync(process.execPath, [POSTINSTALL], { env, timeout: 30000, encoding: "utf8" });
+    const install = spawnSync(process.execPath, [POSTINSTALL], {
+      env: { ...env, AMEM_POSTINSTALL_DEBUG: "1" },
+      timeout: 30000,
+      encoding: "utf8",
+    });
     assert.equal(install.status, 0, `postinstall: ${install.stderr}`);
-    assert.ok(await waitFor(() => pings.some((p) => p.body.event === "npm_install"), 15000), "install ping once opted in");
+    assert.ok(
+      await waitFor(() => pings.some((p) => p.body.event === "npm_install"), 15000),
+      `install ping once opted in (postinstall said: ${install.stderr.trim()})`,
+    );
     assert.equal(pings.filter((p) => p.body.event === "npm_install").length, 1);
     // The CLI runs above already sent their first-run ping; start the daily checks clean.
     await new Promise((r) => setTimeout(r, 500));

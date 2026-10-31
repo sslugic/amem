@@ -15,7 +15,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_URL = "https://getamem.com/api/beacon/npm-install";
 
-function done() {
+function done(reason) {
+  if (reason && process.env.AMEM_POSTINSTALL_DEBUG) process.stderr.write(`amem postinstall: ${reason}\n`);
   process.exit(0);
 }
 
@@ -28,15 +29,15 @@ async function main() {
     truthy(process.env.CI) ||
     process.env.NODE_ENV === "test"
   ) {
-    return done();
+    return done("skipped by environment");
   }
 
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   // The same switch as the daily ping. No built policy module means no opt-in to read: stay quiet.
   const policyModule = join(root, "dist", "policy.js");
-  if (!existsSync(policyModule)) return done();
+  if (!existsSync(policyModule)) return done("no built policy module");
   const { telemetryEnabled } = await import(pathToFileURL(policyModule).href);
-  if (!telemetryEnabled()) return done();
+  if (!telemetryEnabled()) return done("telemetry is off (opt-in)");
 
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const body = JSON.stringify({
@@ -61,16 +62,16 @@ async function main() {
       },
       timeout: 2000,
     },
-    () => done(),
+    () => done("sent"),
   );
-  req.on("error", () => done());
+  req.on("error", (err) => done(`error ${err.message}`));
   req.on("timeout", () => {
     req.destroy();
-    done();
+    done("timeout");
   });
-  setTimeout(done, 2000);
+  setTimeout(() => done("gave up after 2s"), 2000);
   req.write(body);
   req.end();
 }
 
-main().catch(() => done());
+main().catch((err) => done(`failed: ${err && err.message}`));
