@@ -40,8 +40,8 @@ const TOOLS = [
   {
     name: "amem_recipe",
     description:
-      "Return the generic amem remember contract: when to call amem_context vs amem_remember. Use if you are unsure whether to read or write memory. Same recipe for every MCP host.",
-    inputSchema: { type: "object", properties: {} },
+      "Return the generic amem remember contract: when to call amem_context vs amem_remember. Use if you are unsure whether to read or write memory. Same recipe for every MCP host. Takes no arguments.",
+    inputSchema: { type: "object", properties: {}, required: [] },
   },
   {
     name: "amem_remember",
@@ -76,7 +76,7 @@ const TOOLS = [
   {
     name: "amem_repos",
     description:
-      "List what amem is monitoring. Each item has kind git or workspace. Workspaces also have a stable slug (MCP id); the display name can differ. Use when asked which projects, workspaces, or repos amem knows about.",
+      "List what amem is monitoring. Each item has kind git or workspace. Workspaces also have a stable slug (MCP id); the display name can differ. Use when asked which projects, workspaces, or repos amem knows about. All arguments are optional.",
     inputSchema: {
       type: "object",
       properties: {
@@ -85,12 +85,13 @@ const TOOLS = [
           description: "all (default), git, or workspace",
         },
       },
+      required: [],
     },
   },
   {
     name: "amem_stats",
     description:
-      "Usage and savings stats (local lookup time, estimated tokens/ms saved, hit rate) for one workspace/repo or everything. Use when asked how much amem helped, how often it hit, or usage over time.",
+      "Usage and savings stats (local lookup time, estimated tokens/ms saved, hit rate) for one workspace/repo or everything. Use when asked how much amem helped, how often it hit, or usage over time. All arguments are optional.",
     inputSchema: {
       type: "object",
       properties: {
@@ -101,33 +102,36 @@ const TOOLS = [
           description: "all (every tracked repo/workspace) or current (the given workspace / cwd)",
         },
       },
+      required: [],
     },
   },
   {
     name: "amem_graph",
     description:
-      "Dump stored facts for a workspace or git repo: claims, components, flows, and recent activity. Use when asked what amem remembers about a project. Prefer amem_context for a ranked packet for the current question.",
+      "Dump stored facts for a workspace or git repo: claims, components, flows, and recent activity. Use when asked what amem remembers about a project. Prefer amem_context for a ranked packet for the current question. All arguments are optional.",
     inputSchema: {
       type: "object",
       properties: {
         workspace: { type: "string" },
         days: { type: "number", description: "Activity lookback (default 30)" },
       },
+      required: [],
     },
   },
   {
     name: "amem_status",
     description:
-      "Binding, policy, and counts for one workspace/repo, plus the full monitored inventory. Omit workspace for a machine-wide overview.",
+      "Binding, policy, and counts for one workspace/repo, plus the full monitored inventory. Omit workspace for a machine-wide overview. All arguments are optional.",
     inputSchema: {
       type: "object",
       properties: { workspace: { type: "string" } },
+      required: [],
     },
   },
   {
     name: "amem_skill_list",
     description:
-      "List stored skills (procedures the agent learned) as an index of names and descriptions only. Cheap — call this first, then amem_skill_view to load the one you need. Skills are longer procedures; use amem_context for small durable facts.",
+      "List stored skills (procedures the agent learned) as an index of names and descriptions only. Cheap — call this first, then amem_skill_view to load the one you need. Skills are longer procedures; use amem_context for small durable facts. All arguments are optional.",
     inputSchema: {
       type: "object",
       properties: {
@@ -136,6 +140,7 @@ const TOOLS = [
           description: "Optional: rank the index against this task description",
         },
       },
+      required: [],
     },
   },
   {
@@ -189,7 +194,7 @@ const TOOLS = [
   {
     name: "amem_task_list",
     description:
-      "List deferred agent tasks (Kanban) for a workspace/repo. Use for work to do later — not durable facts (use amem_remember for those). Default excludes done tasks.",
+      "List deferred agent tasks (Kanban) for a workspace/repo. Use for work to do later — not durable facts (use amem_remember for those). Default excludes done tasks. All arguments are optional.",
     inputSchema: {
       type: "object",
       properties: {
@@ -200,6 +205,7 @@ const TOOLS = [
         },
         include_done: { type: "boolean" },
       },
+      required: [],
     },
   },
   {

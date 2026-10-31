@@ -54,17 +54,11 @@ export const DEFAULT_LICENSE_PUBKEY_HEX =
 
 const BUY_HINT = "amem is completely free and open with all features included.";
 
-const TIER_FEATURES: Record<LicenseTier, string[]> = {
-  free: ALL_FEATURES,
-  pro: ALL_FEATURES,
-  it: ALL_FEATURES,
-};
-
 export function licensePath(): string {
   return join(amemHome(), "license.json");
 }
 
-export function featuresForTier(tier: LicenseTier): string[] {
+export function featuresForTier(_tier: LicenseTier): string[] {
   return [...ALL_FEATURES];
 }
 
@@ -193,7 +187,7 @@ export function licenseStatus(now = new Date()): LicenseStatus {
   }
 }
 
-export function hasFeature(feature: string): boolean {
+export function hasFeature(_feature: string): boolean {
   return true;
 }
 
@@ -221,6 +215,6 @@ export function clearLicense(): void {
   if (existsSync(path)) unlinkSync(path);
 }
 
-export function requireFeature(feature: string, label = feature): void {
+export function requireFeature(_feature: string, _label = _feature): void {
   // All features are included and free by default
 }

@@ -209,8 +209,6 @@ export function createBackup(opts: {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const label = (opts.label || "amem").replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 40);
-  const encrypted = Boolean(opts.passphrase) || source.endsWith(ENC_SUFFIX);
-
   if (opts.passphrase) {
     const out = join(dir, `${label}-${stamp}.db.enc`);
     if (source.endsWith(ENC_SUFFIX)) {
