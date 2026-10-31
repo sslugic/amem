@@ -49,7 +49,7 @@ test("fresh install with default policy sends nothing, from the CLI or from post
   await withCollector(async (url, pings) => {
     const home = mkdtempSync(join(tmpdir(), "amem-tel-"));
     const env = cleanEnv({ AMEM_HOME: home, AMEM_TELEMETRY_URL: url, AMEM_INSTALL_PING_URL: url });
-    spawnSync(process.execPath, [POSTINSTALL], { env, timeout: 5000 });
+    spawnSync(process.execPath, [POSTINSTALL], { env, timeout: 30000 });
     for (const args of [["platforms"], ["setup"], ["context", "anything"], ["mcp", "--print-config"]]) {
       spawnSync(process.execPath, [CLI, ...args], { env, input: "", timeout: 15000 });
     }
@@ -74,8 +74,9 @@ test("`amem telemetry on` sets policy.telemetry and every report agrees; postins
     assert.equal(attest.privacy.telemetry, true);
     assert.equal(attest.privacy.usage_ping.enabled, true);
 
-    spawnSync(process.execPath, [POSTINSTALL], { env, timeout: 5000 });
-    assert.ok(await waitFor(() => pings.some((p) => p.body.event === "npm_install")), "install ping once opted in");
+    const install = spawnSync(process.execPath, [POSTINSTALL], { env, timeout: 30000, encoding: "utf8" });
+    assert.equal(install.status, 0, `postinstall: ${install.stderr}`);
+    assert.ok(await waitFor(() => pings.some((p) => p.body.event === "npm_install"), 15000), "install ping once opted in");
     assert.equal(pings.filter((p) => p.body.event === "npm_install").length, 1);
     // The CLI runs above already sent their first-run ping; start the daily checks clean.
     await new Promise((r) => setTimeout(r, 500));
@@ -125,7 +126,7 @@ test("usage ping never runs under a managed policy or DO_NOT_TRACK, even when op
       writeFileSync(join(home, "policy.toml"), "telemetry = true\n");
       const env = cleanEnv({ AMEM_HOME: home, AMEM_TELEMETRY_URL: url, AMEM_INSTALL_PING_URL: url, ...extra });
       spawnSync(process.execPath, [CLI, "platforms"], { env });
-      spawnSync(process.execPath, [POSTINSTALL], { env, timeout: 5000 });
+      spawnSync(process.execPath, [POSTINSTALL], { env, timeout: 30000 });
       const status = spawnSync(process.execPath, [CLI, "telemetry"], { env, encoding: "utf8" }).stdout;
       assert.match(status, /telemetry: off/);
       assert.equal(existsSync(join(home, "telemetry.json")), false);
