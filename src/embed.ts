@@ -6,7 +6,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import type { ClaimRow } from "./db.js";
-import { FEATURE_LOCAL_EMBED, hasFeature } from "./license.js";
 import { amemHome } from "./paths.js";
 import { tokenize } from "./search.js";
 

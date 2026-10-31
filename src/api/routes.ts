@@ -154,7 +154,6 @@ import { applyPendingDrafts } from "../capture.js";
 import { applyLicenseJson, licenseStatus } from "../license.js";
 import { embedStatus, embedIndexHealth, embedIndexIssues, reindexAllEmbeds, setEmbedBackend, type EmbedBackend } from "../embed.js";
 import {
-  createBackup,
   createBackupWithRetention,
   lockDatabase,
   restoreBackup,

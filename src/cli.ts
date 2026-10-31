@@ -20,10 +20,8 @@ import {
   updateTask,
   completeTask,
   deleteTask,
-  getTask,
   findTaskAnyRepo,
   normalizeTaskStatus,
-  type AgentTaskStatus,
   requireRepo,
   setReportedOnLatest,
   setReportedTokensSaved,
@@ -102,9 +100,7 @@ import {
 } from "./platforms.js";
 import { ensurePersonalWorkspace, PERSONAL_SLUG } from "./personal.js";
 import {
-  createBackup,
   createBackupWithRetention,
-  defaultBackupDir,
   encryptedDbPath,
   isDbEncryptedAtRest,
   lockDatabase,
