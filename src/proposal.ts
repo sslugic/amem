@@ -6,6 +6,7 @@ import {
   listFlows,
   nowIso,
   openDb,
+  CLAIM_TEXT_MAX_CHARS,
   reindexClaimsSearch,
   writeTx,
   type ClaimRow,
@@ -224,6 +225,11 @@ export function validateProposal(
       errors.push(`claim ${claim.id ?? "(missing id)"} requires id, kind, and text`);
     } else {
       claimIds.add(claim.id);
+      if (claim.text.length > CLAIM_TEXT_MAX_CHARS) {
+        errors.push(
+          `claim ${claim.id} is ${claim.text.length} characters; the limit is ${CLAIM_TEXT_MAX_CHARS}. Split it into smaller facts.`,
+        );
+      }
       if (!claim.code_anchors || claim.code_anchors.length === 0) {
         errors.push(`claim ${claim.id} should include at least one code_anchor`);
       }

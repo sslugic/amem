@@ -341,6 +341,9 @@ CREATE INDEX IF NOT EXISTS skill_drafts_status_idx ON skill_drafts(status);
 CREATE INDEX IF NOT EXISTS skill_uses_session_idx ON skill_uses(session_id);
 `;
 
+/** One memory is a fact or a short session summary, not a document. */
+export const CLAIM_TEXT_MAX_CHARS = 2000;
+
 let cached: Database.Database | null = null;
 
 export function openDb(): Database.Database {
@@ -752,6 +755,10 @@ function updateClaimUnlocked(
   const pinned =
     patch.pinned !== undefined ? (patch.pinned ? 1 : 0) : (existing.pinned ?? 0);
   if (!text || !kind) throw new Error("claim text and kind are required");
+  // Only new text is checked: pinning an older, longer memory must still work.
+  if (patch.text !== undefined && text.length > CLAIM_TEXT_MAX_CHARS) {
+    throw new Error(`claim text is ${text.length} characters; the limit is ${CLAIM_TEXT_MAX_CHARS}`);
+  }
   const clean = redactSecrets(text);
   openDb()
     .prepare(

@@ -17,7 +17,7 @@ import {
   upsertRepo,
   type RepoRow,
 } from "./db.js";
-import { detectRepoIdentity } from "./repo-identity.js";
+import { detectRepoIdentity, findGitRoot, unbindableRootReason } from "./repo-identity.js";
 import { attestSessionFromTranscript } from "./usage-attest.js";
 import { stopCheckpoint } from "./checkpoint.js";
 import { listWorkPersonalClaims, repoTokens } from "./personal.js";
@@ -60,17 +60,45 @@ function sessionId(payload: HookPayload): string {
   return payload.conversation_id || payload.session_id || process.env.CURSOR_SESSION_ID || "unknown";
 }
 
+/**
+ * The repo this hook runs for. An existing binding (a repo or a workspace) always wins;
+ * otherwise only a git checkout is bound, never a home directory, the filesystem root
+ * or some other folder an agent happened to start in.
+ */
 function bindRepo(cwd: string): RepoRow | null {
   if (!existsSync(cwd)) return null;
   const existing = getRepoByCwd(cwd);
   if (existing) return existing;
+  if (!findGitRoot(cwd)) return null;
   const identity = detectRepoIdentity(cwd);
+  if (unbindableRootReason(identity.rootPath)) return null;
   return upsertRepo(identity, hookPlatform());
 }
 
-function cap(text: string, max = 2400): string {
-  if (text.length <= max) return text;
-  return `${clipText(text, max, "")}\n\n_[amem truncated]_`;
+/** Hard ceiling for injected context, in UTF-8 bytes of the final string the agent sees. */
+export const HOOK_CONTEXT_MAX_BYTES = 2400;
+/** Session start carries the "check amem" hint and personal memory too, once per session. */
+export const SESSION_START_MAX_BYTES = 4000;
+
+const TRUNCATED = "\n\n_[amem truncated]_";
+
+/**
+ * Cap by UTF-8 bytes, not UTF-16 length: 2,400 characters of CJK or emoji is three or four
+ * times that many bytes. Cuts on a code point (never inside a surrogate pair) and then
+ * prefers a sentence, line or word end; the marker is counted inside the budget.
+ */
+export function capBytes(text: string, maxBytes = HOOK_CONTEXT_MAX_BYTES): string {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  const budget = maxBytes - Buffer.byteLength(TRUNCATED, "utf8");
+  let bytes = 0;
+  let units = 0;
+  for (const ch of text) {
+    const size = Buffer.byteLength(ch, "utf8");
+    if (bytes + size > budget) break;
+    bytes += size;
+    units += ch.length;
+  }
+  return `${clipText(text, units, "")}${TRUNCATED}`;
 }
 
 function hookPlatform(): "cursor" | "claude" {
@@ -99,7 +127,8 @@ function isClaudeEvent(raw: string): boolean {
  * Context for the agent in both dialects. Cursor reads `additional_context`; Claude Code
  * only reads `hookSpecificOutput.additionalContext` (anything else is ignored).
  */
-function contextResponse(rawEvent: string, text: string): HookResponse {
+function contextResponse(rawEvent: string, full: string, maxBytes = HOOK_CONTEXT_MAX_BYTES): HookResponse {
+  const text = capBytes(full, maxBytes);
   const out: HookResponse = { continue: true, additional_context: text };
   if (isClaudeEvent(rawEvent)) {
     out.hookSpecificOutput = { hookEventName: rawEvent.trim(), additionalContext: text };
@@ -157,7 +186,7 @@ function injectPacket(repo: RepoRow, query: string, session: string, platform: s
   ) {
     return null;
   }
-  return cap(markdown);
+  return markdown;
 }
 
 export function handleHookPayload(raw: string): HookResponse {
@@ -215,7 +244,7 @@ function handleHookPayloadInner(raw: string): HookResponse {
       personal ?? "",
       packet ? `amem local memory for ${repo.repo_name}. Prefer these file anchors over broad exploration.\n\n${packet}` : "",
     ].filter(Boolean);
-    return contextResponse(rawEvent, cap(parts.join("\n\n"), 4000));
+    return contextResponse(rawEvent, parts.join("\n\n"), SESSION_START_MAX_BYTES);
   }
 
   if (event === "beforeSubmitPrompt") {
