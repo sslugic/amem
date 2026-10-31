@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { replaceFile } from "../fs-replace.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getPackageRoot, resolveAmemProgramArgs } from "./skills.js";
@@ -33,7 +34,7 @@ export function mergeMcpServer(path: string, server: Record<string, unknown>): M
   config.mcpServers = { ...servers, amem: server };
   const tmp = `${path}.amem-tmp-${process.pid}-${Date.now()}`;
   writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  renameSync(tmp, path);
+  replaceFile(tmp, path);
   return { path, status: before === null ? "added" : "updated" };
 }
 

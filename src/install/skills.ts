@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { replaceFile } from "../fs-replace.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -57,7 +58,7 @@ function copyDirSafely(from: string, to: string): void {
     if (existsSync(dest) && readFileSync(dest).equals(content)) continue;
     const tmp = `${dest}.amem-tmp-${process.pid}-${Date.now()}`;
     writeFileSync(tmp, content);
-    renameSync(tmp, dest);
+    replaceFile(tmp, dest);
   }
 }
 

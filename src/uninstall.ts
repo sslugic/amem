@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { replaceFile } from "./fs-replace.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { amemHome } from "./paths.js";
@@ -35,7 +36,7 @@ function readJson(path: string): Record<string, unknown> | null {
 function writeJsonAtomic(path: string, value: unknown): void {
   const tmp = `${path}.amem-tmp-${process.pid}-${Date.now()}`;
   writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  renameSync(tmp, path);
+  replaceFile(tmp, path);
 }
 
 /** A config with `<key>.amem` (mcpServers, context_servers): drop just that entry. */
