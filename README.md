@@ -30,6 +30,7 @@ Coding agents forget between sessions. They re-read the same files, re-learn the
 - **Skills:** repeatable procedures (release steps, deploy order, test setup), loaded only when they apply.
 - **Tasks:** a Backlog → Next → Doing → Done board your agents update, so follow-ups survive the chat.
 - **A dashboard:** `amem ui` shows what your agents remember, what needs review and open tasks. Retire or delete a fact in one click.
+- **Live activity:** the Activity page shows every client talking to amem (Claude Code, Cursor, Codex, Claude Desktop, hooks, the CLI) as it happens: what they save, what context amem feeds back, errors, and the tokens it saved (measured where agents reported what they opened, estimate otherwise). `amem ui --panel` opens it as a small side panel, always on top with the desktop shell.
 - **Private by design:** one SQLite file in `~/.amem`, a localhost-only UI, optional encryption and local backups.
 
 Works with Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Windsurf, Continue, Aider, Zed and any other MCP client.
@@ -79,6 +80,7 @@ The data is in [`bench/retrieval.json`](bench/retrieval.json). Add your own case
 - The UI and HTTP MCP endpoint bind to `127.0.0.1` only, and `~/.amem` is created with mode `0700`.
 - Credentials and tokens are blocked from being saved. Personal notes stay out of work projects unless you ask about them.
 - Optional AES-256-GCM lock (`amem lock`) and encrypted local backups (`amem backup schedule`).
+- The activity log behind the Activity page stores metadata only (client, action, in or out, size, time taken), never memory text, prompts or tool arguments. It keeps 30 days or 20,000 rows; `AMEM_ACTIVITY=off` turns it off.
 - No network calls by default. If you opt in (`amem setup` asks once, or `amem telemetry on`), amem sends an anonymous ping at install and first run, then at most one a day with the version, OS and which parts ran (MCP, hooks, UI, CLI). No memory, repos, paths or names. `amem telemetry off` stops it; managed (IT policy) installs never send it.
 
 ## Learn more

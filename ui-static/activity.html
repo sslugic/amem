@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>amem activity</title>
+    <link rel="stylesheet" href="/activity.css" />
+  </head>
+  <body>
+    <div class="act" id="act">
+      <header class="act-top">
+        <a class="act-brand" href="/" title="Back to amem">amem</a>
+        <h1>Activity</h1>
+        <span class="act-live" id="live" data-state="connecting"><i></i><span>connecting</span></span>
+        <div class="act-top-right">
+          <label class="act-window">
+            <span class="sr">Window</span>
+            <select id="window" aria-label="Time window">
+              <option value="1">Last hour</option>
+              <option value="24" selected>Last 24 hours</option>
+              <option value="168">Last 7 days</option>
+            </select>
+          </label>
+          <button type="button" class="act-btn" id="panelBtn" title="Open this view as a small side panel. For an always-on-top window run: amem ui --panel">Side panel</button>
+        </div>
+      </header>
+
+      <p class="act-off hidden" id="offNote">
+        Activity logging is off (<code>AMEM_ACTIVITY=off</code>). Nothing new will show here.
+      </p>
+
+      <main class="act-grid">
+        <section class="card flow-card" aria-label="Who is talking to amem">
+          <div class="card-head">
+            <h2>Flow</h2>
+            <span class="legend"><i class="dot in"></i>into amem <i class="dot out"></i>context out <i class="dot err"></i>error</span>
+          </div>
+          <svg id="flow" class="flow" role="img" aria-label="Clients connected to amem"></svg>
+          <p class="empty hidden" id="flowEmpty">No calls yet in this window. Use amem from Claude Code, Cursor, Codex or the CLI and they appear here.</p>
+        </section>
+
+        <section class="card savings-card" aria-label="How much amem helped">
+          <div class="card-head"><h2>How much it helped</h2><span class="basis" id="basis"></span></div>
+          <div id="savings"></div>
+        </section>
+
+        <section class="card totals-card" aria-label="Totals">
+          <div class="totals" id="totals"></div>
+        </section>
+
+        <section class="card clients-card" aria-label="Per client">
+          <div class="card-head"><h2>Clients</h2></div>
+          <div class="table-wrap">
+            <table class="clients">
+              <thead>
+                <tr>
+                  <th>Client</th>
+                  <th title="All calls">Calls</th>
+                  <th title="Data handed to amem: remember, skill saves, task updates">In</th>
+                  <th title="Context amem fed back: packets, hook injections, skill views">Out</th>
+                  <th>Errors</th>
+                  <th title="Bytes of context sent back">Sent</th>
+                  <th title="Average time amem took to answer">Avg</th>
+                  <th>Last</th>
+                </tr>
+              </thead>
+              <tbody id="clientRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card feed-card" aria-label="Recent events">
+          <div class="card-head"><h2>Recent</h2><span class="muted small">metadata only: no memory text or prompts</span></div>
+          <ol class="feed" id="feed"></ol>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/activity.js"></script>
+  </body>
+</html>

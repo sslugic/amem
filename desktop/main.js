@@ -83,10 +83,62 @@ function createWindow(icon) {
   });
 }
 
+/** `amem app --panel` / `amem ui --panel`: the Activity view in a narrow always-on-top window. */
+function isPanelMode() {
+  return process.env.AMEM_PANEL === "1" || process.argv.includes("--panel");
+}
+
+function createPanelWindow(icon) {
+  const { screen } = require("electron");
+  const area = screen.getPrimaryDisplay().workArea;
+  const width = 360;
+  const height = Math.min(720, area.height - 40);
+  const win = new BrowserWindow({
+    width,
+    height,
+    minWidth: 280,
+    minHeight: 320,
+    x: area.x + area.width - width - 16,
+    y: area.y + 20,
+    title: "amem activity",
+    show: false,
+    alwaysOnTop: true,
+    fullscreenable: false,
+    skipTaskbar: true,
+    backgroundColor: "#0b0f12",
+    ...(icon ? { icon } : {}),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  // "floating" stays above normal windows without covering the menu bar or system UI.
+  win.setAlwaysOnTop(true, "floating");
+  try {
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  } catch {
+    /* not supported on this platform */
+  }
+  win.once("ready-to-show", () => win.showInactive());
+  win.loadURL(uiUrl()).catch((err) => {
+    console.error("[amem-desktop] failed to load panel:", err instanceof Error ? err.message : err);
+  });
+  return win;
+}
+
 app.setName("amem");
 
 app.whenReady().then(() => {
   const icon = loadAppIcon();
+  if (isPanelMode()) {
+    createPanelWindow(icon);
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createPanelWindow(icon);
+    });
+    return;
+  }
   applyDockIcon(icon);
   createWindow(icon);
   app.on("activate", () => {

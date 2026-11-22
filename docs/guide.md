@@ -326,6 +326,7 @@ Memory is a small local graph in SQLite:
 | **Task** | Deferred work on the project Kanban (Backlog / Next / Doing / Blocked / Done) — not a durable fact |
 | **Skill** | A reusable multi-step procedure, stored as a `SKILL.md` file (see below) |
 | **Usage event** | Each `amem context` hit + token estimate |
+| **Activity event** | Metadata for one MCP call, hook run or CLI command (client, action, in/out, size, latency) for the Activity page |
 
 Claims are the retrieval unit. Ranking combines:
 
@@ -429,6 +430,31 @@ amem usage report --platform cursor --saved 12000
 # or attach to a specific event:
 amem usage report --event-id usage_… --saved 12000
 ```
+
+---
+
+## Live activity
+
+The **Activity** page (sidebar → Activity, or `http://127.0.0.1:7843/activity`) is a live picture of every client talking to amem:
+
+- **Flow:** one lane per client and channel (Claude Code over MCP, Claude Code hooks, Cursor, Codex, Claude Desktop, the CLI …) with a pulse for every call. Blue pulses carry data **into** amem (remember, supersede, skill saves, task updates, usage reports, hook captures); green pulses are context amem feeds **out** (context packets, hook injections, skill and task reads). Red is an error.
+- **Clients:** calls, in, out, errors, bytes of context sent back, average latency and last seen, for the last hour, 24 hours or 7 days.
+- **Recent:** a live feed of calls.
+- **How much it helped:** tokens saved and file reads avoided, **measured** from packets where the agent reported which files it still opened (`amem_usage_report`, or the session-end transcript check), shown apart from the **estimate** for every packet (see [Token savings](#token-savings-estimates)). There is no speed or "% faster" figure: amem does not time your agent.
+
+### Side panel
+
+```bash
+amem ui --panel      # or: amem app --panel
+```
+
+opens the compact view (`/activity/mini`, also `?compact=1`) in a narrow window. With the desktop shell installed (`npm run app:setup` once) it is an always-on-top window in the top-right corner that stays visible on every desktop. Without it, amem opens a chromeless Chrome/Edge/Brave window, or a normal browser tab; browsers cannot keep a window on top. The **Side panel** button on the page opens the same compact view as a popup.
+
+### What is logged
+
+One row per MCP tool call, hook run and CLI command, in the `activity_events` table of your local database: time, client (from the MCP `initialize` handshake, the hook host, or `cli`), channel, action (a tool name, hook event or CLI command from a fixed list), direction, success, result size in bytes and latency. Memory text, prompts, queries, tool arguments and results are never stored. The log keeps 30 days or 20,000 rows, whichever is smaller, and `amem wipe --all` clears it. Set `AMEM_ACTIVITY=off` in the environment of your clients to stop logging.
+
+The page reads `/api/activity`, `/api/activity/summary?hours=24` and a server-sent event stream at `/api/activity/stream`, all on `127.0.0.1`. The stream tails the database, so calls from MCP servers and hooks running in other processes show up within a second.
 
 ---
 
@@ -548,7 +574,8 @@ amem usage export [--format json|md|pdf] [--days 30] [--scope current|all] [--ou
 amem license status|apply|activate|clear|issue|keys
 amem embed status|use hash|use ngram|reindex
 amem ui [--port 7843] [--no-open]
-amem app [--port 7843]
+amem ui --panel                    # live Activity view as a small side panel
+amem app [--port 7843] [--panel]   # --panel: always-on-top Activity window (desktop shell)
 amem service install|uninstall|status
 ```
 

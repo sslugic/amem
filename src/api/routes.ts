@@ -14,6 +14,7 @@ import {
   USD_PER_MILLION_INPUT_TOKENS,
 } from "../estimate.js";
 import { buildActivityGraph, speedForEvent } from "../activity.js";
+import { activityEnabled, activitySummary, latestActivityId, listActivity } from "../activity-log.js";
 import {
   getRepoByCwd,
   getRepoById,
@@ -182,7 +183,7 @@ export type ApiRequest = {
   cwd: string;
 };
 
-export const API_FEATURES = ["vault", "license", "embed", "recipe", "backup", "shop"] as const;
+export const API_FEATURES = ["vault", "license", "embed", "recipe", "backup", "shop", "activity"] as const;
 
 export function normalizeApiPath(pathname: string): string {
   const cut = (pathname.split("?")[0] || pathname).trim();
@@ -858,6 +859,20 @@ export function handleApi(req: ApiRequest): ApiResponse {
 
   if (method === "GET" && pathname === "/api/health") {
     return ok(apiHealth());
+  }
+
+  if (method === "GET" && pathname === "/api/activity") {
+    const since = searchParams.get("since");
+    const limit = Number(searchParams.get("limit") ?? "50");
+    return ok({
+      events: listActivity({ sinceId: since != null ? Number(since) : undefined, limit }),
+      latestId: latestActivityId(),
+      enabled: activityEnabled(),
+    });
+  }
+
+  if (method === "GET" && pathname === "/api/activity/summary") {
+    return ok(activitySummary({ hours: Number(searchParams.get("hours") ?? "24") }));
   }
 
   if (method === "GET" && pathname === "/api/license") {
