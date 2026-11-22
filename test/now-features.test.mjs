@@ -226,13 +226,16 @@ describe("npx / publish readiness", () => {
 });
 
 describe("CLI recipe", () => {
-  it("prints the pasteable host contract", () => {
-    const out = execFileSync(process.execPath, [cli, "recipe"], {
-      encoding: "utf8",
-      env: { ...process.env },
+  it("prints the pasteable host contract", async () => {
+    // A temp home: the CLI logs to the activity table, so it must never touch the real ~/.amem.
+    await withAmemHome(async (home) => {
+      const out = execFileSync(process.execPath, [cli, "recipe"], {
+        encoding: "utf8",
+        env: { ...process.env, AMEM_HOME: home },
+      });
+      assert.match(out, /remember contract/);
+      assert.match(out, /amem_context/);
+      assert.match(out, /amem_remember/);
     });
-    assert.match(out, /remember contract/);
-    assert.match(out, /amem_context/);
-    assert.match(out, /amem_remember/);
   });
 });
