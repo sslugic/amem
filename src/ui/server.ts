@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { handleApi } from "../api/routes.js";
 import { detectRepoIdentity } from "../repo-identity.js";
 import { handleMcpHttpBody, isJsonRpcMessage } from "../mcp.js";
+import { latestActivityId, listActivity } from "../activity-log.js";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -71,8 +72,14 @@ function workspaceFromMcpReq(req: IncomingMessage, url: URL): string | undefined
   return process.env.AMEM_WORKSPACE || undefined;
 }
 
+/** A short label for an HTTP MCP caller; `initialize` refines it to the client's own name. */
+function httpClientHint(req: IncomingMessage): string {
+  const ua = String(req.headers["user-agent"] ?? "").trim();
+  return ua ? ua.split(/[\s/(]/)[0]!.slice(0, 32) || "http-mcp" : "http-mcp";
+}
+
 function sendMcp(res: ServerResponse, req: IncomingMessage, body: unknown, workspace?: string): void {
-  const handled = handleMcpHttpBody(body, workspace);
+  const handled = handleMcpHttpBody(body, workspace, httpClientHint(req));
   if (handled.status === 202) {
     res.writeHead(202, MCP_CORS);
     res.end();
@@ -133,6 +140,57 @@ function serveStatic(res: ServerResponse, urlPath: string): void {
     ...(noStore ? { "Cache-Control": "no-store" } : {}),
   });
   res.end(readFileSync(filePath));
+}
+
+/** How often the stream checks the store for rows written by other processes. */
+const ACTIVITY_POLL_MS = 700;
+
+/**
+ * Server-sent events for the Activity view. MCP servers, hooks and the CLI run in their
+ * own processes and write to SQLite, so the stream tails the table rather than listening
+ * to an in-process emitter. Same-origin only: no CORS header on purpose.
+ */
+function streamActivity(req: IncomingMessage, res: ServerResponse, url: URL): void {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-store",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const fromHeader = Number(req.headers["last-event-id"] ?? NaN);
+  const fromQuery = Number(url.searchParams.get("since") ?? NaN);
+  let lastId = Number.isFinite(fromHeader)
+    ? fromHeader
+    : Number.isFinite(fromQuery)
+      ? fromQuery
+      : safeLatestId();
+  res.write(`retry: 3000\n`);
+  res.write(`event: hello\ndata: ${JSON.stringify({ latestId: lastId })}\n\n`);
+  let beats = 0;
+  const timer = setInterval(() => {
+    try {
+      const events = listActivity({ sinceId: lastId, limit: 200 });
+      for (const e of events) {
+        lastId = e.id;
+        res.write(`id: ${e.id}\nevent: activity\ndata: ${JSON.stringify(e)}\n\n`);
+      }
+      if (++beats % 20 === 0) res.write(`: keepalive\n\n`);
+    } catch {
+      // database locked or busy: try again on the next tick
+    }
+  }, ACTIVITY_POLL_MS);
+  timer.unref?.();
+  const stop = () => clearInterval(timer);
+  req.on("close", stop);
+  res.on("error", stop);
+}
+
+function safeLatestId(): number {
+  try {
+    return latestActivityId();
+  } catch {
+    return 0;
+  }
 }
 
 export type UiServerOptions = {
@@ -238,6 +296,14 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<{
       if (mcpPath && req.method === "DELETE") {
         res.writeHead(204, MCP_CORS);
         res.end();
+        return;
+      }
+      if (url.pathname === "/api/activity/stream" && req.method === "GET") {
+        streamActivity(req, res, url);
+        return;
+      }
+      if (url.pathname === "/activity" || url.pathname === "/activity/" || url.pathname === "/activity/mini") {
+        serveStatic(res, "/activity.html");
         return;
       }
       if (url.pathname.startsWith("/api/")) {

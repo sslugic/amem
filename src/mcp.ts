@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readVersion } from "./attest.js";
 import { handleApi } from "./api/routes.js";
 import { getRepoByName } from "./db.js";
+import { mcpDirection, recordActivity } from "./activity-log.js";
 
 export type JsonRpc = {
   jsonrpc?: string;
@@ -631,6 +632,40 @@ function runTool(name: string, args: Record<string, unknown>, fallbackWorkspace?
   return textResult(`Unknown tool: ${name}`, true);
 }
 
+const TOOL_NAMES = new Set(TOOLS.map((t) => t.name));
+
+/**
+ * Which app is on the other end. A stdio server serves one client for its lifetime and
+ * learns its name from `initialize`; HTTP calls are keyed by their User-Agent.
+ */
+let stdioClient: string | null = null;
+const httpClients = new Map<string, string>();
+
+function rememberMcpClient(name: string, clientHint?: string): void {
+  if (clientHint) {
+    if (httpClients.size > 64) httpClients.clear();
+    httpClients.set(clientHint, name);
+  } else {
+    stdioClient = name;
+  }
+}
+
+function mcpClientFor(clientHint?: string): string {
+  if (clientHint) return httpClients.get(clientHint) ?? clientHint;
+  if (stdioClient) return stdioClient;
+  if (process.env.CLAUDECODE) return "claude-code";
+  if (process.env.CURSOR_TRACE_ID || process.env.CURSOR_PROJECT_DIR) return "cursor";
+  return "mcp";
+}
+
+function resultBytes(result: unknown): number {
+  const content = (result as { content?: Array<{ text?: unknown }> })?.content;
+  if (!Array.isArray(content)) return 0;
+  let n = 0;
+  for (const c of content) if (typeof c?.text === "string") n += Buffer.byteLength(c.text, "utf8");
+  return n;
+}
+
 function rpcResult(id: number | string, result: unknown): JsonRpcResponse {
   return { jsonrpc: "2.0", id, result };
 }
@@ -646,12 +681,20 @@ export function isJsonRpcMessage(body: unknown): body is JsonRpc {
 }
 
 /** Handle one JSON-RPC message. Notifications (no id) return null. */
-export function dispatchMcp(msg: JsonRpc, fallbackWorkspace?: string): JsonRpcResponse | null {
+export function dispatchMcp(
+  msg: JsonRpc,
+  fallbackWorkspace?: string,
+  clientHint?: string,
+): JsonRpcResponse | null {
   const { id, method, params } = msg;
   if (!method) return null;
   if (id === undefined || id === null) return null;
 
   if (method === "initialize") {
+    const info = params?.clientInfo as { name?: unknown } | undefined;
+    if (info && typeof info.name === "string" && info.name.trim()) {
+      rememberMcpClient(info.name, clientHint);
+    }
     const requested =
       params && typeof params.protocolVersion === "string" ? params.protocolVersion : "";
     return rpcResult(id, {
@@ -680,7 +723,18 @@ export function dispatchMcp(msg: JsonRpc, fallbackWorkspace?: string): JsonRpcRe
       params?.arguments && typeof params.arguments === "object"
         ? (params.arguments as Record<string, unknown>)
         : {};
-    return rpcResult(id, callTool(name, args, fallbackWorkspace));
+    const started = Date.now();
+    const result = callTool(name, args, fallbackWorkspace);
+    recordActivity({
+      client: mcpClientFor(clientHint),
+      channel: "mcp",
+      action: TOOL_NAMES.has(name) ? name : "unknown_tool",
+      direction: mcpDirection(name),
+      ok: !(result as { isError?: boolean }).isError,
+      resultBytes: resultBytes(result),
+      latencyMs: Date.now() - started,
+    });
+    return rpcResult(id, result);
   }
 
   return rpcError(id, `Method not found: ${method}`);
@@ -689,11 +743,12 @@ export function dispatchMcp(msg: JsonRpc, fallbackWorkspace?: string): JsonRpcRe
 export function handleMcpHttpBody(
   body: unknown,
   fallbackWorkspace?: string,
+  clientHint = "http-mcp",
 ): { status: number; body: unknown } {
   if (Array.isArray(body)) {
     const results = body
       .filter(isJsonRpcMessage)
-      .map((msg) => dispatchMcp(msg, fallbackWorkspace))
+      .map((msg) => dispatchMcp(msg, fallbackWorkspace, clientHint))
       .filter((r): r is JsonRpcResponse => r !== null);
     return { status: 200, body: results };
   }
@@ -703,7 +758,7 @@ export function handleMcpHttpBody(
       body: { jsonrpc: "2.0", error: { code: -32600, message: "Invalid JSON-RPC" } },
     };
   }
-  const result = dispatchMcp(body, fallbackWorkspace);
+  const result = dispatchMcp(body, fallbackWorkspace, clientHint);
   if (!result) return { status: 202, body: null };
   return { status: 200, body: result };
 }

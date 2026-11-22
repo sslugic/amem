@@ -24,6 +24,7 @@ import { listWorkPersonalClaims, repoTokens } from "./personal.js";
 import { clipText } from "./text-clip.js";
 import { captureSkillRevision, captureSkillSuggestion } from "./skill-capture.js";
 import { redactSecrets } from "./secret-detect.js";
+import { recordActivity } from "./activity-log.js";
 
 export type HookPayload = {
   hook_event_name?: string;
@@ -190,12 +191,63 @@ function injectPacket(repo: RepoRow, query: string, session: string, platform: s
 }
 
 export function handleHookPayload(raw: string): HookResponse {
+  const started = Date.now();
+  let response: HookResponse;
+  let ok = true;
   try {
-    return handleHookPayloadInner(raw);
+    response = handleHookPayloadInner(raw);
   } catch (err) {
     logHookError(err);
-    return { continue: true };
+    ok = false;
+    response = { continue: true };
   }
+  logHookActivity(raw, response, ok, Date.now() - started);
+  return response;
+}
+
+/** Hook events worth naming in the activity log; anything else is logged as "other". */
+const HOOK_ACTIONS = new Set([
+  "sessionStart",
+  "beforeSubmitPrompt",
+  "afterAgentResponse",
+  "stop",
+  "sessionEnd",
+]);
+
+/** Metadata only: the event name and how much context went back, never the prompt. */
+function logHookActivity(raw: string, response: HookResponse, ok: boolean, latencyMs: number): void {
+  try {
+    let event = "";
+    try {
+      const p = JSON.parse(raw.trim() || "{}") as HookPayload;
+      event = normalizeHookEvent(p.hook_event_name || p.event || "");
+    } catch {
+      event = "";
+    }
+    if (!event) return;
+    const injected = hookContextText(response);
+    recordActivity({
+      client: hookPlatform() === "claude" ? "claude-code" : "cursor",
+      channel: "hook",
+      action: `hook ${HOOK_ACTIONS.has(event) ? event : "other"}`,
+      // A hook that injected context fed the agent; the rest only handed amem data.
+      direction: injected ? "out" : "in",
+      ok,
+      resultBytes: injected ? Buffer.byteLength(injected, "utf8") : 0,
+      latencyMs,
+    });
+  } catch {
+    // never block the agent
+  }
+}
+
+function hookContextText(response: HookResponse): string {
+  const r = response as {
+    additional_context?: unknown;
+    hookSpecificOutput?: { additionalContext?: unknown };
+  };
+  const a = r.hookSpecificOutput?.additionalContext ?? r.additional_context;
+  return typeof a === "string" ? a : "";
 }
 
 /** A hook must never block the agent, but a failure should leave a trace. Kept under 256 KB. */

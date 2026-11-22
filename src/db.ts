@@ -393,6 +393,23 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
   (db) => redactStoredSecrets(db),
   // 3: content hashes of code anchors, so freshness compares bytes rather than mtimes.
   (db) => addColumn(db, "claims", "anchor_hashes", "TEXT"),
+  // 4: activity log for the live Activity view. Metadata only: who called, which action,
+  // which way data flowed, how big and how long. Never memory text, prompts or arguments.
+  (db) =>
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS activity_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        client TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        action TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        ok INTEGER NOT NULL DEFAULT 1,
+        result_bytes INTEGER NOT NULL DEFAULT 0,
+        latency_ms INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS activity_events_ts_idx ON activity_events(ts);
+    `),
 ];
 
 function redactStoredSecrets(db: Database.Database): void {
@@ -901,6 +918,7 @@ function wipeAllReposUnlocked(): number {
     }
   }
   db.exec("DELETE FROM repos");
+  db.exec("DELETE FROM activity_events");
   return row.c;
 }
 

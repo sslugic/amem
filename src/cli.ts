@@ -4,6 +4,7 @@ import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { buildAttestReport, formatAttestHuman, readVersion } from "./attest.js";
 import { handleApi, logContextUsage } from "./api/routes.js";
+import { cliAction, recordActivity } from "./activity-log.js";
 import {
   closeDb,
   getRepoByCwd,
@@ -68,7 +69,7 @@ import {
   unbindableRootReason,
   workspaceIdentity,
 } from "./repo-identity.js";
-import { runDesktopApp } from "./app-shell.js";
+import { openActivityPanel, runDesktopApp } from "./app-shell.js";
 import {
   startUiServer,
   buildUiLandingUrl,
@@ -222,7 +223,8 @@ Usage:
   amem usage recompute [--apply] [--scope current|all]
   amem usage export [--format json|md|pdf] [--days 30] [--scope current|all] [--out <file>]
   amem ui [--port 7843] [--no-open]
-  amem app [--port 7843]
+  amem ui --panel                        # live Activity view as a small side panel
+  amem app [--port 7843] [--panel]       # --panel: always-on-top Activity window
   amem service install|uninstall|status
   amem mcp [--print-config] [--workspace <name>]
   amem license status|apply|clear|issue|keys
@@ -334,6 +336,20 @@ async function main(): Promise<void> {
 
   const feature = featureForCommand(cmd);
   if (feature && !(cmd === "mcp" && flags.get("print-config"))) noteUsage(feature);
+
+  const activity = cliAction(positional);
+  const started = Date.now();
+  let outBytes = 0;
+  let failed = false;
+  if (activity) {
+    // Count what the command printed, not what it said: the log keeps sizes only.
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown, ...rest: unknown[]) => {
+      if (typeof chunk === "string") outBytes += Buffer.byteLength(chunk, "utf8");
+      else if (chunk instanceof Uint8Array) outBytes += chunk.byteLength;
+      return (write as (...a: unknown[]) => boolean)(chunk, ...rest);
+    }) as typeof process.stdout.write;
+  }
 
   try {
     switch (cmd) {
@@ -1513,6 +1529,14 @@ async function main(): Promise<void> {
       }
       case "ui": {
         assertUiAllowed();
+        if (flags.get("panel")) {
+          await openActivityPanel({
+            port: Number(flagString(flags, "port") ?? "7843"),
+            cwd: process.cwd(),
+          });
+          closeDb();
+          break;
+        }
         const policy = loadPolicy().policy;
         const port = Number(flagString(flags, "port") ?? "7843");
         const openBrowser = !flags.get("no-open");
@@ -1553,7 +1577,8 @@ async function main(): Promise<void> {
         assertUiAllowed();
         const port = Number(flagString(flags, "port") ?? "7843");
         try {
-          await runDesktopApp({ port, cwd: process.cwd() });
+          if (flags.get("panel")) await openActivityPanel({ port, cwd: process.cwd() });
+          else await runDesktopApp({ port, cwd: process.cwd() });
         } catch (error) {
           console.error(error instanceof Error ? error.message : String(error));
           closeDb();
@@ -1735,7 +1760,21 @@ async function main(): Promise<void> {
         console.error(`Unknown command: ${cmd}`);
         usage();
     }
+  } catch (err) {
+    failed = true;
+    throw err;
   } finally {
+    if (activity) {
+      recordActivity({
+        client: "cli",
+        channel: "cli",
+        action: activity.action,
+        direction: activity.direction,
+        ok: !failed && !process.exitCode,
+        resultBytes: outBytes,
+        latencyMs: Date.now() - started,
+      });
+    }
     if (cmd !== "ui" && cmd !== "mcp") closeDb();
   }
 }

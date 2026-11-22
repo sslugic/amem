@@ -4711,3 +4711,10 @@ setInterval(async () => {
     .join(",");
   if (after !== before) fillRepoSelect();
 }, 3000);
+
+// Sidebar links to standalone pages (the live Activity view).
+document.querySelectorAll("button[data-href]").forEach((b) => {
+  b.addEventListener("click", () => {
+    location.href = b.dataset.href;
+  });
+});
