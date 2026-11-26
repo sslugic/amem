@@ -33,6 +33,7 @@ import {
   ftsBoostFromBm25,
   keywordScoreClaim,
   searchClaimsFts,
+  stem,
   tokenize,
 } from "./search.js";
 import { embedBoostFromScore, searchClaimsEmbed, searchClaimsEmbedLive } from "./embed.js";
@@ -636,19 +637,49 @@ function freshnessLabel(status: FreshnessStatus): string | null {
 
 /** Keyword match only. Fallback packets (score 0) are misses — the model call still happens. */
 export function classifyLookup(query: string, claims: ClaimRow[]): "local_hit" | "server_trip" {
-  const tokens = tokenize(query);
+  const tokens = [...new Set(tokenize(query))];
   if (tokens.length === 0) return "server_trip";
-  return claims.some((c) => keywordScoreClaim(c, tokens) > 0) ? "local_hit" : "server_trip";
+  // Same rule as keywordScoreClaim(c, tokens) > 0, but stops at the first matching word
+  // and reuses each claim's lower-cased text: Analytics classifies every event in the
+  // window, and full scoring of long prompts made that take seconds.
+  const stems = tokens.map((t) => stem(t));
+  return claims.some((c) => {
+    const hay = claimHaystack(c);
+    return tokens.some((t, i) => hay.includes(t) || (stems[i] !== t && wordHit(hay, stems[i]!)));
+  })
+    ? "local_hit"
+    : "server_trip";
 }
 
-export function decorateUsageEvent(e: UsageEventRow, claims: ClaimRow[]): UsageEventRow {
+const haystacks = new WeakMap<ClaimRow, string>();
+
+/** The text keywordScoreClaim matches against, cached per claim object. */
+function claimHaystack(c: ClaimRow): string {
+  let hay = haystacks.get(c);
+  if (hay === undefined) {
+    hay = `${c.id} ${c.kind} ${c.text} ${c.code_anchors}`.toLowerCase();
+    haystacks.set(c, hay);
+  }
+  return hay;
+}
+
+export function decorateUsageEvent(
+  e: UsageEventRow,
+  claims: ClaimRow[] | Map<string, ClaimRow>,
+): UsageEventRow {
   let ids: string[] = [];
   try {
     ids = JSON.parse(e.claim_ids || "[]") as string[];
   } catch {
     ids = [];
   }
-  const subset = ids.length ? claims.filter((c) => ids.includes(c.id)) : [];
+  // A Map lookup per id, not a scan of every claim per event: the Analytics page
+  // decorates tens of thousands of events at once.
+  const subset = !ids.length
+    ? []
+    : claims instanceof Map
+      ? ids.map((id) => claims.get(id)).filter((c): c is ClaimRow => Boolean(c))
+      : claims.filter((c) => ids.includes(c.id));
   const kind = classifyLookup(e.query || "", subset);
   if (kind === "local_hit") return { ...e, kind };
   return {
@@ -659,16 +690,54 @@ export function decorateUsageEvent(e: UsageEventRow, claims: ClaimRow[]): UsageE
   };
 }
 
+/**
+ * Hit/miss labels for events, kept across calls by a long-running process (the
+ * dashboard re-labels the whole window on every Analytics load). The key includes the
+ * served claims' updated_at, so editing, retiring or deleting a claim relabels its events.
+ */
+const lookupKinds = new Map<string, "local_hit" | "server_trip">();
+
 export function decorateUsageEvents(events: UsageEventRow[]): UsageEventRow[] {
-  const cache = new Map<string, ClaimRow[]>();
+  const cache = new Map<string, Map<string, ClaimRow>>();
+  if (lookupKinds.size > 200_000) lookupKinds.clear();
   return events.map((e) => {
     let claims = cache.get(e.repo_id);
     if (!claims) {
-      claims = listClaims(e.repo_id);
+      claims = new Map(listClaims(e.repo_id).map((c) => [c.id, c]));
       cache.set(e.repo_id, claims);
     }
-    return decorateUsageEvent(e, claims);
+    let ids: unknown = [];
+    try {
+      ids = JSON.parse(e.claim_ids || "[]");
+    } catch {
+      ids = [];
+    }
+    const served = Array.isArray(ids)
+      ? ids.map((id) => claims!.get(String(id))).filter((c): c is ClaimRow => Boolean(c))
+      : [];
+    const key = `${e.id}|${served.map((c) => `${c.id}@${c.updated_at}`).join(",")}`;
+    let kind = lookupKinds.get(key);
+    if (!kind) {
+      kind = classifyLookup(e.query || "", served);
+      lookupKinds.set(key, kind);
+    }
+    return kind === "local_hit" ? { ...e, kind } : { ...e, kind, estimated_tokens_saved: 0, estimated_ms_saved: 0 };
   });
+}
+
+/** Most-served claim ids across events, for the Analytics "top claims" list. */
+export function topClaimUse(events: UsageEventRow[], limit = 20): Array<{ id: string; n: number }> {
+  const counts = new Map<string, number>();
+  for (const e of events) {
+    let ids: unknown = [];
+    try {
+      ids = JSON.parse(e.claim_ids || "[]");
+    } catch {
+      ids = [];
+    }
+    if (Array.isArray(ids)) for (const id of ids) if (typeof id === "string") counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id, n]) => ({ id, n }));
 }
 
 export function renderContextMarkdown(packet: ContextPacket): string {

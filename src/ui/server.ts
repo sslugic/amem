@@ -4,7 +4,7 @@ import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { handleApi } from "../api/routes.js";
-import { detectRepoIdentity } from "../repo-identity.js";
+import { detectRepoIdentity, setRepoIdentityCacheTtl } from "../repo-identity.js";
 import { handleMcpHttpBody, isJsonRpcMessage } from "../mcp.js";
 import { latestActivityId, listActivity } from "../activity-log.js";
 
@@ -270,6 +270,8 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<{
 }> {
   const requestedPort = options.port ?? 7843;
   const cwd = options.cwd ?? process.cwd();
+  // Tab switches fire several API calls, and each resolved the repo with git subprocesses.
+  setRepoIdentityCacheTtl(15_000);
   const listenHost = resolveLoopbackHost(options.host);
 
   const server = createServer(async (req, res) => {
