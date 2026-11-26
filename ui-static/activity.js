@@ -4,6 +4,9 @@
 const params = new URLSearchParams(location.search);
 const compact = location.pathname.endsWith("/mini") || params.get("compact") === "1";
 if (compact) document.body.classList.add("compact");
+// Inside the dashboard shell (iframe on /?tab=activity) the shell owns the header and nav.
+const embedded = params.get("embed") === "1";
+if (embedded) document.body.classList.add("embed");
 
 const $ = (id) => document.getElementById(id);
 const SVG = "http://www.w3.org/2000/svg";

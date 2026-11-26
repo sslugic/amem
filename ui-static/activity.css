@@ -167,3 +167,9 @@ body.compact .feed .m { grid-column: 3; grid-row: 2; }
 @media (prefers-reduced-motion: reduce) {
   .act-live[data-state="live"] i, .feed li.new { animation: none; }
 }
+
+/* Embedded in the dashboard shell: the shell shows the title and nav. */
+body.embed { background: transparent; }
+body.embed .act-brand,
+body.embed #panelBtn { display: none; }
+body.embed .act { padding-top: 0.25rem; }

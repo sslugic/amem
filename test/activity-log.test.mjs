@@ -210,11 +210,15 @@ describe("activity log", () => {
         const health = await (await fetch(`${base}/api/health`)).json();
         assert.ok(health.features.includes("activity"));
 
-        for (const path of ["/activity", "/activity/mini"]) {
+        for (const path of ["/activity?embed=1", "/activity/mini"]) {
           const page = await fetch(`${base}${path}`);
           assert.equal(page.status, 200);
           assert.match(await page.text(), /activity\.js/);
         }
+        // The bare /activity URL opens the page inside the dashboard shell.
+        const bare = await fetch(`${base}/activity`, { redirect: "manual" });
+        assert.equal(bare.status, 302);
+        assert.equal(bare.headers.get("location"), "/?tab=activity");
 
         const ctrl = new AbortController();
         const res = await fetch(`${base}/api/activity/stream`, { signal: ctrl.signal });
