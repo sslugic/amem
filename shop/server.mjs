@@ -597,7 +597,9 @@ function adminDashboardPage() {
       <ul class="admin-bars" id="cities"></ul>
     </div>
   </div>
-  <h2 style="font-size:1.05rem;margin:0 0 .5rem">Top paths</h2>
+  <h2 style="font-size:1.05rem;margin:0 0 .5rem">Campaigns <span style="color:var(--muted);font-weight:400;font-size:.85rem">utm source · campaign · content (pageviews)</span></h2>
+  <ul class="admin-bars" id="campaigns"></ul>
+  <h2 style="font-size:1.05rem;margin:1rem 0 .5rem">Top paths</h2>
   <table class="admin-table" id="paths"><thead><tr><th>Path</th><th>Hits</th></tr></thead><tbody></tbody></table>
   <h2 style="font-size:1.05rem;margin:1.5rem 0 .5rem">Recent humans</h2>
   <table class="admin-table" id="recent"><thead><tr><th>Time</th><th>Path</th><th>Where</th><th>Net</th><th>Ref</th></tr></thead><tbody></tbody></table>
@@ -719,6 +721,7 @@ function adminDashboardPage() {
   fillBars("u-nodes", u.nodes || [], "node");
   fillBars("countries", data.topCountries || [], "country");
   fillBars("cities", data.topCities || [], "city");
+  fillBars("campaigns", data.topCampaigns || [], "campaign");
 
   const dots = document.getElementById("heat-dots");
   const labels = document.getElementById("heat-labels");

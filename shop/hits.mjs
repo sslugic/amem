@@ -48,6 +48,7 @@ const ASSET_EXACT = new Set([
  *   bot?: boolean,
  *   drop?: boolean,
  *   dropReason?: string,
+ *   utm?: Record<string, string>,
  * }} Hit
  */
 
@@ -361,7 +362,31 @@ function normalizeHit(row) {
     bot: Boolean(row.bot),
     drop: Boolean(row.drop),
     dropReason: String(row.dropReason || ""),
+    ...(cleanUtm(row.utm) ? { utm: cleanUtm(row.utm) } : {}),
   };
+}
+
+const UTM_KEYS = ["source", "medium", "campaign", "content"];
+
+/**
+ * Campaign tags from a landing URL (utm_source / utm_medium / utm_campaign / utm_content), so
+ * links such as the Simply Remote app's "More from us" banner can be counted. Only these four
+ * short, lower-cased tags are kept; anything else in the query string never leaves the page.
+ * @returns {Record<string, string> | undefined}
+ */
+export function cleanUtm(raw) {
+  if (!raw || typeof raw !== "object") return undefined;
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const k of UTM_KEYS) {
+    const v = String(/** @type {Record<string, unknown>} */ (raw)[k] ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]/g, "")
+      .slice(0, 60);
+    if (v) out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function enrichFromReq(req) {
@@ -406,7 +431,7 @@ export function recordHit(req, pathname, status) {
 /**
  * Client beacon after DOM ready — primary human_candidate signal.
  * @param {import("node:http").IncomingMessage} req
- * @param {{ path?: string, ref?: string, sid?: string }} body
+ * @param {{ path?: string, ref?: string, sid?: string, utm?: Record<string, string> }} body
  */
 export function recordBeacon(req, body = {}) {
   const pathname = String(body.path || "/").slice(0, 200);
@@ -426,6 +451,7 @@ export function recordBeacon(req, body = {}) {
     bot: isBotUa(uaRaw),
     drop: false,
     dropReason: "",
+    utm: body.utm,
     ...enrich,
   });
   bumpRing(beaconRing, hit);
@@ -682,6 +708,10 @@ function rollupBeacons(beacons, days) {
   const countries = new Map();
   /** @type {Map<string, number>} */
   const cities = new Map();
+  /** @type {Map<string, number>} */
+  const campaigns = new Map();
+  /** @type {Map<string, Set<string>>} */
+  const campaignSids = new Map();
   /** @type {Map<string, { lat: number, lon: number, count: number, label: string, net: string }>} */
   const geoCells = new Map();
 
@@ -696,6 +726,14 @@ function rollupBeacons(beacons, days) {
       windowViews += 1;
       if (h.sid) windowSids.add(h.sid);
       paths.set(h.path, (paths.get(h.path) || 0) + 1);
+      if (h.utm && (h.utm.source || h.utm.campaign)) {
+        const label = [h.utm.source, h.utm.campaign, h.utm.content].filter(Boolean).join(" · ");
+        campaigns.set(label, (campaigns.get(label) || 0) + 1);
+        if (h.sid) {
+          if (!campaignSids.has(label)) campaignSids.set(label, new Set());
+          campaignSids.get(label)?.add(h.sid);
+        }
+      }
       if (h.cc) countries.set(h.cc, (countries.get(h.cc) || 0) + 1);
       if (h.city || h.cc) {
         const label = h.city && h.cc ? `${h.city}, ${h.cc}` : h.city || h.cc;
@@ -737,6 +775,11 @@ function rollupBeacons(beacons, days) {
     topPaths: topCounted(paths, 20).map(({ key, count }) => ({ path: key, count })),
     topCountries: topCounted(countries, 20).map(({ key, count }) => ({ country: key, count })),
     topCities: topCounted(cities, 20).map(({ key, count }) => ({ city: key, count })),
+    topCampaigns: topCounted(campaigns, 20).map(({ key, count }) => ({
+      campaign: key,
+      count,
+      visitors: campaignSids.get(key)?.size ?? 0,
+    })),
     heat: [...geoCells.values()].sort((a, b) => b.count - a.count).slice(0, 80),
     recent: [...beacons]
       .filter((h) => {
@@ -851,6 +894,7 @@ export async function getHitStats(opts = {}) {
     topPaths: human.topPaths,
     topCountries: human.topCountries,
     topCities: human.topCities,
+    topCampaigns: human.topCampaigns,
     heat: human.heat,
     recent: human.recent,
     security: {
@@ -885,7 +929,12 @@ export function beaconScript() {
     }catch(e){return "";}
   }
   function fire(){
-    var body=JSON.stringify({path:location.pathname,ref:document.referrer||"",sid:vid()});
+    var utm={};
+    try{
+      var q=new URLSearchParams(location.search);
+      ["source","medium","campaign","content"].forEach(function(k){var v=q.get("utm_"+k);if(v)utm[k]=v;});
+    }catch(e){}
+    var body=JSON.stringify({path:location.pathname,ref:document.referrer||"",sid:vid(),utm:utm});
     try{
       if(navigator.sendBeacon){
         navigator.sendBeacon("/api/beacon",new Blob([body],{type:"application/json"}));
