@@ -368,6 +368,99 @@ pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:
   .admin-grid,.admin-grid.four{grid-template-columns:1fr 1fr}
   .admin-split,.admin-split.three{grid-template-columns:1fr}
 }
+
+/* ---- landing v0.9 ---- */
+.lp-hero{position:relative;overflow:hidden;padding:3.2rem 1.25rem 3rem}
+.lp-hero .hero-art img{opacity:.22}
+.lp-hero-in{position:relative;z-index:1;max-width:1120px;margin:0 auto;display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:2.4rem;align-items:center}
+.lp-eyebrow{display:inline-flex;gap:.5rem;align-items:center;margin:0 0 1rem;padding:.3rem .75rem;border:1px solid rgba(46,196,182,.35);
+  border-radius:999px;background:rgba(46,196,182,.08);color:var(--accent);font-size:.74rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.lp-h1{margin:0 0 .9rem;font-size:clamp(2rem,4.6vw,3.1rem);line-height:1.06;letter-spacing:-.04em;font-weight:700}
+.lp-sub{margin:0 0 1.4rem;color:var(--muted);font-size:1.04rem;max-width:34rem}
+.lp-sub code{color:var(--ink)}
+.lp-cta2{display:flex;align-items:center;gap:.6rem;margin:.8rem 0 0;color:var(--muted);font-size:.86rem}
+.lp-cta2 code{color:var(--ink);padding:.25rem .55rem;border:1px solid var(--line);border-radius:8px;background:rgba(11,15,18,.6)}
+.lp-facts{display:flex;flex-wrap:wrap;gap:.4rem 1.1rem;margin:1.3rem 0 0;padding:0;list-style:none;color:var(--muted);font-size:.8rem}
+.lp-facts li::before{content:"✓ ";color:var(--accent)}
+.mock{border:1px solid var(--line);border-radius:14px;background:rgba(11,15,18,.92);box-shadow:0 30px 90px rgba(0,0,0,.55);overflow:hidden;font-size:.8rem}
+.mock-bar{display:flex;align-items:center;gap:.4rem;padding:.55rem .75rem;border-bottom:1px solid var(--line);background:rgba(20,27,33,.9)}
+.mock-bar i{width:.6rem;height:.6rem;border-radius:999px;background:#3a454e}
+.mock-bar span{margin-left:.5rem;color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:.72rem}
+.mock-tabs{display:flex;gap:.25rem;padding:.5rem .6rem;border-bottom:1px solid var(--line)}
+.mock-tab{appearance:none;border:1px solid transparent;background:transparent;color:var(--muted);font:inherit;font-size:.76rem;
+  padding:.28rem .65rem;border-radius:999px;cursor:pointer}
+.mock-tab.active{color:var(--ink);border-color:var(--line);background:var(--bg2)}
+.mock-pane{display:none;padding:.8rem;min-height:15.5rem}
+.mock-pane.active{display:block}
+.mf{display:grid;grid-template-columns:auto 1fr;gap:.15rem .6rem;padding:.55rem .6rem;border:1px solid var(--line);border-radius:10px;background:rgba(20,27,33,.7)}
+.mf+.mf{margin-top:.45rem}
+.mf b{font-weight:500}
+.mf small{grid-column:2;color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:.68rem}
+.pill{align-self:start;padding:.08rem .45rem;border-radius:999px;font-size:.66rem;font-weight:600;letter-spacing:.03em;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.ok{color:var(--accent);border-color:rgba(46,196,182,.45)}
+.pill.stale{color:#f0b429;border-color:rgba(240,180,41,.5)}
+.pill.pin{color:var(--claim);border-color:rgba(126,184,255,.5)}
+.mr{display:flex;justify-content:space-between;align-items:center;gap:.6rem;padding:.55rem .6rem;border:1px solid var(--line);border-radius:10px;background:rgba(20,27,33,.7)}
+.mr+.mr{margin-top:.45rem}
+.mr-act{display:flex;gap:.3rem}
+.mr-act span{padding:.15rem .5rem;border-radius:999px;border:1px solid var(--line);font-size:.68rem;color:var(--muted)}
+.mr-act span.y{color:#062925;background:var(--accent);border-color:transparent}
+.board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.45rem}
+.col h4{margin:0 0 .4rem;color:var(--muted);font-size:.68rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.card{padding:.45rem .5rem;border:1px solid var(--line);border-radius:8px;background:rgba(20,27,33,.75);font-size:.72rem;line-height:1.3}
+.card+.card{margin-top:.35rem}
+.card em{display:block;margin-top:.2rem;color:var(--muted);font-style:normal;font-size:.64rem}
+.col.doing .card{border-color:rgba(46,196,182,.45)}
+.col.done .card{opacity:.6;text-decoration:line-through;text-decoration-color:rgba(232,238,242,.3)}
+.prim-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.85rem}
+.prim{padding:1.3rem 1.25rem;border:1px solid var(--line);border-radius:18px;background:linear-gradient(180deg,rgba(46,196,182,.07),rgba(20,27,33,.88) 50%)}
+.prim-n{margin:0 0 .6rem;color:var(--accent);font-family:"IBM Plex Mono",monospace;font-size:.78rem}
+.prim h3{margin:0 0 .5rem;font-size:1.12rem;letter-spacing:-.02em}
+.prim p{margin:0;color:var(--muted);font-size:.9rem}
+.prim .eg{margin:.8rem 0 0;padding:.55rem .7rem;border-left:2px solid var(--accent);background:rgba(11,15,18,.55);border-radius:0 8px 8px 0;font-size:.8rem;color:var(--ink)}
+.cmp-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:16px;background:rgba(20,27,33,.85)}
+.cmp{width:100%;min-width:760px;border-collapse:collapse;font-size:.86rem}
+.cmp th,.cmp td{padding:.8rem .9rem;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+.cmp tr:last-child td{border-bottom:0}
+.cmp thead th{color:var(--muted);font-weight:500;font-size:.78rem;background:rgba(11,15,18,.5)}
+.cmp thead th small{display:block;color:var(--muted);opacity:.8;font-weight:400}
+.cmp thead th.us{color:var(--accent);font-size:.9rem;font-weight:700}
+.cmp tbody th{color:var(--ink);font-weight:600;white-space:nowrap}
+.cmp td.us{background:rgba(46,196,182,.07);color:var(--ink)}
+.cmp td{color:var(--muted)}
+.y{color:var(--accent);font-weight:600}
+.n{color:#e5737a;font-weight:600}
+.m{color:#f0b429;font-weight:600}
+.cmp-note{margin:.9rem 0 0;padding:1rem 1.1rem;border:1px solid rgba(46,196,182,.35);border-radius:14px;background:rgba(46,196,182,.06);font-size:.95rem}
+.cmp-src{margin:.6rem 0 0;color:var(--muted);font-size:.74rem}
+.cmp-src a{color:var(--muted)}
+.setup-box{max-width:760px}
+.setup-box pre{margin:0;border:0;border-radius:0;background:transparent;padding:.85rem .95rem;font-size:.82rem;white-space:pre;overflow:auto}
+.setup-box .cmd-tabs{flex-wrap:wrap}
+.setup-note{margin:.5rem .95rem .85rem;color:var(--muted);font-size:.8rem}
+.faq{max-width:760px}
+.faq details{border:1px solid var(--line);border-radius:14px;background:rgba(20,27,33,.85);padding:.2rem 1.1rem}
+.faq details+details{margin-top:.55rem}
+.faq summary{cursor:pointer;padding:.85rem 0;font-weight:600;list-style:none}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";float:right;color:var(--muted)}
+.faq details[open] summary::after{content:"–"}
+.faq details p{margin:0 0 1rem;color:var(--muted)}
+.foot{margin:3.5rem 0 0;padding:1.6rem 1.25rem;border-top:1px solid var(--line);color:var(--muted);font-size:.84rem}
+.foot-in{max-width:1080px;margin:0 auto;display:flex;flex-wrap:wrap;gap:.6rem 1.4rem;justify-content:space-between}
+.foot a{color:var(--muted);text-decoration:none}
+.foot a:hover{color:var(--ink)}
+.foot nav{display:flex;flex-wrap:wrap;gap:1.1rem}
+@media(max-width:900px){
+  .lp-hero-in{grid-template-columns:1fr}
+  .prim-grid{grid-template-columns:1fr}
+}
+@media(max-width:620px){
+  .lp-hero{padding:2rem 1rem 2.2rem}
+  .board{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(prefers-reduced-motion:reduce){.feat,.hero-jump{transition:none}}
 </style></head><body>${body}${track ? beaconScript() : ""}</body></html>`;
 }
 
@@ -724,19 +817,25 @@ function adminDashboardPage() {
 function cmdScript() {
   return `<script>
 (() => {
-  const tabs = [...document.querySelectorAll(".cmd-tab")];
-  const panels = [...document.querySelectorAll(".cmd-panel")];
-  tabs.forEach((tab) => {
-    tab.addEventListener("click", () => {
-      const id = tab.dataset.cmd;
-      tabs.forEach((t) => {
-        const on = t === tab;
-        t.classList.toggle("active", on);
-        t.setAttribute("aria-selected", on ? "true" : "false");
+  // Each tab group switches only its own panels (hero install box, setup box, UI preview).
+  const wire = (tabSel, panelSel, key, panelKey, boxSel) => {
+    document.querySelectorAll(boxSel).forEach((box) => {
+      const tabs = [...box.querySelectorAll(tabSel)];
+      const panels = [...box.querySelectorAll(panelSel)];
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          tabs.forEach((t) => {
+            const on = t === tab;
+            t.classList.toggle("active", on);
+            t.setAttribute("aria-selected", on ? "true" : "false");
+          });
+          panels.forEach((p) => p.classList.toggle("active", p.dataset[panelKey] === tab.dataset[key]));
+        });
       });
-      panels.forEach((p) => p.classList.toggle("active", p.dataset.panel === id));
     });
-  });
+  };
+  wire(".cmd-tab", ".cmd-panel", "cmd", "panel", ".cmd-box");
+  wire(".mock-tab", ".mock-pane", "mock", "pane", ".mock");
   document.querySelectorAll("[data-copy]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const el = document.getElementById(btn.dataset.copy);
@@ -826,7 +925,7 @@ function cmdScript() {
 </script>`;
 }
 
-function installCommands() {
+function installCommands(withHint = true) {
   return `<div class="cmd-box">
   <div class="cmd-tabs" role="tablist">
     <button type="button" class="cmd-tab active" data-cmd="npx" role="tab" aria-selected="true">Quick (npx)</button>
@@ -844,8 +943,8 @@ function installCommands() {
       <button type="button" class="btn compact" data-copy="cmd-global">Copy</button>
     </div>
   </div>
-</div>
-<p class="cmd-hint">Node 20+. Then run <code>amem ui</code>. Source on <a href="https://github.com/sslugic/amem">GitHub</a>.</p>`;
+</div>${withHint ? `
+<p class="cmd-hint">Node 20+. Then run <code>amem ui</code>. Source on <a href="https://github.com/sslugic/amem">GitHub</a>.</p>` : ""}`;
 }
 
 function dollars(cents) {
@@ -860,7 +959,17 @@ function siteSections() {
     ["M3 10h3l2-5 4 10 2-5h3",
       "Context on autopilot", "Hooks inject the right facts when a session starts and when you ask a question. No copy-pasting a project brief into every chat.", "Session start + every prompt"],
     ["M8.5 14a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11zm3.9-1.6L17 17",
-      "Search that finds the right thing", "Keyword search, on-device embeddings, pins and freshness ranked together. A small, focused packet, not a dump of everything.", "Capped packet, no prompt stuffing"],
+      "Search that finds the right thing", "BM25 full-text search across facts, skills and tasks, plus on-device embeddings, pins, recency and usage. “auth flow” finds the JWT login middleware.", "amem_search · SQLite FTS5"],
+    ["M4 4h12M4 8h9M4 12h12M4 16h6",
+      "Token budgets", "Pass max_tokens and amem packs the highest-ranked items into the budget, never cutting one in half, and tells the agent what it left out.", "max_tokens on context + search"],
+    ["M10 3l6 3v4c0 3.5-2.6 6.4-6 7-3.4-.6-6-3.5-6-7V6z",
+      "One-call session start", "amem_bootstrap returns about 350 tokens: global rules, this project's key facts, active tasks and skill hints. The agent is oriented before its first tool call.", "amem_bootstrap · amem bootstrap"],
+    ["M10 4v6l4 2M10 17a7 7 0 1 1 0-14 7 7 0 0 1 0 14z",
+      "Facts that expire", "Debugging notes and incident context get a TTL and drop out of recall on time. Decisions that change retire the old fact and keep the history.", "ttl_days · supersedes"],
+    ["M4 10h9M10 6l4 4-4 4M16 4v12",
+      "Import and export", "Bring CLAUDE.md, AGENTS.md, .cursorrules and .mdc rules in without duplicates. Export everything to JSON or Markdown for backup or review.", "amem import · amem export"],
+    ["M3 10h14M10 3v14",
+      "Global and project scope", "Rules you follow everywhere live in global memory and reach every repo. Project facts stay with their project. Private notes never leak into work.", "global · project:<path>"],
     ["M5 3h8l2 2v12H5zM8 8h4M8 11h4M8 14h2",
       "Skills: how you do it here", "Repeatable procedures (release steps, deploy dance, test setup) saved once. Agents see the name and load the steps only when needed.", "SKILL.md, reviewed before saving"],
     ["M4 5h2v2H4zm4 .5h8M4 9h2v2H4zm4 .5h8M4 13h2v2H4zm4 .5h8",
@@ -976,7 +1085,20 @@ function siteSections() {
   </section>
   ${closer("Stop paying for cold starts", "Free. One command. Everything stays on your machine.")}`;
 
-  return { features, why };
+  return { features, why, featureCards };
+}
+
+function featureCardsHtml() {
+  return siteSections().featureCards;
+}
+
+function closerHtml(title, line) {
+  return `
+  <section class="closer">
+    <h2>${title}</h2>
+    <p>${line}</p>
+    ${installCommands()}
+  </section>`;
 }
 
 function featuresPage() {
@@ -988,29 +1110,163 @@ function whyPage() {
 }
 
 function landing() {
-  const jump = (href, title, line) =>
-    `<a class="hero-jump" href="${href}"><strong>${title}</strong><span>${line}</span></a>`;
+  const prim = (n, title, body, eg) =>
+    `<article class="prim"><p class="prim-n">${n}</p><h3>${title}</h3><p>${body}</p><p class="eg">${eg}</p></article>`;
+  const setupTab = (id, label, active) =>
+    `<button type="button" class="cmd-tab${active ? " active" : ""}" data-cmd="${id}" role="tab" aria-selected="${active ? "true" : "false"}">${label}</button>`;
+  const setupPanel = (id, cmd, note, active) => `<div class="cmd-panel${active ? " active" : ""}" data-panel="${id}">
+      <div class="cmd-row"><code id="setup-${id}">${cmd}</code><button type="button" class="btn compact" data-copy="setup-${id}">Copy</button></div>
+      <p class="setup-note">${note}</p>
+    </div>`;
+  const mcpJson = `{
+  "mcpServers": {
+    "amem": { "command": "npx", "args": ["-y", "@iamem/amem", "mcp"] }
+  }
+}`;
+  const row = (label, us, saas, logs, local) =>
+    `<tr><th scope="row">${label}</th><td class="us">${us}</td><td>${saas}</td><td>${logs}</td><td>${local}</td></tr>`;
+  const Y = (t) => `<span class="y">✓</span> ${t}`;
+  const N = (t) => `<span class="n">✕</span> ${t}`;
+  const M = (t) => `<span class="m">~</span> ${t}`;
+  const faq = (q, a) => `<details><summary>${q}</summary><p>${a}</p></details>`;
+
   return siteChrome(
     "start",
     `<main>
-  <section class="hero hero-full">
-    <div class="hero-art" aria-hidden="true">
-      <img src="/public/amem-ui.png" alt="" width="1600" height="1000"/>
-    </div>
-    <div class="hero-panel">
-      <p class="hero-kicker">Local agent memory</p>
-      <p class="hero-brand">amem</p>
-      <h1>Everything is free</h1>
-      <p class="hero-lead">Agents forget. amem does not. Memory, skills, tasks and the desktop app give every coding agent what it learned last time. Facts stay in <code>~/.amem</code> on your machine. One command, then open the UI.</p>
-      ${installCommands()}
-      <nav class="hero-jumps" aria-label="Learn more">
-        ${jump("/features", "Features", "Everything in the box")}
-        ${jump("/why", "Why amem", "Time, speed and money")}
-        ${jump("/what", "How it works", "A day with amem, privacy")}
-      </nav>
+  <section class="lp-hero">
+    <div class="hero-art" aria-hidden="true"><img src="/public/amem-ui.png" alt="" width="1600" height="1000"/></div>
+    <div class="lp-hero-in">
+      <div>
+        <p class="lp-eyebrow">100% Local • Zero Cloud • Single SQLite File</p>
+        <h1 class="lp-h1">Stop paying your AI agent to re-learn your codebase every session.</h1>
+        <p class="lp-sub">amem gives Claude Code, Cursor, Codex, and Windsurf persistent file-anchored facts, on-demand skills, and a shared task board, stored locally in <code>~/.amem</code> with zero API keys, zero embedding daemons, and zero SaaS fees.</p>
+        ${installCommands(false)}
+        <p class="lp-cta2">Then open the local UI: <code>amem ui</code> <span>→ 127.0.0.1:7843</span></p>
+        <ul class="lp-facts"><li>Free &amp; open source</li><li>Any MCP client</li><li>Node 20+</li><li><a href="https://github.com/sslugic/amem" style="color:inherit">Source on GitHub</a></li></ul>
+      </div>
+      <div class="mock" role="group" aria-label="Preview of the amem ui dashboard">
+        <div class="mock-bar"><i></i><i></i><i></i><span>127.0.0.1:7843 · amem ui</span></div>
+        <div class="mock-tabs" role="tablist">
+          <button type="button" class="mock-tab active" data-mock="facts" role="tab" aria-selected="true">Facts</button>
+          <button type="button" class="mock-tab" data-mock="review" role="tab" aria-selected="false">Review queue</button>
+          <button type="button" class="mock-tab" data-mock="tasks" role="tab" aria-selected="false">Tasks</button>
+        </div>
+        <div class="mock-pane active" data-pane="facts">
+          <div class="mf"><span class="pill pin">pinned</span><b>Webhooks require the raw body for signature checks.</b><small>gotcha · src/webhooks/stripe.ts</small></div>
+          <div class="mf"><span class="pill stale">stale</span><b>Migrations run with <code>pnpm db:migrate</code> before tests.</b><small>howto · package.json changed after this fact</small></div>
+          <div class="mf"><span class="pill ok">fresh</span><b>JWT login middleware validates the session on every API call.</b><small>constraint · src/auth/middleware.ts</small></div>
+          <div class="mf"><span class="pill">expires 2d</span><b>Staging queue consumer paused during the incident.</b><small>session · ttl 2 days</small></div>
+        </div>
+        <div class="mock-pane" data-pane="review">
+          <div class="mr"><span>Release steps for the iOS app <em class="pill">new skill</em></span><span class="mr-act"><span class="y">Keep</span><span>Dismiss</span></span></div>
+          <div class="mr"><span>“Retry webhooks 5× not 3×” replaces an older fact</span><span class="mr-act"><span class="y">Retire old</span><span>Keep both</span></span></div>
+          <div class="mr"><span>3 facts point at files that changed</span><span class="mr-act"><span class="y">Review</span></span></div>
+        </div>
+        <div class="mock-pane" data-pane="tasks">
+          <div class="board">
+            <div class="col"><h4>Backlog</h4><div class="card">Coverage for refund webhooks<em>from Cursor</em></div><div class="card">Rotate signing secret</div></div>
+            <div class="col"><h4>Next</h4><div class="card">Drop legacy login page</div></div>
+            <div class="col doing"><h4>Doing</h4><div class="card">Fix OAuth redirect loop<em>Claude Code · now</em></div></div>
+            <div class="col done"><h4>Done</h4><div class="card">Pin Node 20 in CI</div></div>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
-</main>`,
+
+  <section class="sec" id="how">
+    <div class="sec-head">
+      <p class="sec-kicker">How it works</p>
+      <h2>Three primitives. One local file.</h2>
+      <p class="sec-lead">Hooks hand your agent a small, ranked packet at session start and on each prompt. It reads facts first and opens files second.</p>
+    </div>
+    <div class="prim-grid">
+      ${prim("01 / facts", "File-anchored facts, with automatic staleness detection", "Memories bind directly to the source files they describe. When those files change, amem flags every dependent fact as stale for review, so outdated rules never poison future prompts.", "“Webhooks require the raw body for signature checks.” → <code>src/webhooks/stripe.ts</code>")}
+      ${prim("02 / skills", "On-demand skills", "Store repeatable workflows like release, deploy or migration procedures. Agents see a one-line index and load the full steps only when relevant, instead of bloating every system prompt.", "<code>files: [\"*.swift\"]</code> → hint: <b>ios-release</b> applies here")}
+      ${prim("03 / tasks", "Cross-agent task board", "A persistent Backlog → Next → Doing → Done board that every agent reads and updates. Start a task in Cursor and pick up the exact state in Claude Code.", "<code>amem_task_update { status: \"doing\" }</code>")}
+    </div>
+  </section>
+
+  <section class="sec" id="features">
+    <div class="sec-head">
+      <p class="sec-kicker">Everything in the box</p>
+      <h2>What else amem does for your agents</h2>
+    </div>
+    <div class="feat-grid">${featureCardsHtml()}</div>
+  </section>
+
+  <section class="sec" id="compare">
+    <div class="sec-head">
+      <p class="sec-kicker">Why developers switch</p>
+      <h2>amem vs. the alternatives</h2>
+      <p class="sec-lead">Different tools solve different problems. Here is where amem sits.</p>
+    </div>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr>
+          <th scope="col"></th>
+          <th scope="col" class="us">amem</th>
+          <th scope="col">Cloud memory SaaS<small>Mem0, Supermemory</small></th>
+          <th scope="col">Session-capture plugins<small>claude-mem</small></th>
+          <th scope="col">Local Markdown knowledge bases<small>Basic Memory</small></th>
+        </tr></thead>
+        <tbody>
+          ${row("Price", Y("Free, open source"), M("Free tier, then paid plans"), Y("Free; summaries spend your Claude tokens"), M("Free locally; paid cloud sync"))}
+          ${row("Data privacy", Y("One SQLite file in ~/.amem; UI binds to 127.0.0.1"), N("Stored on the vendor's servers (self-host options vary)"), M("Local files; sessions are summarized by an LLM call"), Y("Local Markdown files"))}
+          ${row("Stale-fact detection", Y("Facts anchored to files, flagged when those files change"), N("Not tied to your source files"), N("Not tied to your source files"), N("Notes are edited by hand"))}
+          ${row("Cross-IDE support", Y("Claude Code, Cursor, Codex, Windsurf, Copilot, Zed + any MCP client"), M("Through their API or MCP server"), M("Built for Claude Code"), Y("Any MCP client"))}
+          ${row("Setup overhead", Y("<code>npx @iamem/amem setup</code>. No keys, no daemons"), M("Account + API key"), M("Plugin + background worker + vector DB"), M("Python install + MCP config"))}
+          ${row("Visual UI", Y("Local dashboard: facts, review queue, tasks, activity"), Y("Hosted web dashboard"), Y("Local web viewer"), M("Your editor or Obsidian"))}
+        </tbody>
+      </table>
+    </div>
+    <p class="cmp-note"><b>Fewer wasted input tokens:</b> amem injects a small, ranked, file-anchored packet, capped with <code>max_tokens</code>, instead of replaying raw transcripts or making the agent grep the tree to rebuild context every session.</p>
+    <p class="cmp-src">Comparison based on each project's public docs as of November 2026: <a href="https://mem0.ai/pricing">Mem0</a>, <a href="https://supermemory.ai/pricing">Supermemory</a>, <a href="https://github.com/thedotmack/claude-mem">claude-mem</a>, <a href="https://github.com/basicmachines-co/basic-memory">Basic Memory</a>. Spot something out of date? <a href="https://github.com/sslugic/amem/issues">Tell us</a>.</p>
+  </section>
+
+  <section class="sec" id="setup">
+    <div class="sec-head">
+      <p class="sec-kicker">One-command setup</p>
+      <h2>Works with every client you already use</h2>
+      <p class="sec-lead">Setup installs the CLI, wires the hooks, registers the MCP server and seeds the repo with build, test and CI facts from its manifests.</p>
+    </div>
+    <div class="cmd-box setup-box">
+      <div class="cmd-tabs" role="tablist">
+        ${setupTab("claude", "Claude Code", true)}
+        ${setupTab("cursor", "Cursor")}
+        ${setupTab("codex", "Codex")}
+        ${setupTab("copilot", "Copilot")}
+        ${setupTab("windsurf", "Windsurf")}
+        ${setupTab("json", "Manual MCP JSON")}
+      </div>
+      ${setupPanel("claude", "npx @iamem/amem setup --platform claude", "Adds SessionStart + prompt hooks and the MCP server. Restart Claude Code once.", true)}
+      ${setupPanel("cursor", "npx @iamem/amem setup --platform cursor", "Registers the MCP server and writes .cursor/rules/amem.mdc. Reload the window once.")}
+      ${setupPanel("codex", "npx @iamem/amem setup --platform codex", "Writes AGENTS.md so Codex checks amem first. Add the MCP entry from the Manual MCP JSON tab to Codex's config.")}
+      ${setupPanel("copilot", "npx @iamem/amem setup --platform copilot", "Writes .github/copilot-instructions.md. Add the MCP entry from the Manual MCP JSON tab in VS Code.")}
+      ${setupPanel("windsurf", "npx @iamem/amem setup --platform windsurf", "Writes the Windsurf MCP config.")}
+      <div class="cmd-panel" data-panel="json">
+        <div class="cmd-row" style="align-items:flex-start"><pre id="setup-json">${mcpJson}</pre><button type="button" class="btn compact" data-copy="setup-json">Copy</button></div>
+        <p class="setup-note">Paste into any MCP client's config (Zed, Gemini CLI, Continue, JetBrains…). <code>amem platforms</code> lists 30+ clients.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="faq">
+    <div class="sec-head"><p class="sec-kicker">FAQ</p><h2>Questions developers ask first</h2></div>
+    <div class="faq">
+      ${faq("Does anything leave my machine?", "No. Everything stays in <code>~/.amem</code>: one SQLite file, skills as Markdown, a dashboard bound to 127.0.0.1. Optional AES-256-GCM encryption at rest and scheduled local backups. Secrets are redacted before anything is saved. The anonymous usage ping is opt-in and off by default.")}
+      ${faq("Do I need Ollama or OpenAI keys?", "No. Search is SQLite FTS5 (BM25) plus small on-device embeddings that run in-process: no model downloads, no embedding daemon, no API keys.")}
+      ${faq("How do I uninstall cleanly?", "Run <code>amem uninstall</code> to see exactly what it added, then <code>amem uninstall --yes</code>. Your memory stays unless you add <code>--purge</code>. <code>amem export --format md</code> first if you want a copy.")}
+      ${faq("Can I bring my existing CLAUDE.md or .cursorrules?", "Yes. <code>amem import .</code> turns CLAUDE.md, AGENTS.md, .cursorrules and .cursor/rules/*.mdc into facts and tasks. Running it twice adds nothing new.")}
+    </div>
+  </section>
+  ${closerHtml("Give your agents a memory", "Free. One command. Everything stays on your machine.")}
+</main>
+<footer class="foot"><div class="foot-in">
+  <span>amem · local agent memory · MIT</span>
+  <nav aria-label="Footer"><a href="/features">Features</a><a href="/why">Why amem</a><a href="/what">How it works</a><a href="https://github.com/sslugic/amem">GitHub</a><a href="https://www.npmjs.com/package/@iamem/amem">npm</a></nav>
+</div></footer>`,
+    "amem — local memory for AI coding agents",
   );
 }
 

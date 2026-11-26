@@ -54,18 +54,42 @@ async function get(port, path) {
   return { status: res.status, text, location: res.headers.get("location") };
 }
 
-test("homepage is the install hero with links to the other tabs", async () => {
+test("homepage is the full landing: hero, primitives, features, comparison, setup, FAQ", async () => {
   await withShop(async (port) => {
     const { status, text } = await get(port, "/");
     assert.equal(status, 200);
-    assert.match(text, /Everything is free/);
+    assert.match(text, /100% Local • Zero Cloud • Single SQLite File/);
+    assert.match(text, /Stop paying your AI agent to re-learn your codebase every session\./);
     assert.match(text, /npx @iamem\/amem setup/);
-    assert.match(text, /hero-full/);
+    assert.match(text, /amem ui/);
+    // Dashboard preview: facts, review queue, task board.
+    assert.match(text, /data-pane="facts"/);
+    assert.match(text, /data-pane="review"/);
+    assert.match(text, /Backlog<\/h4>[\s\S]*Done<\/h4>/);
+    // Three primitives.
+    assert.match(text, /File-anchored facts, with automatic staleness detection/);
+    assert.match(text, /On-demand skills/);
+    assert.match(text, /Cross-agent task board/);
+    // Comparison table with sources.
+    assert.match(text, /<table class="cmp">/);
+    for (const row of ["Price", "Data privacy", "Stale-fact detection", "Cross-IDE support", "Setup overhead", "Visual UI"]) {
+      assert.match(text, new RegExp(`<th scope="row">${row}</th>`));
+    }
+    assert.match(text, /Mem0, Supermemory/);
+    assert.match(text, /claude-mem/);
+    assert.match(text, /Basic Memory/);
+    assert.match(text, /href="https:\/\/mem0\.ai\/pricing"/);
+    // Per-client setup tabs, each with its own copy target.
+    for (const id of ["claude", "cursor", "codex", "copilot", "windsurf", "json"]) {
+      assert.match(text, new RegExp(`data-cmd="${id}"`));
+      assert.match(text, new RegExp(`id="setup-${id}"`));
+    }
+    assert.match(text, /"args": \["-y", "@iamem\/amem", "mcp"\]/);
+    // FAQ.
+    assert.match(text, /Does anything leave my machine\?/);
+    assert.match(text, /Do I need Ollama or OpenAI keys\?/);
+    assert.match(text, /amem uninstall --yes/);
     assert.match(text, /href="\/features"/);
-    assert.match(text, /href="\/why"/);
-    assert.match(text, /href="\/what"/);
-    // Details live on their own tabs, not on the front page.
-    assert.doesNotMatch(text, /Everything in the box<\/p>\s*<h2>/);
     assert.doesNotMatch(text, /<form class="calc"/);
   });
 });
