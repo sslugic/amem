@@ -34,6 +34,41 @@ const TOOLS = [
         workspace: { type: "string", description: "Named workspace (not a git repo)" },
         platform: { type: "string" },
         sessionId: { type: "string" },
+        max_tokens: { type: "number", description: "Token budget; lowest-ranked items are dropped to fit" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "amem_bootstrap",
+    description:
+      "Session start in one call: top global rules, this project's key facts and active tasks, and 1-line hints for skills triggered by its files. Compact (~350 tokens). All arguments are optional.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workspace: { type: "string" },
+        scope: { type: "string", description: "global or project:<path> (default: current project)" },
+        files: { type: "array", items: { type: "string" }, description: "Files in play, for skill triggers" },
+        max_tokens: { type: "number", description: "Default 350" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "amem_search",
+    description:
+      "BM25 search across facts, skills and tasks with filters, ranked by relevance + recency + usage. Returns one line per hit; pass max_tokens to cap the size.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        types: { type: "array", items: { type: "string", enum: ["claim", "skill", "task"] } },
+        scope: { type: "string", description: "global or project:<path> (default: current project + global)" },
+        status: { type: "string", description: "claims: active|all; tasks: backlog|next|doing|blocked|done|all" },
+        tags: { type: "array", items: { type: "string" }, description: "Match kind/anchor/tag" },
+        max_tokens: { type: "number" },
+        limit: { type: "number" },
+        workspace: { type: "string" },
       },
       required: ["query"],
     },
@@ -56,6 +91,8 @@ const TOOLS = [
         kind: { type: "string" },
         anchors: { type: "array", items: { type: "string" } },
         supersedes: { type: "array", items: { type: "string" }, description: "Claim ids this fact replaces" },
+        ttl_days: { type: "number", description: "Expire after N days (temporary notes)" },
+        expires_at: { type: "string", description: "ISO expiry; alternative to ttl_days" },
       },
       required: ["text"],
     },
@@ -140,6 +177,11 @@ const TOOLS = [
           type: "string",
           description: "Optional: rank the index against this task description",
         },
+        files: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional: files in play; returns hints for skills whose file globs match",
+        },
       },
       required: [],
     },
@@ -184,6 +226,8 @@ const TOOLS = [
           type: "string",
           description: "Full SKILL.md, or the markdown body to wrap",
         },
+        files: { type: "array", items: { type: "string" }, description: "Trigger globs, e.g. *.swift" },
+        keywords: { type: "array", items: { type: "string" }, description: "Trigger keywords" },
         sessionId: {
           type: "string",
           description: "Optional conversation id, so amem can clear the nudge that prompted this",
@@ -435,6 +479,7 @@ function runTool(name: string, args: Record<string, unknown>, fallbackWorkspace?
         workspace,
         platform: typeof args.platform === "string" ? args.platform : "mcp",
         sessionId: typeof args.sessionId === "string" ? args.sessionId : undefined,
+        max_tokens: typeof args.max_tokens === "number" ? args.max_tokens : undefined,
       },
       { workspace },
     );
@@ -443,6 +488,41 @@ function runTool(name: string, args: Record<string, unknown>, fallbackWorkspace?
     }
     const body = result.body as { markdown?: string };
     return textResult(body.markdown || JSON.stringify(result.body));
+  }
+  if (name === "amem_bootstrap") {
+    const result = api(
+      "POST",
+      "/api/session-bootstrap",
+      {
+        scope: typeof args.scope === "string" ? args.scope : undefined,
+        files: Array.isArray(args.files) ? args.files : undefined,
+        max_tokens: typeof args.max_tokens === "number" ? args.max_tokens : undefined,
+      },
+      { workspace },
+    );
+    if (result.status >= 400) return apiResult(result);
+    return textResult((result.body as { markdown: string }).markdown);
+  }
+  if (name === "amem_search") {
+    const query = typeof args.query === "string" ? args.query : "";
+    if (!query.trim()) return textResult("query is required", true);
+    const result = api(
+      "POST",
+      "/api/search",
+      {
+        query,
+        types: args.types,
+        scope: typeof args.scope === "string" ? args.scope : undefined,
+        status: typeof args.status === "string" ? args.status : undefined,
+        tags: args.tags,
+        max_tokens: typeof args.max_tokens === "number" ? args.max_tokens : undefined,
+        limit: typeof args.limit === "number" ? args.limit : undefined,
+      },
+      { workspace },
+    );
+    if (result.status >= 400) return apiResult(result);
+    const body = result.body as { markdown: string; engine: string; usedTokens: number; truncated: boolean };
+    return textResult(`${body.markdown}\n\n_engine=${body.engine} tokens=${body.usedTokens}${body.truncated ? " truncated" : ""}_`);
   }
   if (name === "amem_recipe") {
     const result = api("GET", "/api/recipe", null);
@@ -462,6 +542,8 @@ function runTool(name: string, args: Record<string, unknown>, fallbackWorkspace?
         kind: typeof args.kind === "string" ? args.kind : "session",
         anchors: args.anchors,
         supersedes: args.supersedes,
+        ttl_days: args.ttl_days,
+        expires_at: args.expires_at,
         source: "mcp",
       },
       { workspace },
@@ -520,9 +602,11 @@ function runTool(name: string, args: Record<string, unknown>, fallbackWorkspace?
   if (name === "amem_skill_list") {
     const query: Record<string, string> = {};
     if (typeof args.query === "string" && args.query.trim()) query.q = args.query.trim();
+    if (Array.isArray(args.files)) query.files = args.files.filter((f) => typeof f === "string").join(",");
     const result = api("GET", "/api/skills", null, { query });
     if (result.status >= 400) return apiResult(result);
-    return jsonResult(compactSkillIndex(result.body, Boolean(query.q)));
+    const hints = (result.body as { hints?: unknown[] }).hints ?? [];
+    return jsonResult({ ...compactSkillIndex(result.body, Boolean(query.q)), ...(hints.length ? { hints } : {}) });
   }
   if (name === "amem_skill_view") {
     const skillName = typeof args.name === "string" ? args.name.trim() : "";
@@ -548,6 +632,8 @@ function runTool(name: string, args: Record<string, unknown>, fallbackWorkspace?
         name: skillName,
         description: typeof args.description === "string" ? args.description : "",
         content: typeof args.content === "string" ? args.content : "",
+        files: args.files,
+        keywords: args.keywords,
         session_id: typeof args.sessionId === "string" ? args.sessionId : undefined,
       },
       { workspace },
