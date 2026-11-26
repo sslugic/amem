@@ -1,10 +1,18 @@
 import { createOrbitViz } from "./orbit.js";
+import { buildScopeEntries, groupScopeEntries, friendlyScopeLabel, homeShort } from "./scope.js";
 
 const PLATFORM_STORAGE = "amem.selectedPlatforms";
 const WELCOME_STORAGE = "amem.welcome.dismissed";
 const BRAIN_SCOPE_STORAGE = "amem.brain.scope";
 const MEMORY_VIZ_STORAGE = "amem.memory.viz";
-const TABS = ["setup", "dashboard", "brain", "analytics", "stats", "tasks", "skills", "activity"];
+const TABS = ["dashboard", "activity", "memory", "skills", "tasks", "insights", "settings"];
+/** Old tab names from bookmarks and earlier versions → the one current name per page. */
+const TAB_ALIASES = { brain: "memory", setup: "settings", analytics: "insights", stats: "insights", home: "dashboard" };
+
+function canonicalTab(tab) {
+  const t = TAB_ALIASES[tab] || tab;
+  return TABS.includes(t) || t === "welcome" ? t : null;
+}
 const VIZ_MODES = ["map", "blocks", "orbit"];
 const FALLBACK_CLIENTS = [
   { id: "cursor", label: "Cursor", hint: "Rules, skills, hooks", group: "ide", popular: true },
@@ -93,10 +101,7 @@ function dismissWelcome() {
 }
 
 function initialTab() {
-  const fromUrl = initialUrl.get("tab");
-  if (fromUrl === "stats") return "analytics";
-  if (TABS.includes(fromUrl)) return fromUrl;
-  return "dashboard";
+  return canonicalTab(initialUrl.get("tab")) || "dashboard";
 }
 
 /** All features are free and unlocked. */
@@ -198,10 +203,7 @@ function bindVizToggle(root = document) {
 }
 
 const state = {
-  tab: (() => {
-    const t = initialTab();
-    return t === "stats" ? "analytics" : t;
-  })(),
+  tab: initialTab(),
   repoId: initialUrl.get("repo") || null,
   path: initialUrl.get("path") || null,
   status: null,
@@ -405,10 +407,10 @@ function writeUrlState() {
 }
 
 function setTab(tab) {
-  if (tab === "stats") tab = "analytics";
+  tab = canonicalTab(tab) || "dashboard";
   // Paid licenses: Plans is a sell page — don't open it; Setup still has Apply license.
   if (tab === "welcome" && isPaidLicense()) tab = "dashboard";
-  if (tab === "brain") {
+  if (tab === "memory") {
     state.brainAll = true;
     persistBrainAll(true);
     state.brainError = null;
@@ -422,7 +424,7 @@ function setTab(tab) {
   } else {
     stopAllViz();
   }
-  if (tab !== "setup") mountVaultIn(null);
+  if (tab !== "settings") mountVaultIn(null);
   const changed = state.tab !== tab;
   state.tab = tab;
   document.querySelectorAll("button[data-tab]").forEach((b) => {
@@ -435,12 +437,12 @@ function setTab(tab) {
 
 const TAB_TITLES = {
   dashboard: "Home",
-  brain: "Memory",
+  memory: "Memory",
   tasks: "Tasks",
   skills: "Skills",
-  analytics: "Insights",
+  insights: "Insights",
   activity: "Activity",
-  setup: "Settings",
+  settings: "Settings",
   welcome: "amem",
 };
 
@@ -715,13 +717,13 @@ function paintVaultPassButtons() {
 async function focusPersonal() {
   const existing = listedRepos().find(isPersonal);
   if (existing) {
-    await focusRepo({ repoId: existing.id, tab: state.tab === "setup" ? "setup" : state.tab });
+    await focusRepo({ repoId: existing.id, tab: state.tab === "settings" ? "settings" : state.tab });
     return;
   }
   try {
     const created = await apiUnscoped("/api/workspaces/personal", { method: "POST", body: "{}" });
     state.repos = (await apiUnscoped("/api/repos")).repos || [];
-    await focusRepo({ repoId: created.repo?.id, tab: "brain" });
+    await focusRepo({ repoId: created.repo?.id, tab: "memory" });
   } catch (e) {
     notify(e.message);
   }
@@ -854,7 +856,7 @@ function isTrackingPath(path) {
 async function loadScan({ force = false } = {}) {
   if (state.scan && !force) return;
   state.scanLoading = true;
-  if (state.tab === "setup") renderSetup();
+  if (state.tab === "settings") renderSetup();
   try {
     const [scan, service] = await Promise.all([
       apiUnscoped("/api/scan"),
@@ -900,88 +902,162 @@ function memoryLabel(repoId) {
   return prettyRepoName(r.repo_name);
 }
 
-function switcherLabel(r) {
-  const n = r.counts?.claims ?? 0;
-  const facts = `${n} fact${n === 1 ? "" : "s"}`;
-  if (isWorkspace(r)) {
-    const slug = r.slug || r.repo_name;
-    if (String(r.repo_name).toLowerCase() !== String(slug).toLowerCase()) {
-      return `${r.repo_name} · ${slug} · ${facts}`;
-    }
-    return `${r.repo_name} · ${facts}`;
+const PINNED_SCOPES_STORAGE = "amem.scope.pinned";
+const TEMP_OPEN_STORAGE = "amem.scope.tempOpen";
+
+function loadPinnedScopes() {
+  try {
+    const v = JSON.parse(localStorage.getItem(PINNED_SCOPES_STORAGE) || "[]");
+    return Array.isArray(v) ? v.map(String) : [];
+  } catch {
+    return [];
   }
-  return `${r.repo_name} · ${shortPath(r.root_path)}`;
 }
 
-function fillRepoSelect() {
-  const select = $("#repoSelect");
-  if (!select) return;
-  const previous = select.value;
-  select.replaceChildren();
+function togglePinnedScope(id) {
+  const pins = new Set(loadPinnedScopes());
+  if (pins.has(id)) pins.delete(id);
+  else pins.add(id);
+  try {
+    localStorage.setItem(PINNED_SCOPES_STORAGE, JSON.stringify([...pins]));
+  } catch {
+    /* storage blocked */
+  }
+}
 
+function tempSectionOpen() {
+  try {
+    return localStorage.getItem(TEMP_OPEN_STORAGE) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** The repo the scope picker currently shows (null for All memory). */
+function currentScopeRepo() {
+  if (state.brainAll) return null;
   const repos = listedRepos();
   const bound = matchBoundRepo();
   const currentId = bound?.id || state.status?.repo?.id || state.repoId;
   const currentPath = state.status?.identity?.rootPath || state.path;
-  const inList = Boolean(bound || (currentId && repos.some((r) => r.id === currentId)));
+  return repos.find((r) => r.id === currentId) || repos.find((r) => samePath(r.root_path, currentPath)) || null;
+}
 
-  const addGroup = (label, items) => {
-    if (!items.length) return;
-    const group = document.createElement("optgroup");
-    group.label = label;
-    for (const r of items) {
-      const opt = document.createElement("option");
-      opt.value = `repo:${r.id}`;
-      opt.textContent = switcherLabel(r);
-      if (!state.brainAll && (r.id === currentId || samePath(r.root_path, currentPath))) opt.selected = true;
-      group.appendChild(opt);
-    }
-    select.appendChild(group);
-  };
-
-  const allOpt = document.createElement("option");
-  allOpt.value = "__all__";
-  allOpt.textContent = "All memory";
-  if (state.brainAll) allOpt.selected = true;
-  select.appendChild(allOpt);
-
-  // Personal memory is a scope like any other: pick it here (it is created on first use).
-  const personal = repos.find(isPersonal);
-  const personalOpt = document.createElement("option");
-  personalOpt.value = personal ? `repo:${personal.id}` : "__personal__";
-  personalOpt.textContent = personal ? `Personal · ${personal.counts?.claims ?? 0} facts` : "Personal";
-  if (personal && !state.brainAll && personal.id === currentId) personalOpt.selected = true;
-  select.appendChild(personalOpt);
-  addGroup(
-    "Git repos",
-    repos.filter((r) => !isWorkspace(r)),
-  );
-  addGroup(
-    "Workspaces",
-    repos.filter((r) => isWorkspace(r) && !isPersonal(r)),
-  );
-
-  if (!inList && currentPath) {
-    const opt = document.createElement("option");
-    opt.value = `path:${currentPath}`;
-    opt.textContent = `${state.status?.identity?.repoName || currentPath} · not initialized`;
-    if (!state.brainAll) opt.selected = true;
-    select.appendChild(opt);
+/** Paint the scope button (label + path) and, when open, the searchable list. */
+function fillRepoSelect() {
+  const label = $("#scopeBtnLabel");
+  const sub = $("#scopeBtnSub");
+  const btn = $("#scopeBtn");
+  if (!label) return;
+  const current = currentScopeRepo();
+  const currentPath = state.status?.identity?.rootPath || state.path;
+  if (state.brainAll) {
+    label.textContent = "All memory";
+    sub.textContent = `${listedRepos().length} projects and workspaces`;
+    btn.title = "Everything amem remembers";
+  } else if (current) {
+    label.textContent = friendlyScopeLabel(current);
+    sub.textContent = homeShort(current.root_path);
+    btn.title = current.root_path || "";
+  } else if (currentPath) {
+    label.textContent = state.status?.identity?.repoName || currentPath.split("/").pop();
+    sub.textContent = "not set up yet";
+    btn.title = currentPath;
   }
-
-  const add = document.createElement("option");
-  add.value = "__add__";
-  add.textContent = "Add git repo…";
-  select.appendChild(add);
-
-  if (!select.value && previous && previous !== "__add__") {
-    select.value = previous;
-  }
-
   const renameBtn = $("#renameWsBtn");
-  if (renameBtn) {
-    const current = repos.find((r) => `repo:${r.id}` === select.value) || matchBoundRepo() || state.status?.repo;
-    renameBtn.classList.toggle("hidden", !isWorkspace(current));
+  if (renameBtn) renameBtn.classList.toggle("hidden", !isWorkspace(current || matchBoundRepo() || state.status?.repo));
+  if (!$("#scopePop")?.classList.contains("hidden")) paintScopeList();
+}
+
+function scopeRowHtml(e, currentId) {
+  const active = e.id === currentId;
+  return `<div class="scope-row${active ? " active" : ""}" role="option" aria-selected="${active}" tabindex="-1" data-scope="${esc(e.value)}" title="${esc(e.path)}">
+    <span class="scope-row-main"><span class="scope-row-label">${esc(e.label)}${e.hint ? ` <em>${esc(e.hint)}</em>` : ""}</span><span class="scope-row-path">${esc(e.pathShort)}</span></span>
+    <span class="scope-row-count" title="${fullNumber(e.facts)} facts">${formatTokens(e.facts)}</span>
+    ${e.section === "personal" ? "" : `<button type="button" class="scope-pin${e.pinned ? " on" : ""}" data-pin="${esc(e.id)}" aria-label="${e.pinned ? "Unpin" : "Pin"} ${esc(e.label)}" title="${e.pinned ? "Unpin" : "Pin to top"}">★</button>`}
+  </div>`;
+}
+
+function paintScopeList() {
+  const list = $("#scopeList");
+  if (!list) return;
+  const query = $("#scopeSearch")?.value || "";
+  const repos = listedRepos();
+  const entries = buildScopeEntries(repos, { pinned: loadPinnedScopes() });
+  const groups = groupScopeEntries(entries, query);
+  const current = currentScopeRepo();
+  const currentId = current?.id || null;
+  const tempOpen = Boolean(query.trim()) || tempSectionOpen();
+  const allMatches = !query.trim() || "all memory".includes(query.trim().toLowerCase());
+  let html = allMatches
+    ? `<div class="scope-row${state.brainAll ? " active" : ""}" role="option" aria-selected="${state.brainAll}" tabindex="-1" data-scope="__all__"><span class="scope-row-main"><span class="scope-row-label">All memory</span><span class="scope-row-path">Everything amem remembers</span></span></div>`
+    : "";
+  const personal = groups.find((g) => g.key === "personal");
+  if (!personal.items.length && (!query.trim() || "personal".includes(query.trim().toLowerCase()))) {
+    html += `<div class="scope-section-title">Personal</div><div class="scope-row" role="option" aria-selected="false" tabindex="-1" data-scope="__personal__"><span class="scope-row-main"><span class="scope-row-label">Personal</span><span class="scope-row-path">Preferences that follow you everywhere</span></span></div>`;
+  }
+  for (const g of groups) {
+    if (!g.items.length) continue;
+    if (g.collapsible) {
+      html += `<button type="button" class="scope-section-title scope-section-toggle" data-toggle-temp aria-expanded="${tempOpen}">${tempOpen ? "▾" : "▸"} ${esc(g.title)} <span class="scope-section-count">${g.items.length}</span></button>`;
+      if (!tempOpen) continue;
+    } else {
+      html += `<div class="scope-section-title">${esc(g.title)}</div>`;
+    }
+    html += g.items.map((e) => scopeRowHtml(e, currentId)).join("");
+  }
+  const currentPath = state.status?.identity?.rootPath || state.path;
+  if (currentPath && !repos.some((r) => samePath(r.root_path, currentPath)) && !query.trim()) {
+    html += `<div class="scope-section-title">This folder</div><div class="scope-row" role="option" tabindex="-1" data-scope="path:${esc(currentPath)}"><span class="scope-row-main"><span class="scope-row-label">${esc(state.status?.identity?.repoName || currentPath.split("/").pop())}</span><span class="scope-row-path">not set up yet</span></span></div>`;
+  }
+  if (!html) html = `<p class="scope-empty">No project matches “${esc(query)}”. <button type="button" class="linkish small" data-scope="__add__">Add a project</button></p>`;
+  list.innerHTML = html;
+}
+
+function setScopeOpen(open) {
+  const pop = $("#scopePop");
+  const btn = $("#scopeBtn");
+  if (!pop || !btn) return;
+  pop.classList.toggle("hidden", !open);
+  btn.setAttribute("aria-expanded", String(open));
+  if (open) {
+    const search = $("#scopeSearch");
+    if (search) search.value = "";
+    paintScopeList();
+    search?.focus();
+  }
+}
+
+async function chooseScope(value) {
+  setScopeOpen(false);
+  if (value === "__add__") {
+    setAddPanel(true);
+    return;
+  }
+  if (value === "__personal__") {
+    state.brainAll = false;
+    persistBrainAll(false);
+    await focusPersonal();
+    return;
+  }
+  if (value === "__all__") {
+    state.brainAll = true;
+    persistBrainAll(true);
+    writeUrlState();
+    fillRepoSelect();
+    await render();
+    return;
+  }
+  if (value.startsWith("repo:")) {
+    state.brainAll = false;
+    persistBrainAll(false);
+    await focusRepo({ repoId: value.slice(5), tab: state.tab });
+    return;
+  }
+  if (value.startsWith("path:")) {
+    state.brainAll = false;
+    persistBrainAll(false);
+    await focusRepo({ path: value.slice(5), tab: "settings" });
   }
 }
 
@@ -1021,15 +1097,16 @@ function setAddPanel(open) {
   }
 }
 
-async function focusRepo({ repoId = null, path = null, tab = "setup" } = {}) {
+async function focusRepo({ repoId = null, path = null, tab = "settings" } = {}) {
   state.repoId = repoId;
   state.path = path;
   state.tab = tab;
   state.graph = null;
   state.usage = null;
   state.activeEventId = null;
-  document.querySelectorAll(".tabs button").forEach((b) => {
-    b.classList.toggle("active", b.dataset.tab === tab);
+  state.tab = canonicalTab(tab) || "dashboard";
+  document.querySelectorAll("button[data-tab]").forEach((b) => {
+    b.classList.toggle("active", b.dataset.tab === state.tab);
   });
   writeUrlState();
   await refreshStatus();
@@ -1040,7 +1117,7 @@ async function openAddedPath() {
   const path = $("#addRepoPath")?.value.trim();
   if (!path) return;
   try {
-    await focusRepo({ path, tab: "setup" });
+    await focusRepo({ path, tab: "settings" });
     setAddPanel(false);
   } catch (e) {
     notify(e.message);
@@ -1428,7 +1505,7 @@ function wireProOnboard(idPrefix) {
         } catch (schedErr) {
           if (msg) msg.textContent = `Pro retrieval is on. Hygiene schedule failed: ${schedErr?.message || schedErr}`;
           if (state.tab === "welcome") renderWelcome();
-          else if (state.tab === "setup") renderSetup();
+          else if (state.tab === "settings") renderSetup();
           return;
         }
       }
@@ -1438,21 +1515,21 @@ function wireProOnboard(idPrefix) {
           : "Pro retrieval is on. Run a showdown in Memory anytime.";
       }
       if (state.tab === "welcome") renderWelcome();
-      else if (state.tab === "setup") renderSetup();
+      else if (state.tab === "settings") renderSetup();
     } catch (e) {
       if (msg) msg.textContent = e?.message || String(e);
     }
   });
   $(`#${idPrefix}OpenReview`)?.addEventListener("click", () => {
     state.brainFilter = "review";
-    setTab("brain");
+    setTab("memory");
   });
   $(`#${idPrefix}RulesSync`)?.addEventListener("click", async () => {
     try {
       const result = await api("/api/rules/sync", { method: "POST", body: "{}" });
       markProOnboardDone(["rules"]);
       if (msg) msg.textContent = result?.path ? `Wrote ${result.path}` : "Rules synced.";
-      if (state.tab === "setup") renderSetup();
+      if (state.tab === "settings") renderSetup();
     } catch (e) {
       if (msg) msg.textContent = e?.message || String(e);
     }
@@ -1887,7 +1964,7 @@ function bindSetupEvents(main, ctx) {
       notify(e.message);
     }
   });
-  $("#openBrain")?.addEventListener("click", () => setTab("brain"));
+  $("#openBrain")?.addEventListener("click", () => setTab("memory"));
   $("#seePlans")?.addEventListener("click", () => setTab("welcome"));
   wireLicenseApply("setup", async () => {
     await refreshVault();
@@ -1917,7 +1994,7 @@ function bindSetupEvents(main, ctx) {
   main.querySelectorAll("[data-focus-ws]").forEach((el) => {
     el.addEventListener("click", () => {
       const id = el.dataset.focusWs;
-      if (id && id !== focused?.id) focusRepo({ repoId: id, tab: "setup" });
+      if (id && id !== focused?.id) focusRepo({ repoId: id, tab: "settings" });
     });
   });
 }
@@ -3705,10 +3782,6 @@ function renderSkills() {
           <h1>Skills</h1>
           <p class="sub">Procedural memory — ${skills.length} skill(s) agents can load on demand. Facts live in Memory.</p>
         </div>
-        <div class="dash-actions">
-          <button class="btn secondary small" type="button" data-go="brain">Open Memory</button>
-          <button class="btn secondary small" type="button" data-go="tasks">Tasks</button>
-        </div>
       </header>
       <p class="note">Stored in <code>${esc(state.skillsDir || "~/.amem/skills")}</code> · agents see names and descriptions only until they load one</p>
       ${draftsHtml}
@@ -3846,8 +3919,6 @@ function renderTasks() {
           <button class="btn secondary small" type="button" id="tasksScope">${
             state.brainAll ? "Show this folder only" : "Show all memory"
           }</button>
-          <button class="btn secondary small" type="button" data-go="brain">Open Memory</button>
-          <button class="btn secondary small" type="button" data-go="dashboard">Dashboard</button>
         </div>
       </header>
       <p class="note">${openCount} open · agents add tasks as they work, or add one below${
@@ -4024,28 +4095,28 @@ function renderDashboard() {
           <p class="sub">Here is what your agents remember${focus && focus !== "All memory" ? ` in <strong>${esc(prettyRepoName(focus))}</strong>` : ""}. It all stays on this machine.</p>
         </div>
         <div class="page-actions">
-          <button class="btn small" type="button" data-go="brain">Open memory</button>
+          <button class="btn small" type="button" data-go="memory">Open memory</button>
         </div>
       </header>
 
       <div class="stat-row">
-        <button type="button" class="stat" data-go="brain" data-filter="files">
+        <button type="button" class="stat" data-go="memory" data-filter="files">
           <span class="stat-num">${claims.length}</span><span class="stat-label">facts remembered</span>
         </button>
-        <button type="button" class="stat ${pendingTotal ? "attention" : ""}" data-go="brain" data-filter="drafts">
+        <button type="button" class="stat ${pendingTotal ? "attention" : ""}" data-go="memory" data-filter="drafts">
           <span class="stat-num">${pendingTotal}</span><span class="stat-label">${pendingTotal === 1 ? "note" : "notes"} to review</span>
         </button>
-        <button type="button" class="stat" data-go="analytics">
+        <button type="button" class="stat" data-go="insights">
           <span class="stat-num">${usedThisWeek}</span><span class="stat-label">times agents used memory this week</span>
         </button>
-        <button type="button" class="stat" data-go="analytics">
+        <button type="button" class="stat" data-go="insights">
           <span class="stat-num">~${esc(formatDuration(totals.estimatedMsSaved))}</span><span class="stat-label">saved in the last ${state.usage?.days ?? 30} days</span>
         </button>
       </div>
 
       <div class="home-grid">
         <article class="card card-tall">
-          <header class="card-head"><h2>Recent work</h2><button type="button" class="linkish small" data-go="brain" data-filter="files">All facts</button></header>
+          <header class="card-head"><h2>Recent work</h2><button type="button" class="linkish small" data-go="memory" data-filter="files">All facts</button></header>
           ${
             recentWork.length
               ? `<ul class="line-list">${recentWork
@@ -4062,13 +4133,13 @@ function renderDashboard() {
         </article>
 
         <article class="card">
-          <header class="card-head"><h2>Needs your review</h2>${pendingTotal ? `<button type="button" class="linkish small" data-go="brain" data-filter="drafts">Review all</button>` : ""}</header>
+          <header class="card-head"><h2>Needs your review</h2>${pendingTotal ? `<button type="button" class="linkish small" data-go="memory" data-filter="drafts">Review all</button>` : ""}</header>
           ${
             pendingTotal
               ? `<ul class="line-list">${drafts
                   .slice(0, 4)
                   .map(
-                    (d) => `<li><button type="button" class="line" data-go="brain" data-filter="drafts">
+                    (d) => `<li><button type="button" class="line" data-go="memory" data-filter="drafts">
                       <span class="line-text">${esc(cleanLine(d.summary || d.title || d.proposal?.claims?.[0]?.text || "Captured note", 100))}</span>
                     </button></li>`,
                   )
@@ -4094,7 +4165,7 @@ function renderDashboard() {
         </article>
 
         <article class="card">
-          <header class="card-head"><h2>Your agents asked</h2><button type="button" class="linkish small" data-go="analytics">Insights</button></header>
+          <header class="card-head"><h2>Your agents asked</h2><button type="button" class="linkish small" data-go="insights">Insights</button></header>
           ${
             questions.length
               ? `<ul class="line-list">${questions
@@ -4124,7 +4195,7 @@ function renderDashboard() {
     btn.addEventListener("click", () => {
       const claim = claims.find((c) => c.id === btn.dataset.openClaim);
       state.brainFilter = "files";
-      setTab("brain");
+      setTab("memory");
       if (claim) {
         state.selectedNode = { type: "claim", id: claim.id, detail: claim };
       }
@@ -4138,7 +4209,7 @@ function renderAnalytics() {
   stopAllViz();
   renderPageInsight();
   if (!state.brainAll && !state.status?.repo) {
-    main.innerHTML = `<section class="hero"><div class="hero-inner"><h1>Analytics</h1><p>Pick <strong>All memory</strong> in the header, or a tracked repo, to see usage analytics.</p></div></section>`;
+    main.innerHTML = `<section class="hero"><div class="hero-inner"><h1>Insights</h1><p>Pick <strong>All memory</strong> in the header, or a tracked repo, to see insights.</p></div></section>`;
     return;
   }
   const agg = state.usage?.aggregate;
@@ -4167,10 +4238,10 @@ function renderAnalytics() {
 
   main.innerHTML = `
     <section class="stats-page analytics-page">
-      <h1>Analytics</h1>
+      <h1>Insights</h1>
       <p class="sub">Deeper usage for <strong>${esc(focus)}</strong>. Hit rate is local memory success — not Cursor→model API trips. Time and $ are proxies.</p>
       <div class="filters">
-        <select id="days" aria-label="Analytics time range">
+        <select id="days" aria-label="Insights time range">
           <option value="7" ${currentDays === "7" ? "selected" : ""}>7 days</option>
           <option value="30" ${currentDays === "30" ? "selected" : ""}>30 days</option>
           <option value="90" ${currentDays === "90" ? "selected" : ""}>90 days</option>
@@ -4527,7 +4598,7 @@ async function renderTab() {
   fillRepoSelect();
   if (state.tab === "welcome") {
     renderWelcome();
-  } else if (state.tab === "setup") {
+  } else if (state.tab === "settings") {
     try {
       await loadScan();
     } catch (e) {
@@ -4536,7 +4607,7 @@ async function renderTab() {
     if (stale()) return;
     fillRepoSelect();
     renderSetup();
-  } else if (state.tab === "brain") {
+  } else if (state.tab === "memory") {
     await refreshGraph();
     if (stale()) return;
     try {
@@ -4544,7 +4615,7 @@ async function renderTab() {
     } catch (e) {
       setMainMode("page");
       $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>Memory</h1><p>${esc(e.message || e)}</p><button class="btn" id="retryBrain" type="button">Try again</button></div></section>`;
-      $("#retryBrain")?.addEventListener("click", () => setTab("brain"));
+      $("#retryBrain")?.addEventListener("click", () => setTab("memory"));
     }
   } else if (state.tab === "dashboard") {
     stopAllViz();
@@ -4594,7 +4665,6 @@ async function renderTab() {
     renderSkills();
   } else {
     stopAllViz();
-    if (state.tab === "stats") state.tab = "analytics";
     try {
       await refreshUsage(statsScope(), state.statsDays || 30);
     } catch {
@@ -4616,12 +4686,12 @@ document.querySelectorAll("button[data-tab]").forEach((b) => {
 $("#brandBtn")?.addEventListener("click", () => setTab(isPaidLicense() ? "dashboard" : "welcome"));
 
 $("#brainSearch")?.addEventListener("input", (e) => {
-  if (state.tab !== "brain") return;
+  if (state.tab !== "memory") return;
   state.brainSearch = e.target.value;
   paintBrain();
 });
 $("#tryRetrievalBtn")?.addEventListener("click", async () => {
-  if (state.tab !== "brain") return;
+  if (state.tab !== "memory") return;
   const q = String($("#brainSearch")?.value || state.brainSearch || "").trim();
   if (!q) {
     notify("Type a query in the search box first.");
@@ -4653,13 +4723,13 @@ $("#tryRetrievalBtn")?.addEventListener("click", async () => {
   }
 });
 $("#showdownToggle")?.addEventListener("click", () => {
-  if (state.tab !== "brain") return;
+  if (state.tab !== "memory") return;
   state.showdownOpen = !state.showdownOpen;
   if (!state.showdownOpen) clearRetrievalShowdown();
   renderBrain();
 });
 $("#autoApplyAll")?.addEventListener("change", async (e) => {
-  if (state.tab !== "brain") return;
+  if (state.tab !== "memory") return;
   const on = Boolean(e.target.checked);
   try {
     const result = await apiUnscoped("/api/prefs", {
@@ -4675,7 +4745,7 @@ $("#autoApplyAll")?.addEventListener("change", async (e) => {
   }
 });
 $("#rulesSyncBtn")?.addEventListener("click", async () => {
-  if (state.tab !== "brain") return;
+  if (state.tab !== "memory") return;
   try {
     const result = await api("/api/rules/sync", { method: "POST", body: "{}" });
     notify(`Wrote ${result.pinned} pinned facts to ${result.path}`);
@@ -4684,37 +4754,62 @@ $("#rulesSyncBtn")?.addEventListener("click", async () => {
   }
 });
 
-$("#repoSelect")?.addEventListener("change", async (e) => {
-  const value = e.target.value;
-  if (value === "__add__") {
-    fillRepoSelect();
-    setAddPanel(true);
+$("#scopeBtn")?.addEventListener("click", () => setScopeOpen($("#scopePop")?.classList.contains("hidden")));
+$("#scopeSearch")?.addEventListener("input", paintScopeList);
+$("#scopeSearch")?.addEventListener("keydown", (e) => {
+  const rows = [...document.querySelectorAll("#scopeList .scope-row")];
+  if (e.key === "Escape") {
+    setScopeOpen(false);
+    $("#scopeBtn")?.focus();
+  } else if (e.key === "Enter" && rows[0]) {
+    e.preventDefault();
+    chooseScope(rows[0].dataset.scope);
+  } else if (e.key === "ArrowDown" && rows[0]) {
+    e.preventDefault();
+    rows[0].focus();
+  }
+});
+$("#scopeList")?.addEventListener("keydown", (e) => {
+  const rows = [...document.querySelectorAll("#scopeList .scope-row")];
+  const i = rows.indexOf(document.activeElement);
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    rows[Math.min(rows.length - 1, i + 1)]?.focus();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    if (i <= 0) $("#scopeSearch")?.focus();
+    else rows[i - 1]?.focus();
+  } else if (e.key === "Enter" && i >= 0) {
+    e.preventDefault();
+    chooseScope(rows[i].dataset.scope);
+  } else if (e.key === "Escape") {
+    setScopeOpen(false);
+    $("#scopeBtn")?.focus();
+  }
+});
+$("#scopeList")?.addEventListener("click", (e) => {
+  const pin = e.target.closest("[data-pin]");
+  if (pin) {
+    e.stopPropagation();
+    togglePinnedScope(pin.dataset.pin);
+    paintScopeList();
     return;
   }
-  if (value === "__personal__") {
-    state.brainAll = false;
-    persistBrainAll(false);
-    await focusPersonal();
+  const toggle = e.target.closest("[data-toggle-temp]");
+  if (toggle) {
+    try {
+      localStorage.setItem(TEMP_OPEN_STORAGE, tempSectionOpen() ? "0" : "1");
+    } catch {
+      /* storage blocked */
+    }
+    paintScopeList();
     return;
   }
-  if (value === "__all__") {
-    state.brainAll = true;
-    persistBrainAll(true);
-    writeUrlState();
-    await render();
-    return;
-  }
-  if (value.startsWith("repo:")) {
-    state.brainAll = false;
-    persistBrainAll(false);
-    await focusRepo({ repoId: value.slice(5), tab: state.tab === "setup" ? "setup" : state.tab });
-    return;
-  }
-  if (value.startsWith("path:")) {
-    state.brainAll = false;
-    persistBrainAll(false);
-    await focusRepo({ path: value.slice(5), tab: "setup" });
-  }
+  const row = e.target.closest("[data-scope]");
+  if (row) chooseScope(row.dataset.scope);
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#scopePicker")) setScopeOpen(false);
 });
 
 $("#addRepoBtn")?.addEventListener("click", () => setAddPanel(true));

@@ -3349,3 +3349,49 @@ button.linkish:focus-visible,
 .chart-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 0.35rem; vertical-align: -1px; }
 .chart-legend .hit { background: #2ec4b6; }
 .chart-legend .miss { background: #e88c5a; }
+
+/* ---- Sidebar groups ---- */
+.side-group-label { margin: 0.9rem 0 0.2rem; padding: 0 0.75rem; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.side-group-label:first-child { margin-top: 0.25rem; }
+.side-group-rule { border: 0; border-top: 1px solid var(--line); margin: 0.6rem 0.5rem; }
+
+/* ---- Scope picker ---- */
+.scope-picker { position: relative; }
+.scope-btn {
+  width: 100%; display: flex; align-items: center; gap: 0.5rem; text-align: left;
+  background: var(--bg0); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius-sm, 8px);
+  padding: 0.45rem 0.6rem 0.45rem 0.75rem; font: inherit; cursor: pointer;
+}
+.scope-btn:hover, .scope-btn[aria-expanded="true"] { border-color: var(--line-strong); }
+.scope-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.scope-btn-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.scope-btn-label { font-size: 0.8125rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-btn-sub { font-size: 0.6875rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-caret { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.scope-pop {
+  position: absolute; z-index: 60; top: calc(100% + 6px); left: 0; width: 340px; max-width: calc(100vw - 2rem);
+  background: var(--card-hi); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+  padding: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem;
+}
+.scope-search {
+  height: 2.1rem; background: var(--bg0); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 0 0.65rem; font: inherit; font-size: 0.8125rem;
+}
+.scope-search:focus { outline: none; border-color: var(--accent); }
+.scope-list { max-height: min(60vh, 460px); overflow-y: auto; display: flex; flex-direction: column; }
+.scope-section-title { margin: 0.55rem 0.4rem 0.2rem; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.scope-section-toggle { appearance: none; border: 0; background: none; text-align: left; cursor: pointer; padding: 0; font-family: inherit; }
+.scope-section-toggle:hover { color: var(--ink); }
+.scope-section-count { font-weight: 500; color: var(--muted); }
+.scope-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.5rem; border-radius: 8px; cursor: pointer; }
+.scope-row:hover, .scope-row:focus { background: var(--bg2); outline: none; }
+.scope-row.active { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.scope-row-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.scope-row-label { font-size: 0.8125rem; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-row-label em { font-style: normal; font-size: 0.6875rem; color: var(--muted); margin-left: 0.25rem; }
+.scope-row-path { font-size: 0.6875rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: ltr; }
+.scope-row-count { font-size: 0.6875rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.scope-pin { appearance: none; border: 0; background: none; color: var(--dim); cursor: pointer; font-size: 0.85rem; padding: 0.1rem 0.25rem; border-radius: 4px; opacity: 0; }
+.scope-row:hover .scope-pin, .scope-row:focus .scope-pin, .scope-pin.on, .scope-pin:focus-visible { opacity: 1; }
+.scope-pin.on { color: #f5c451; }
+.scope-pin:hover { color: #f5c451; }
+.scope-empty { margin: 0.5rem; font-size: 0.8125rem; color: var(--muted); }
