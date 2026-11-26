@@ -425,7 +425,10 @@ function setTab(tab) {
   } else {
     stopAllViz();
   }
-  if (tab !== "settings") mountVaultIn(null);
+  if (tab !== "settings") {
+    mountVaultIn(null);
+    state.settingsSection = null;
+  }
   const changed = state.tab !== tab;
   state.tab = tab;
   document.querySelectorAll("button[data-tab]").forEach((b) => {
@@ -653,6 +656,8 @@ function paintVault() {
   const scheduleBtn = $("#vaultScheduleBtn");
   const unscheduleBtn = $("#vaultUnscheduleBtn");
   if (scheduleBtn) {
+    // "Back up now" is this card's primary action; scheduling stays secondary.
+    scheduleBtn.classList.add("secondary");
     scheduleBtn.textContent = scheduled ? "Change time" : "Turn on";
     scheduleBtn.disabled = scheduled && hour !== null && select?.value === String(hour);
   }
@@ -689,7 +694,11 @@ function paintVault() {
   const unlockBtn = $("#vaultUnlockBtn");
   lockBtn?.classList.toggle("hidden", lock === "locked");
   unlockBtn?.classList.toggle("hidden", lock !== "locked");
-  if (lockBtn) lockBtn.textContent = lock === "plain" ? "Encrypt and lock" : "Lock now";
+  if (lockBtn) {
+    lockBtn.textContent = lock === "plain" ? "Encrypt and lock" : "Lock now";
+    // Encrypting is the card's main action; re-locking an unlocked store is secondary.
+    lockBtn.classList.toggle("secondary", lock !== "plain");
+  }
   paintVaultPassButtons();
 
   // Restore card
@@ -1784,8 +1793,12 @@ function renderSetup() {
         openSettingsSection(a.dataset.section);
       });
     });
-    const wanted = state.settingsSection || initialUrl.get("section");
-    state.settingsSection = null;
+    // Kept until Settings is left: Settings may draw twice while it loads.
+    if (!state.settingsSection && initialUrl.get("section") && !state.usedUrlSection) {
+      state.settingsSection = initialUrl.get("section");
+      state.usedUrlSection = true;
+    }
+    const wanted = state.settingsSection;
     if (wanted) openSettingsSection(wanted, false);
   }
 }
@@ -3021,7 +3034,7 @@ function renderBrainMap() {
       el.innerHTML = `<div class="brain-empty">
         <strong>Nothing waiting</strong>
         <p>When a Cursor session ends, amem queues a short capture here. Approve to store it as a fact, or dismiss.</p>
-        <p class="note">Tip: turn on <b>Auto-approve</b> in the top bar if you trust most captures.</p>
+        <p class="note">Tip: turn on <b>Save new captures automatically</b> under <b>More</b> in the top bar if you trust most captures.</p>
       </div>`;
       return;
     }
@@ -4023,6 +4036,12 @@ function renderSkills() {
     });
   });
 
+  if (state.openSkill) {
+    const name = state.openSkill;
+    state.openSkill = null;
+    [...main.querySelectorAll(".skill-card")].find((c) => c.dataset.name === name)?.querySelector(".skill-view")?.click();
+  }
+
   const draftAction = async (btn, path) => {
     const id = btn.closest(".skill-draft")?.getAttribute("data-id");
     if (!id) return;
@@ -4223,6 +4242,14 @@ function renderTasks() {
     });
   });
 
+  if (state.focusTaskId) {
+    const card = [...main.querySelectorAll(".tasks-card")].find((c) => c.dataset.id === state.focusTaskId);
+    state.focusTaskId = null;
+    if (card) {
+      card.classList.add("flash");
+      card.scrollIntoView({ block: "center" });
+    }
+  }
   $("#tasksProject")?.addEventListener("change", (e) => {
     state.taskProject = e.target.value;
     renderTasks();
@@ -4434,7 +4461,7 @@ function renderDashboard() {
                     </button></li>`,
                   )
                   .join("")}</ul>`
-              : `<p class="empty">Nothing yet. When an agent saves progress or a decision, it shows up here.</p>`
+              : `<p class="empty">Nothing yet. When an agent saves progress or a decision, it shows up here. <button type="button" class="linkish" data-go="memory" data-filter="files">Browse all facts</button></p>`
           }
         </article>
 
@@ -4450,7 +4477,7 @@ function renderDashboard() {
                     </button></li>`,
                   )
                   .join("")}</ul>`
-              : `<p class="empty">You're all caught up.</p>`
+              : `<p class="empty">You're all caught up. New notes captured from chats show up here for a quick yes or no.</p>`
           }
         </article>
 
@@ -4466,7 +4493,7 @@ function renderDashboard() {
                     </button></li>`,
                   )
                   .join("")}</ul>`
-              : `<p class="empty">No open tasks.</p>`
+              : `<p class="empty">No open tasks. Agents park follow-ups here as they work, or <button type="button" class="linkish" data-go="tasks">add one on the board</button>.</p>`
           }
         </article>
 
@@ -4484,7 +4511,7 @@ function renderDashboard() {
                     </div></li>`;
                   })
                   .join("")}</ul>`
-              : `<p class="empty">Questions appear here once an agent asks amem for context.</p>`
+              : `<p class="empty">Questions appear here once an agent asks amem for context. <button type="button" class="linkish" data-go="settings">Check your connected apps</button></p>`
           }
         </article>
       </div>
@@ -4875,6 +4902,175 @@ function drawChart(days) {
 }
 
 let renderSeq = 0;
+
+/* ---- Command palette (Cmd/Ctrl+K): jump to a page, scope, fact, task or skill ---- */
+const palette = { open: false, items: [], index: 0, loading: false };
+
+function paletteStaticItems() {
+  const pages = TABS.map((t) => ({ type: "Page", label: tabTitle(t), run: () => setTab(t) }));
+  const sections = SETTINGS_SECTIONS.map((sec) => ({
+    type: "Settings",
+    label: sec.label,
+    run: () => {
+      if (state.tab === "settings" && $("#settingsSubnav")) openSettingsSection(sec.id);
+      else {
+        state.settingsSection = sec.id;
+        setTab("settings");
+      }
+    },
+  }));
+  return [...pages, ...sections];
+}
+
+function paletteResults(query) {
+  const q = String(query || "").trim().toLowerCase();
+  const has = (text) => String(text || "").toLowerCase().includes(q);
+  const out = paletteStaticItems().filter((i) => !q || has(i.label));
+  const entries = buildScopeEntries(listedRepos(), { pinned: loadPinnedScopes() });
+  const scopes = [
+    { type: "Scope", label: "All memory", sub: "Everything amem remembers", run: () => chooseScope("__all__") },
+    ...entries
+      .filter((e) => (q ? has(e.label) || has(e.path) : e.section !== "temporary"))
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.facts - a.facts)
+      .map((e) => ({ type: "Scope", label: e.label, sub: e.pathShort, run: () => chooseScope(e.value) })),
+  ].filter((i) => !q || has(i.label) || has(i.sub));
+  out.push(...scopes.slice(0, q ? 8 : 5));
+  if (q.length >= 2) {
+    out.push(
+      ...(state.skills || [])
+        .filter((sk) => has(sk.name) || has(sk.description))
+        .slice(0, 6)
+        .map((sk) => ({
+          type: "Skill",
+          label: sk.name,
+          sub: cleanLine(sk.description || "", 80),
+          run: () => {
+            state.openSkill = sk.name;
+            setTab("skills");
+          },
+        })),
+    );
+    out.push(
+      ...(state.tasks || [])
+        .filter((t) => has(t.title) || has(t.body))
+        .slice(0, 6)
+        .map((t) => ({
+          type: "Task",
+          label: cleanLine(t.title, 90),
+          sub: `${t.status}${t.repo_name ? ` · ${prettyRepoName(t.repo_name)}` : ""}`,
+          run: () => {
+            state.taskProject = "";
+            state.focusTaskId = t.id;
+            if (t.status === "done") state.tasksDoneOpen = true;
+            setTab("tasks");
+          },
+        })),
+    );
+    const facts = (state.graph?.claims || []).filter((c) => has(c.text)).slice(0, 8);
+    out.push(
+      ...facts.map((c) => ({
+        type: "Fact",
+        label: cleanLine(c.text, 90),
+        sub: state.brainAll ? memoryLabel(c.repo_id) : c.kind,
+        run: () => {
+          state.brainFilter = "files";
+          state.selectedNode = { type: "claim", id: c.id, detail: c };
+          setTab("memory");
+        },
+      })),
+    );
+  }
+  return out.slice(0, 40);
+}
+
+/** Facts, tasks and skills are loaded once in the background the first time the palette opens. */
+async function paletteLoadData() {
+  if (palette.loading) return;
+  palette.loading = true;
+  const jobs = [];
+  if (!state.graph) jobs.push(refreshGraph().catch(() => {}));
+  if (!state.tasks) jobs.push(apiUnscoped("/api/tasks?scope=all&include_done=1").then((d) => { state.tasks = state.tasks || d.tasks || []; }).catch(() => {}));
+  if (!state.skills?.length) jobs.push(refreshSkills().catch(() => {}));
+  await Promise.all(jobs);
+  palette.loading = false;
+  if (palette.open) paintPalette();
+}
+
+function paintPalette() {
+  const list = $("#cmdkList");
+  if (!list) return;
+  palette.items = paletteResults($("#cmdkInput")?.value || "");
+  palette.index = Math.min(palette.index, Math.max(0, palette.items.length - 1));
+  list.innerHTML = palette.items.length
+    ? palette.items
+        .map(
+          (item, i) => `<div class="cmdk-item${i === palette.index ? " active" : ""}" role="option" id="cmdk-${i}" aria-selected="${i === palette.index}" data-i="${i}">
+            <span class="cmdk-type">${esc(item.type)}</span>
+            <span class="cmdk-label">${esc(item.label)}</span>
+            ${item.sub ? `<span class="cmdk-sub">${esc(item.sub)}</span>` : ""}
+          </div>`,
+        )
+        .join("")
+    : `<p class="cmdk-empty">${palette.loading ? "Loading facts, tasks and skills…" : "No matches. Try a page name, a project, or words from a fact."}</p>`;
+  $("#cmdkInput")?.setAttribute("aria-activedescendant", palette.items.length ? `cmdk-${palette.index}` : "");
+  list.querySelector(".cmdk-item.active")?.scrollIntoView({ block: "nearest" });
+}
+
+function setPaletteOpen(open) {
+  const root = $("#cmdk");
+  if (!root) return;
+  palette.open = open;
+  root.classList.toggle("hidden", !open);
+  if (open) {
+    palette.index = 0;
+    const input = $("#cmdkInput");
+    if (input) input.value = "";
+    paintPalette();
+    input?.focus();
+    paletteLoadData();
+  }
+}
+
+function runPaletteItem(i) {
+  const item = palette.items[i];
+  if (!item) return;
+  setPaletteOpen(false);
+  item.run();
+}
+
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    setPaletteOpen(!palette.open);
+  } else if (palette.open && e.key === "Escape") {
+    e.preventDefault();
+    setPaletteOpen(false);
+  }
+});
+$("#cmdkInput")?.addEventListener("input", () => {
+  palette.index = 0;
+  paintPalette();
+});
+$("#cmdkInput")?.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const n = palette.items.length;
+    if (!n) return;
+    palette.index = (palette.index + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+    paintPalette();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    runPaletteItem(palette.index);
+  }
+});
+$("#cmdkList")?.addEventListener("click", (e) => {
+  const row = e.target.closest("[data-i]");
+  if (row) runPaletteItem(Number(row.dataset.i));
+});
+$("#cmdk")?.addEventListener("mousedown", (e) => {
+  if (e.target.id === "cmdk") setPaletteOpen(false);
+});
+$("#cmdkOpenBtn")?.addEventListener("click", () => setPaletteOpen(true));
 
 /** Activity is its own live page; it runs inside the normal shell so the sidebar stays. */
 function renderActivity() {

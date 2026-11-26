@@ -3027,7 +3027,7 @@ button.linkish:hover code {
   --ink: #f1f5f9;
   --text: #cbd5e1;
   --muted: #94a3b8;
-  --dim: #64748b;
+  --dim: #7c8da3;          /* raised from #64748b: 4.8:1 on cards, WCAG AA */
   --accent: #10b981;
   --accent-hover: #34d399;
   --accent-ink: #022c22;
@@ -3506,3 +3506,27 @@ button.linkish:focus-visible,
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 0.6rem center;
 }
+
+/* ---- Command palette ---- */
+.cmdk-open { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; width: 100%; margin: 0.5rem 0 0.25rem; padding: 0.45rem 0.6rem 0.45rem 0.75rem; background: var(--bg0); border: 1px solid var(--line); border-radius: var(--radius-sm, 8px); color: var(--muted); font: inherit; font-size: 0.8125rem; cursor: pointer; }
+.cmdk-open:hover { border-color: var(--line-strong); color: var(--ink); }
+.cmdk-open kbd, .cmdk-foot { font-family: inherit; font-size: 0.6875rem; color: var(--muted); }
+.cmdk-open kbd { border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 0.3rem; }
+.cmdk { position: fixed; inset: 0; z-index: 120; background: rgba(0, 0, 0, 0.55); display: flex; justify-content: center; align-items: flex-start; padding: 12vh 1rem 1rem; }
+.cmdk.hidden { display: none; }
+.cmdk-box { width: min(620px, 100%); background: var(--card-hi); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55); overflow: hidden; display: flex; flex-direction: column; }
+.cmdk-input { border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); font: inherit; font-size: 1rem; padding: 0.95rem 1.1rem; outline: none; }
+.cmdk-list { max-height: min(55vh, 440px); overflow-y: auto; padding: 0.35rem; }
+.cmdk-item { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); column-gap: 0.75rem; padding: 0.5rem 0.65rem; border-radius: 8px; cursor: pointer; }
+.cmdk-item.active, .cmdk-item:hover { background: var(--bg2); }
+.cmdk-type { grid-row: span 2; align-self: center; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.cmdk-label { font-size: 0.875rem; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdk-sub { font-size: 0.75rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdk-empty { margin: 0.75rem; color: var(--muted); font-size: 0.875rem; }
+.cmdk-foot { margin: 0; padding: 0.5rem 1.1rem; border-top: 1px solid var(--line); }
+.tasks-card.flash { box-shadow: 0 0 0 2px var(--accent); }
+.info-tip::after { display: none; }
+.info-tip:hover::after, .info-tip:focus::after { display: block; }
+#settingsVaultSlot .vault-grid { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+#settingsVaultSlot .vault-card-wide { grid-column: auto; }
+#settingsEncryptionSlot .field-action input { width: 100%; }

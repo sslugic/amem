@@ -19,6 +19,9 @@
           <button class="brand" id="brandBtn" type="button">amem</button>
           <span class="brand-tag">memory for your agents</span>
         </div>
+        <button class="cmdk-open" id="cmdkOpenBtn" type="button" aria-keyshortcuts="Meta+K Control+K" title="Jump to a page, project, fact, task or skill">
+          <span>Jump to…</span><kbd id="cmdkHint">⌘K</kbd>
+        </button>
 
         <div class="side-scope">
           <span class="side-scope-label" id="scopeLabel">Showing</span>
@@ -194,6 +197,13 @@
         </div>
       </div>
     </div>
+    <div class="cmdk hidden" id="cmdk" role="dialog" aria-modal="true" aria-label="Jump to">
+      <div class="cmdk-box">
+        <input id="cmdkInput" class="cmdk-input" type="text" role="combobox" aria-expanded="true" aria-controls="cmdkList" placeholder="Jump to a page, project, fact, task or skill…" autocomplete="off" spellcheck="false" />
+        <div class="cmdk-list" id="cmdkList" role="listbox" aria-label="Results"></div>
+        <p class="cmdk-foot">↑ ↓ to move · Enter to open · Esc to close</p>
+      </div>
+    </div>
     <script>
       (function () {
         var TABS = ["dashboard", "activity", "memory", "skills", "tasks", "insights", "settings"];
@@ -202,6 +212,10 @@
         var fromUrl = params.get("tab");
         fromUrl = ALIASES[fromUrl] || fromUrl;
         var tab = TABS.indexOf(fromUrl) !== -1 ? fromUrl : "dashboard";
+        if (!/Mac|iPhone|iPad/.test(navigator.platform || "")) {
+          var hint = document.getElementById("cmdkHint");
+          if (hint) hint.textContent = "Ctrl K";
+        }
         document.querySelectorAll("button[data-tab]").forEach(function (b) {
           b.classList.toggle("active", b.getAttribute("data-tab") === tab);
         });
