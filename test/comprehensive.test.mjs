@@ -567,7 +567,7 @@ describe("attest + UI helpers", () => {
     assert.equal(isAddrInUse(new Error("nope")), false);
     const url = buildUiLandingUrl(7843, "/tmp/project");
     assert.match(url, /^http:\/\/127\.0\.0\.1:7843/);
-    assert.match(url, /tab=setup/);
+    assert.match(url, /tab=settings/);
     assert.match(url, /scope=all/);
     assert.match(url, /path=/);
   });

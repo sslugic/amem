@@ -210,7 +210,7 @@ function resolveLoopbackHost(host?: string): string {
 export function buildUiLandingUrl(port: number, cwd: string): string {
   const identity = detectRepoIdentity(cwd);
   const q = new URLSearchParams();
-  q.set("tab", "setup");
+  q.set("tab", "settings");
   q.set("scope", "all");
   q.set("path", identity.rootPath);
   return `http://127.0.0.1:${port}/?${q.toString()}`;

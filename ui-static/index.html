@@ -21,9 +21,16 @@
         </div>
 
         <div class="side-scope">
-          <label class="side-scope-label" for="repoSelect">Showing</label>
-          <div class="repo-switcher">
-            <select id="repoSelect" aria-label="Which memory to show"></select>
+          <span class="side-scope-label" id="scopeLabel">Showing</span>
+          <div class="scope-picker" id="scopePicker">
+            <button class="scope-btn" id="scopeBtn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-labelledby="scopeLabel scopeBtnLabel">
+              <span class="scope-btn-text"><span class="scope-btn-label" id="scopeBtnLabel">All memory</span><span class="scope-btn-sub" id="scopeBtnSub"></span></span>
+              <svg class="scope-caret" viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
+            </button>
+            <div class="scope-pop hidden" id="scopePop" role="dialog" aria-label="Choose which memory to show">
+              <input id="scopeSearch" class="scope-search" type="search" placeholder="Filter projects…" autocomplete="off" aria-label="Filter projects" />
+              <div class="scope-list" id="scopeList" role="listbox" aria-label="Memories"></div>
+            </div>
           </div>
           <div class="side-scope-actions">
             <button class="linkish small hidden" id="renameWsBtn" type="button">Rename</button>
@@ -32,34 +39,37 @@
         </div>
 
         <nav class="side-tabs" id="tabs" aria-label="Primary">
+          <p class="side-group-label">Overview</p>
           <button type="button" data-tab="dashboard">
             <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 9.5 10 4l7 5.5V16a1 1 0 0 1-1 1h-3.5v-4.5h-5V17H4a1 1 0 0 1-1-1z"/></svg></span>
             <span class="nav-label">Home</span>
-          </button>
-          <button type="button" data-tab="brain">
-            <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3c3.9 0 7 1.3 7 3s-3.1 3-7 3-7-1.3-7-3 3.1-3 7-3zm-7 5.5c0 1.7 3.1 3 7 3s7-1.3 7-3M3 11c0 1.7 3.1 3 7 3s7-1.3 7-3M3 6v8c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/></svg></span>
-            <span class="nav-label">Memory</span>
-          </button>
-          <button type="button" data-tab="tasks">
-            <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h2v2H4zm4 0.5h8M4 9h2v2H4zm4 .5h8M4 13h2v2H4zm4 .5h8"/></svg></span>
-            <span class="nav-label">Tasks</span>
-          </button>
-          <button type="button" data-tab="skills">
-            <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3h8l2 2v12H5zM8 8h4M8 11h4M8 14h2"/></svg></span>
-            <span class="nav-label">Skills</span>
-          </button>
-          <button type="button" data-tab="analytics">
-            <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 16h14M5 13V9m4 4V5m4 8v-6"/></svg></span>
-            <span class="nav-label">Insights</span>
           </button>
           <button type="button" data-tab="activity" title="Live view of every agent talking to amem">
             <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 10h3.5l2-5 3 10 2-5H18"/></svg></span>
             <span class="nav-label">Activity</span>
           </button>
+          <p class="side-group-label">Knowledge</p>
+          <button type="button" data-tab="memory">
+            <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3c3.9 0 7 1.3 7 3s-3.1 3-7 3-7-1.3-7-3 3.1-3 7-3zm-7 5.5c0 1.7 3.1 3 7 3s7-1.3 7-3M3 11c0 1.7 3.1 3 7 3s7-1.3 7-3M3 6v8c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/></svg></span>
+            <span class="nav-label">Memory</span>
+          </button>
+          <button type="button" data-tab="skills">
+            <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3h8l2 2v12H5zM8 8h4M8 11h4M8 14h2"/></svg></span>
+            <span class="nav-label">Skills</span>
+          </button>
+          <button type="button" data-tab="tasks">
+            <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h2v2H4zm4 0.5h8M4 9h2v2H4zm4 .5h8M4 13h2v2H4zm4 .5h8"/></svg></span>
+            <span class="nav-label">Tasks</span>
+          </button>
+          <hr class="side-group-rule" />
+          <button type="button" data-tab="insights">
+            <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 16h14M5 13V9m4 4V5m4 8v-6"/></svg></span>
+            <span class="nav-label">Insights</span>
+          </button>
         </nav>
 
         <div class="side-footer">
-          <button type="button" class="side-foot-btn" data-tab="setup" id="settingsNavBtn">
+          <button type="button" class="side-foot-btn" data-tab="settings" id="settingsNavBtn">
             <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 7a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm0-4 1.2 2 2.3-.5.5 2.3 2 1.2-1.2 2 1.2 2-2 1.2-.5 2.3-2.3-.5L10 17l-1.2-2-2.3.5-.5-2.3-2-1.2 1.2-2-1.2-2 2-1.2.5-2.3 2.3.5z"/></svg></span><span class="nav-label">Settings</span>
           </button>
           <p class="side-status" id="vaultChips"></p>
@@ -188,15 +198,12 @@
     </div>
     <script>
       (function () {
-        var TABS = ["setup", "dashboard", "brain", "analytics", "tasks", "skills", "activity"];
+        var TABS = ["dashboard", "activity", "memory", "skills", "tasks", "insights", "settings"];
+        var ALIASES = { brain: "memory", setup: "settings", analytics: "insights", stats: "insights", home: "dashboard" };
         var params = new URLSearchParams(location.search);
         var fromUrl = params.get("tab");
-        var tab = "dashboard";
-        if (fromUrl === "stats") {
-          tab = "analytics";
-        } else if (TABS.indexOf(fromUrl) !== -1) {
-          tab = fromUrl;
-        }
+        fromUrl = ALIASES[fromUrl] || fromUrl;
+        var tab = TABS.indexOf(fromUrl) !== -1 ? fromUrl : "dashboard";
         document.querySelectorAll("button[data-tab]").forEach(function (b) {
           b.classList.toggle("active", b.getAttribute("data-tab") === tab);
         });
