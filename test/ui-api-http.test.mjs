@@ -210,10 +210,12 @@ describe("UI setup stepper + brain defaults", () => {
   it("keeps Memory from going blank and shows setup as steps", () => {
     assert.match(UI_APP, /function emptyGraph/);
     assert.match(UI_APP, /let renderSeq/);
-    assert.match(UI_APP, /if \(tab === "brain"\) \{\s*state\.brainAll = true/s);
+    assert.match(UI_APP, /if \(tab === "memory"\) \{\s*state\.brainAll = true/s);
     assert.match(UI_APP, /const hasTrackedRepo = Boolean\(initialUrl\.get\("repo"\)\)/);
     assert.match(UI_APP, /if \(fromUrl === "all" \|\| !hasTrackedRepo\) return true/);
-    assert.match(UI_APP, /if \(!state\.brainAll\) opt\.selected = true/);
+    // The scope picker marks the shown memory and keeps All memory as its own row.
+    assert.match(UI_APP, /function currentScopeRepo/);
+    assert.match(UI_APP, /data-scope="__all__"/);
     assert.match(UI_APP, /function setupIsComplete/);
     // Once set up, Settings shows connections, backup and projects as cards.
     assert.match(UI_APP, /section class="page settings-page"/);
