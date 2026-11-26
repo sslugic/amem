@@ -127,3 +127,17 @@ test("how-it-works page covers problems, a day with amem and privacy", async () 
     assert.doesNotMatch(text, /What you get/);
   });
 });
+
+test("fact sheet page is in the nav and linked from the landing comparison", async () => {
+  await withShop(async (port) => {
+    const page = await get(port, "/fact-sheet");
+    assert.equal(page.status, 200);
+    assert.match(page.text, /amem: architecture and token savings/);
+    assert.match(page.text, /nav-tab active" href="\/fact-sheet"/);
+    for (const h of ["1. What amem does", "2. How it works", "3. Cost and token economics"]) assert.match(page.text, new RegExp(h));
+    assert.match(page.text, /18 MCP tools ≈ 2,800 tokens/);
+    assert.match(page.text, /4 · A stable, cacheable tool prefix/);
+    const home = await get(port, "/");
+    assert.match(home.text, /href="\/fact-sheet"/);
+  });
+});

@@ -93,6 +93,7 @@ function siteChrome(active, body, title = "amem — get started") {
       ${tab("features", "/features", "Features")}
       ${tab("why", "/why", "Why amem")}
       ${tab("what", "/what", "How it works")}
+      ${tab("facts", "/fact-sheet", "Fact sheet")}
     </nav>
   </header>
   ${body}
@@ -1224,6 +1225,7 @@ function landing() {
       </table>
     </div>
     <p class="cmp-note"><b>Fewer wasted input tokens:</b> amem injects a small, ranked, file-anchored packet, capped with <code>max_tokens</code>, instead of replaying raw transcripts or making the agent grep the tree to rebuild context every session.</p>
+    <p class="cmp-src"><a href="/fact-sheet" style="color:var(--accent)">Read the technical fact sheet →</a> architecture, budgets and the full cost comparison.</p>
     <p class="cmp-src">Comparison based on each project's public docs as of November 2026: <a href="https://mem0.ai/pricing">Mem0</a>, <a href="https://supermemory.ai/pricing">Supermemory</a>, <a href="https://github.com/thedotmack/claude-mem">claude-mem</a>, <a href="https://github.com/basicmachines-co/basic-memory">Basic Memory</a>. Spot something out of date? <a href="https://github.com/sslugic/amem/issues">Tell us</a>.</p>
   </section>
 
@@ -1267,9 +1269,77 @@ function landing() {
 </main>
 <footer class="foot"><div class="foot-in">
   <span>amem · local agent memory · MIT</span>
-  <nav aria-label="Footer"><a href="/features">Features</a><a href="/why">Why amem</a><a href="/what">How it works</a><a href="https://github.com/sslugic/amem">GitHub</a><a href="https://www.npmjs.com/package/@iamem/amem">npm</a></nav>
+  <nav aria-label="Footer"><a href="/fact-sheet">Fact sheet</a><a href="/features">Features</a><a href="/why">Why amem</a><a href="/what">How it works</a><a href="https://github.com/sslugic/amem">GitHub</a><a href="https://www.npmjs.com/package/@iamem/amem">npm</a></nav>
 </div></footer>`,
     "amem — local memory for AI coding agents",
+  );
+}
+
+
+function factSheetPage() {
+  const kv = (k, v) => `<tr><th scope="row">${k}</th><td>${v}</td></tr>`;
+  const mech = (title, items) => `<article class="what-card"><h3>${title}</h3><ul class="what-list">${items.map((i) => `<li>${i}</li>`).join("")}</ul></article>`;
+  const row = (label, a, b, c, d) => `<tr><th scope="row">${label}</th><td class="us">${a}</td><td>${b}</td><td>${c}</td><td>${d}</td></tr>`;
+  return siteChrome(
+    "facts",
+    `<main class="what">
+  <p class="sec-kicker">Technical fact sheet</p>
+  <h1>amem: architecture and token savings</h1>
+  <p class="what-lead">A local-first SQLite + MCP memory layer for AI coding agents. Every number here is reproducible: run <code>npm run bench</code>, <code>amem bootstrap --json</code> or the MCP <code>tools/list</code> call yourself.</p>
+  <table class="what-table">
+    ${kv("Product", '<code>amem</code> · npm <a href="https://www.npmjs.com/package/@iamem/amem" style="color:var(--accent)">@iamem/amem</a> · <a href="https://github.com/sslugic/amem" style="color:var(--accent)">sslugic/amem</a>')}
+    ${kv("Category", "Local-first SQLite + Model Context Protocol (MCP) memory layer for AI coding agents")}
+    ${kv("Storage", "One SQLite file, <code>~/.amem/graph.db</code> (skills as Markdown in <code>~/.amem/skills</code>). No daemons, no cloud, no API keys.")}
+    ${kv("Runtime", "Node 20+, one dependency (<code>better-sqlite3</code>). MCP over stdio (<code>amem mcp</code>) or HTTP on <code>127.0.0.1:7843</code>.")}
+    ${kv("License", "MIT")}
+  </table>
+
+  <h2>1. What amem does</h2>
+  <div class="what-grid">
+    <article class="what-card"><h3>File-anchored facts</h3><p>Rules and decisions tied to the files they describe, such as <em>“Stripe webhooks must be verified with the raw body”</em> → <code>src/webhooks/stripe.ts</code>. Each fact stores a content hash of its files; when a file changes, the fact is flagged <code>stale</code> until re-confirmed.</p></article>
+    <article class="what-card"><h3>On-demand skills</h3><p>Multi-step procedures (release, deploy, migration) live outside the system prompt as <code>SKILL.md</code>. Agents see a one-line index entry and load the body with <code>amem_skill_view</code> only when it applies.</p></article>
+    <article class="what-card"><h3>Cross-agent task board</h3><p>A persistent <code>backlog → next → doing → blocked → done</code> board per project. A task started in Cursor shows its state to Claude Code or Codex next session.</p></article>
+    <article class="what-card"><h3>Every client</h3><p>Claude Code, Cursor, Codex, Windsurf, Copilot, Gemini CLI, Zed and any MCP client (<code>amem platforms</code> lists 30+). Hooks inject a ranked packet automatically; agents can also call the tools.</p></article>
+  </div>
+
+  <h2>2. How it works</h2>
+  <div class="what-grid">
+    ${mech("SQLite FTS5 + BM25", ["Facts in <code>claims_fts</code>, skills and tasks in <code>amem_fts</code> (porter tokenizer), synced on every write.", "<code>amem_search</code> ranks by <code>bm25()</code> plus recency, usage, pins and status; filters: types, scope, status, tags.", "Small synonym groups: “auth flow” finds “JWT login middleware”.", "<code>amem_context</code> adds a 256-dimension in-process n-gram encoder: no download, no Ollama, no Python.", "No FTS5 in the SQLite build? Falls back to keyword scoring."])}
+    ${mech("Scope and <code>amem_bootstrap</code>", ["<code>global</code> rules reach every project; <code>project:&lt;path&gt;</code> facts stay with their repo; private facts never reach work.", "One startup call returns global rules, key facts, active tasks (doing first) and skill hints.", "Capped at <code>max_tokens</code>: default 350, measured 313 on a 3,400-fact memory."])}
+    ${mech("Token budgets (<code>max_tokens</code>)", ["On <code>amem_context</code> and <code>amem_search</code>; about 4 characters per token, deterministic.", "Packed in rank order, never cut mid-item; the best fact always stays.", "Reports <code>truncated</code> and <code>omitted</code> so the agent knows what it left out."])}
+    ${mech("Skill trigger hints", ["Frontmatter <code>files: [\"*.swift\", \"Package.swift\"]</code> and <code>keywords: [deploy, migration]</code>.", "Matching files or text return a one-line hint (name, what matched, summary).", "The body loads only through <code>amem_skill_view</code>."])}
+    ${mech("Supersession and TTL", ["<code>supersedes: [ids]</code> or <code>amem_supersede</code> marks old facts <code>superseded</code> with <code>superseded_by</code>; they stay as history.", "<code>ttl_days</code> or <code>expires_at</code>: expired facts leave recall at once and are kept as <code>expired</code>."])}
+    ${mech("UI, import, export", ["<code>amem ui</code>: a localhost dashboard to search, edit, pin, retire and delete facts, review drafts, run the task board and watch live activity.", "<code>amem import</code>: CLAUDE.md, AGENTS.md, .cursorrules, .mdc, Markdown, JSON; content ids mean no duplicates.", "<code>amem export --format json|md</code> keeps lineage, TTL and pins; both formats re-import."])}
+  </div>
+  <table class="what-table" style="margin-top:1rem">
+    <thead><tr><th>Retrieval benchmark (<code>npm run bench</code>, enforced in CI)</th><td>Right first</td><td>Top 3</td><td>Vague prompts given memory</td></tr></thead>
+    <tr><th scope="row">Prompt hook (automatic)</th><td>88%</td><td>97%</td><td>0%</td></tr>
+    <tr><th scope="row"><code>amem_context</code> (agent asks)</th><td>81%</td><td>94%</td><td>n/a</td></tr>
+  </table>
+
+  <h2>3. Cost and token economics</h2>
+  <div class="cmp-wrap">
+    <table class="cmp">
+      <thead><tr><th scope="col"></th><th scope="col" class="us">amem</th><th scope="col">Cloud memory SaaS<small>Mem0, Supermemory, Zep</small></th><th scope="col">Session-capture plugins<small>claude-mem</small></th><th scope="col">Local note tools<small>Basic Memory</small></th></tr></thead>
+      <tbody>
+        ${row("Hosting cost", "$0: local SQLite", "Free tiers; paid plans from about $19/mo", "$0: local", "$0 locally; optional paid sync")}
+        ${row("Background LLM extraction", "None: no model calls", "Yes: an LLM extracts or updates memories on write", "Yes: sessions summarized with Claude, on your tokens", "None: the agent writes notes")}
+        ${row("Tool-schema overhead", "18 MCP tools ≈ 2,800 tokens (fixed, cacheable)", "Varies by server", "Varies", "Varies by server")}
+        ${row("Per-call payload", "Ranked packet; <code>max_tokens</code> cap; bootstrap ≤ 350 by default; skills as one-line hints", "Top-K memories from vector search", "Summaries injected at session start", "Whole notes read on request")}
+        ${row("Outdated rules", "File-hash staleness, supersession, TTL", "LLM update and merge; not tied to files", "Accumulate; not tied to files", "Edited by hand")}
+      </tbody>
+    </table>
+  </div>
+  <div class="what-grid" style="margin-top:1rem">
+    <article class="what-card"><h3>1 · Fewer uncached input tokens</h3><p>Tool results are new content on every call, so caching never discounts them. <code>max_tokens</code> caps the packet, and skills arrive as one-line hints, not procedures.</p></article>
+    <article class="what-card"><h3>2 · Fewer startup round-trips</h3><p>One ~350-token <code>amem_bootstrap</code> replaces separate lookups for rules, facts, tasks and skills; BM25 plus synonyms raises first-pass recall.</p></article>
+    <article class="what-card"><h3>3 · Fewer wasted output tokens</h3><p>Output costs several times more than input and is never cache-discounted. Superseded, expired and stale facts are filtered or marked before they steer a wrong edit.</p></article>
+    <article class="what-card"><h3>4 · A stable, cacheable tool prefix</h3><p>The MCP tool list is fixed per version, and <code>amem ui</code>/<code>import</code>/<code>export</code> are CLI-only. Memory arrives after that prefix as hook output or tool results. Fixed cost: the ~2,800-token schema, billed in full once, then at the cache-read rate where providers cache.</p></article>
+  </div>
+  <p class="cmp-src">Measure it on your own machine: <code>amem stats</code> for hit rate and estimated savings; <code>amem_usage_report</code> to turn the estimate into a measurement from the files the agent did not need to open. Sources, checked November 2026: <a href="https://mem0.ai/pricing">Mem0</a>, <a href="https://supermemory.ai/pricing">Supermemory</a>, <a href="https://www.getzep.com">Zep</a>, <a href="https://github.com/thedotmack/claude-mem">claude-mem</a>, <a href="https://github.com/basicmachines-co/basic-memory">Basic Memory</a>. Markdown version: <a href="https://github.com/sslugic/amem/blob/main/docs/FACT_SHEET.md">docs/FACT_SHEET.md</a>.</p>
+  ${closerHtml("Try it in one command", "Free. Everything stays on your machine.")}
+</main>`,
+    "amem — technical fact sheet",
   );
 }
 
@@ -1702,6 +1772,10 @@ async function onRequest(req, res) {
     }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       html(res, 200, landing());
+      return;
+    }
+    if (req.method === "GET" && (url.pathname === "/fact-sheet" || url.pathname === "/facts")) {
+      html(res, 200, factSheetPage());
       return;
     }
     if (req.method === "GET" && url.pathname === "/what") {

@@ -87,6 +87,10 @@ Something off? `amem doctor --fix` rewires the current repo's client. To remove 
 
 The data is in [`bench/retrieval.json`](bench/retrieval.json). Add your own cases and run `npm run bench -- --misses` to see what it gets wrong.
 
+## Architecture and token savings
+
+One SQLite file in `~/.amem`, FTS5/BM25 plus on-device embeddings, MCP over stdio or localhost HTTP, and no model calls. The [technical fact sheet](docs/FACT_SHEET.md) covers the architecture, the `max_tokens` and bootstrap budgets, staleness, supersession and TTL, and a cost comparison with cloud memory services and other local tools.
+
 ## Privacy (non-negotiable)
 
 - Memory never leaves your machine: no sync, no cloud embeddings, no "share with org" mode.
