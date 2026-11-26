@@ -3335,3 +3335,17 @@ button.linkish:focus-visible,
   .page { padding: 1.25rem 1rem 2rem; }
   .settings-grid { grid-template-columns: 1fr; }
 }
+
+/* ---- UX fixes (shell) ---- */
+/* Leave room under the sidebar status so floating overlays (browser extensions,
+   OS widgets pinned bottom-left) never cover it. */
+.side-footer { padding-bottom: 3.5rem; }
+.page-pending { min-height: 40vh; }
+.activity-page { height: 100%; display: flex; }
+.activity-frame { flex: 1; width: 100%; min-height: calc(100vh - 2rem); border: 0; background: transparent; display: block; }
+#savingsChart,
+#hitMissChart { width: 100%; height: 260px; display: block; }
+.chart-legend { display: flex; gap: 1rem; margin: -0.25rem 0 0.5rem; font-size: 0.8rem; color: var(--muted); }
+.chart-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 0.35rem; vertical-align: -1px; }
+.chart-legend .hit { background: #2ec4b6; }
+.chart-legend .miss { background: #e88c5a; }

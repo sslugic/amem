@@ -4,7 +4,7 @@ const PLATFORM_STORAGE = "amem.selectedPlatforms";
 const WELCOME_STORAGE = "amem.welcome.dismissed";
 const BRAIN_SCOPE_STORAGE = "amem.brain.scope";
 const MEMORY_VIZ_STORAGE = "amem.memory.viz";
-const TABS = ["setup", "dashboard", "brain", "analytics", "stats", "tasks", "skills"];
+const TABS = ["setup", "dashboard", "brain", "analytics", "stats", "tasks", "skills", "activity"];
 const VIZ_MODES = ["map", "blocks", "orbit"];
 const FALLBACK_CLIENTS = [
   { id: "cursor", label: "Cursor", hint: "Rules, skills, hooks", group: "ide", popular: true },
@@ -423,12 +423,51 @@ function setTab(tab) {
     stopAllViz();
   }
   if (tab !== "setup") mountVaultIn(null);
+  const changed = state.tab !== tab;
   state.tab = tab;
   document.querySelectorAll("button[data-tab]").forEach((b) => {
     b.classList.toggle("active", b.dataset.tab === tab);
   });
   writeUrlState();
+  if (changed) clearPageForTab(tab);
   render();
+}
+
+const TAB_TITLES = {
+  dashboard: "Home",
+  brain: "Memory",
+  tasks: "Tasks",
+  skills: "Skills",
+  analytics: "Insights",
+  activity: "Activity",
+  setup: "Settings",
+  welcome: "amem",
+};
+
+function tabTitle(tab = state.tab) {
+  return TAB_TITLES[tab] || "amem";
+}
+
+/** Scroll every container that can hold the page back to the top. */
+function resetScroll() {
+  for (const el of [$("#main"), $(".workspace"), $(".app-main"), $("#rightPanel"), document.scrollingElement]) {
+    if (el) el.scrollTop = 0;
+  }
+}
+
+/**
+ * A tab change must never leave the previous page on screen while the next one loads:
+ * swap in an empty page with the new title right away and reset scroll.
+ */
+function clearPageForTab(tab) {
+  const main = $("#main");
+  if (!main) return;
+  mountVaultIn(null);
+  setMainMode("page");
+  renderPageInsight();
+  main.innerHTML = `<section class="page page-pending" aria-busy="true"><h1>${esc(tabTitle(tab))}</h1></section>`;
+  document.title = `${tabTitle(tab)} · amem`;
+  resetScroll();
 }
 
 // Memory is scoped by a sticky file/search/selection. Carrying those across a tab
@@ -906,10 +945,13 @@ function fillRepoSelect() {
   if (state.brainAll) allOpt.selected = true;
   select.appendChild(allOpt);
 
-  addGroup(
-    "Personal",
-    repos.filter(isPersonal),
-  );
+  // Personal memory is a scope like any other: pick it here (it is created on first use).
+  const personal = repos.find(isPersonal);
+  const personalOpt = document.createElement("option");
+  personalOpt.value = personal ? `repo:${personal.id}` : "__personal__";
+  personalOpt.textContent = personal ? `Personal · ${personal.counts?.claims ?? 0} facts` : "Personal";
+  if (personal && !state.brainAll && personal.id === currentId) personalOpt.selected = true;
+  select.appendChild(personalOpt);
   addGroup(
     "Git repos",
     repos.filter((r) => !isWorkspace(r)),
@@ -4141,8 +4183,10 @@ function renderAnalytics() {
       <div class="analytics-split">
         <div class="chart-wrap">
           <h2>Hits vs misses by day</h2>
+          <p class="chart-legend"><span><i class="hit"></i>Hits</span><span><i class="miss"></i>Misses</span></p>
           <div class="chart-stage">
             <canvas id="hitMissChart"></canvas>
+            <div class="chart-tooltip hidden" id="hitMissTooltip"></div>
           </div>
         </div>
         <div class="chart-wrap">
@@ -4233,8 +4277,13 @@ function renderAnalytics() {
   });
 }
 
+const HIT_COLOR = "#2ec4b6";
+const MISS_COLOR = "#e88c5a";
+
+/** Hits and misses side by side per day; a non-zero day always gets a visible bar. */
 function drawHitMissChart(days) {
   const canvas = $("#hitMissChart");
+  const tooltip = $("#hitMissTooltip");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   const dpr = devicePixelRatio || 1;
@@ -4244,29 +4293,69 @@ function drawHitMissChart(days) {
   canvas.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  ctx.font = "12px 'IBM Plex Sans', system-ui, sans-serif";
   if (!days.length) {
-    ctx.fillStyle = "#8fa3b0";
+    ctx.fillStyle = "#a9b8c3";
     ctx.fillText("No usage yet.", 16, 32);
     return;
   }
-  const max = Math.max(...days.map((d) => (d.localHits || 0) + (d.serverTrips || 0)), 1);
-  const pad = 36;
-  const bw = (w - pad * 2) / days.length;
-  days.forEach((d, i) => {
-    const hits = d.localHits || 0;
-    const misses = d.serverTrips || 0;
-    const x = pad + i * bw + 4;
-    const barW = Math.max(bw - 8, 2);
-    const hitH = ((h - pad * 2) * hits) / max;
-    const missH = ((h - pad * 2) * misses) / max;
-    ctx.fillStyle = "#2ec4b6";
-    ctx.fillRect(x, h - pad - hitH, barW, Math.max(hitH, hits ? 1 : 0));
-    ctx.fillStyle = "rgba(232, 140, 90, 0.85)";
-    ctx.fillRect(x, h - pad - hitH - missH, barW, Math.max(missH, misses ? 1 : 0));
-  });
-  ctx.fillStyle = "#8fa3b0";
-  ctx.font = "12px 'IBM Plex Sans', system-ui, sans-serif";
-  ctx.fillText("teal = hits · orange = misses", pad, 18);
+  const max = Math.max(...days.map((d) => Math.max(d.localHits || 0, d.serverTrips || 0)), 1);
+  const padX = 12;
+  const padTop = 16;
+  const padBottom = 24;
+  const plotH = h - padTop - padBottom;
+  const colW = (w - padX * 2) / days.length;
+  const gap = Math.min(4, colW * 0.15);
+  const barW = Math.max((colW - gap * 2) / 2, 1);
+  const heightOf = (n) => (n ? Math.max((plotH * n) / max, 3) : 0);
+  const paint = (hover = -1) => {
+    ctx.clearRect(0, 0, w, h);
+    ctx.strokeStyle = "rgba(232,238,242,0.12)";
+    ctx.beginPath();
+    ctx.moveTo(padX, h - padBottom + 0.5);
+    ctx.lineTo(w - padX, h - padBottom + 0.5);
+    ctx.stroke();
+    days.forEach((d, i) => {
+      const x = padX + i * colW + gap;
+      const hitH = heightOf(d.localHits || 0);
+      const missH = heightOf(d.serverTrips || 0);
+      ctx.globalAlpha = hover === -1 || hover === i ? 1 : 0.55;
+      ctx.fillStyle = HIT_COLOR;
+      ctx.fillRect(x, h - padBottom - hitH, barW, hitH);
+      ctx.fillStyle = MISS_COLOR;
+      ctx.fillRect(x + barW, h - padBottom - missH, barW, missH);
+    });
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#a9b8c3";
+    ctx.textAlign = "left";
+    ctx.fillText(formatChartDay(days[0].day), padX, h - 6);
+    ctx.textAlign = "right";
+    ctx.fillText(formatChartDay(days[days.length - 1].day), w - padX, h - 6);
+    ctx.textAlign = "left";
+  };
+  paint();
+  canvas.onmousemove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const i = Math.floor((x - padX) / colW);
+    if (i < 0 || i >= days.length) {
+      tooltip?.classList.add("hidden");
+      paint();
+      return;
+    }
+    const d = days[i];
+    paint(i);
+    if (!tooltip) return;
+    tooltip.classList.remove("hidden");
+    tooltip.innerHTML = `<strong>${formatChartDay(d.day)}</strong><span>${fullNumber(d.localHits || 0)} hits</span><span>${fullNumber(d.serverTrips || 0)} misses</span>`;
+    const tipW = tooltip.offsetWidth || 120;
+    tooltip.style.left = `${Math.min(Math.max(8, x + 12), rect.width - tipW - 8)}px`;
+    tooltip.style.top = `${Math.max(8, e.clientY - rect.top - (tooltip.offsetHeight || 56) - 10)}px`;
+  };
+  canvas.onmouseleave = () => {
+    tooltip?.classList.add("hidden");
+    paint();
+  };
 }
 
 async function downloadSavings(format) {
@@ -4390,7 +4479,31 @@ function drawChart(days) {
 
 let renderSeq = 0;
 
+/** Activity is its own live page; it runs inside the normal shell so the sidebar stays. */
+function renderActivity() {
+  const main = $("#main");
+  setMainMode("page");
+  renderPageInsight();
+  if (main.querySelector("#activityFrame")) return;
+  main.innerHTML = `<section class="activity-page"><iframe id="activityFrame" class="activity-frame" src="/activity?embed=1" title="Live activity"></iframe></section>`;
+}
+
 async function render() {
+  const seq = renderSeq + 1;
+  document.title = `${tabTitle()} · amem`;
+  try {
+    await renderTab();
+  } catch (e) {
+    // Never leave the previous page on screen when the new one fails to draw.
+    if (seq !== renderSeq) return;
+    setMainMode("page");
+    renderPageInsight();
+    $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>${esc(tabTitle())}</h1><p>${esc(e?.message || e)}</p><button class="btn" id="retryRender" type="button">Try again</button></div></section>`;
+    $("#retryRender")?.addEventListener("click", () => render());
+  }
+}
+
+async function renderTab() {
   mountVaultIn(null);
   const seq = ++renderSeq;
   const stale = () => seq !== renderSeq;
@@ -4403,8 +4516,9 @@ async function render() {
     await refreshVault();
     if (/encrypted|unlock|Passphrase/i.test(String(e.message))) {
       setMainMode("page");
-      $("#main").innerHTML = `<section class="hero"><div class="hero-inner"><h1>Locked</h1><p>Unlock from <strong>Lock / backup</strong> in the sidebar to open Memory, Dashboard, and Analytics. Memory never left this machine.</p></div></section>`;
+      $("#main").innerHTML = `<section class="page"><div class="hero-inner"><h1>Locked</h1><p>Enter your passphrase below to unlock. Memory never left this machine.</p></div><div id="lockedVaultSlot"></div></section>`;
       renderPageInsight();
+      mountVaultIn($("#lockedVaultSlot"));
       return;
     }
     throw e;
@@ -4461,6 +4575,9 @@ async function render() {
     }
     if (stale()) return;
     renderTasks();
+  } else if (state.tab === "activity") {
+    stopAllViz();
+    renderActivity();
   } else if (state.tab === "skills") {
     stopAllViz();
     try {
@@ -4574,6 +4691,12 @@ $("#repoSelect")?.addEventListener("change", async (e) => {
     setAddPanel(true);
     return;
   }
+  if (value === "__personal__") {
+    state.brainAll = false;
+    persistBrainAll(false);
+    await focusPersonal();
+    return;
+  }
   if (value === "__all__") {
     state.brainAll = true;
     persistBrainAll(true);
@@ -4595,17 +4718,6 @@ $("#repoSelect")?.addEventListener("change", async (e) => {
 });
 
 $("#addRepoBtn")?.addEventListener("click", () => setAddPanel(true));
-$("#personalBtn")?.addEventListener("click", () => focusPersonal());
-$("#vaultToggle")?.addEventListener("click", () => {
-  state.focusVault = true;
-  if (state.tab === "setup" && $("#settingsVaultCard")) {
-    state.focusVault = false;
-    $("#settingsVaultCard").scrollIntoView({ behavior: "smooth", block: "start" });
-    return;
-  }
-  state.setupEdit = false;
-  setTab("setup");
-});
 $("#vaultCloseBtn")?.addEventListener("click", () => {
   if ($("#vaultPanel")?.classList.contains("in-settings")) return;
   $("#vaultPanel")?.classList.add("hidden");
@@ -4731,9 +4843,3 @@ setInterval(async () => {
   if (after !== before) fillRepoSelect();
 }, 3000);
 
-// Sidebar links to standalone pages (the live Activity view).
-document.querySelectorAll("button[data-href]").forEach((b) => {
-  b.addEventListener("click", () => {
-    location.href = b.dataset.href;
-  });
-});

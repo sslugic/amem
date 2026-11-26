@@ -305,6 +305,14 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<{
         return;
       }
       if (url.pathname === "/activity" || url.pathname === "/activity/" || url.pathname === "/activity/mini") {
+        // The full Activity page lives inside the dashboard shell (sidebar + header).
+        // The bare page is still served for the shell's iframe (?embed=1) and the side panel.
+        const bare = url.pathname === "/activity/mini" || url.searchParams.get("embed") === "1" || url.searchParams.get("compact") === "1";
+        if (!bare) {
+          res.writeHead(302, { Location: "/?tab=activity" });
+          res.end();
+          return;
+        }
         serveStatic(res, "/activity.html");
         return;
       }

@@ -52,7 +52,7 @@
             <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 16h14M5 13V9m4 4V5m4 8v-6"/></svg></span>
             <span class="nav-label">Insights</span>
           </button>
-          <button type="button" data-href="/activity" title="Live view of every agent talking to amem">
+          <button type="button" data-tab="activity" title="Live view of every agent talking to amem">
             <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 10h3.5l2-5 3 10 2-5H18"/></svg></span>
             <span class="nav-label">Activity</span>
           </button>
@@ -61,12 +61,6 @@
         <div class="side-footer">
           <button type="button" class="side-foot-btn" data-tab="setup" id="settingsNavBtn">
             <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 7a3 3 0 1 1 0 6 3 3 0 0 1 0-6zm0-4 1.2 2 2.3-.5.5 2.3 2 1.2-1.2 2 1.2 2-2 1.2-.5 2.3-2.3-.5L10 17l-1.2-2-2.3.5-.5-2.3-2-1.2 1.2-2-1.2-2 2-1.2.5-2.3 2.3.5z"/></svg></span><span class="nav-label">Settings</span>
-          </button>
-          <button class="side-foot-btn" id="vaultToggle" type="button">
-            <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 9V7a4 4 0 0 1 8 0v2M5 9h10v8H5z"/></svg></span><span class="nav-label">Lock &amp; backup</span>
-          </button>
-          <button class="side-foot-btn" id="personalBtn" type="button">
-            <span class="nav-ico"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm-6 7a6 6 0 0 1 12 0"/></svg></span><span class="nav-label">Personal memory</span>
           </button>
           <p class="side-status" id="vaultChips"></p>
         </div>
@@ -194,7 +188,7 @@
     </div>
     <script>
       (function () {
-        var TABS = ["setup", "dashboard", "brain", "analytics", "tasks", "skills"];
+        var TABS = ["setup", "dashboard", "brain", "analytics", "tasks", "skills", "activity"];
         var params = new URLSearchParams(location.search);
         var fromUrl = params.get("tab");
         var tab = "dashboard";
