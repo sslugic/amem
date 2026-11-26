@@ -21,11 +21,16 @@ describe("backup schedule hour", () => {
 describe("backup panel markup", () => {
   it("has the three cards and no alert-only actions", () => {
     const html = readFileSync(new URL("../ui-static/index.html", import.meta.url), "utf8");
-    for (const id of ["vaultBackupBtn", "vaultScheduleBtn", "vaultUnscheduleBtn", "vaultLockBtn", "vaultUnlockBtn", "vaultRestorePick", "vaultRestoreConfirm", "vaultStatusMsg"]) {
+    for (const id of ["vaultBackupBtn", "vaultScheduleBtn", "vaultUnscheduleBtn", "vaultLockBtn", "vaultUnlockBtn", "vaultRestorePick", "vaultRestoreBtn", "vaultStatusMsg"]) {
       assert.match(html, new RegExp(`id="${id}"`), id);
     }
     const js = readFileSync(new URL("../ui-static/app.js", import.meta.url), "utf8");
     const vaultBlock = js.slice(js.indexOf("async function vaultAction("), js.indexOf("function emptyGraph("));
     assert.doesNotMatch(vaultBlock, /alert\(/, "vault actions report inline, not via alert()");
+    // Restoring and turning off daily backups both ask first.
+    const restore = js.slice(js.indexOf('$("#vaultRestoreBtn")?.addEventListener'), js.indexOf("$(\"#renameWsBtn\")?.addEventListener"));
+    assert.match(restore, /askConfirm\(/);
+    const unschedule = js.slice(js.indexOf('$("#vaultUnscheduleBtn")?.addEventListener'), js.indexOf('$("#vaultRestorePick")?.addEventListener'));
+    assert.match(unschedule, /askConfirm\(/);
   });
 });

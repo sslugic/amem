@@ -1,4 +1,5 @@
 import { createOrbitViz } from "./orbit.js";
+import { exactDuplicateGroups, clusterDuplicatePairs } from "./dupes.js";
 import { buildScopeEntries, groupScopeEntries, friendlyScopeLabel, homeShort } from "./scope.js";
 
 const PLATFORM_STORAGE = "amem.selectedPlatforms";
@@ -625,6 +626,8 @@ function paintVault() {
   const v = state.vault;
   if (!v) return;
   const backup = v.backup || {};
+  const statusLine = $("#settingsStatusLine");
+  if (statusLine) statusLine.textContent = vaultStatusLine(v);
 
   // Backups card
   const last = backup.last;
@@ -1625,6 +1628,26 @@ function setupStepperHtml(current) {
   </ol>`;
 }
 
+const SETTINGS_SECTIONS = [
+  { id: "apps", label: "Connected apps" },
+  { id: "backup", label: "Backup & restore" },
+  { id: "encryption", label: "Encryption" },
+  { id: "projects", label: "Projects & workspaces" },
+  { id: "check", label: "Check memory" },
+  { id: "plan", label: "Plan & license" },
+];
+
+/** One plain line for backup + encryption status. */
+function vaultStatusLine(v) {
+  if (!v) return "";
+  const lock = vaultLockState(v);
+  const scheduled = Boolean(v.backup?.scheduled);
+  const backups = scheduled ? "Daily backups are on" : "Daily backups are off";
+  if (lock === "plain") return `${backups}. Backups are not encrypted. Set a passphrase under Encryption to encrypt future backups.`;
+  if (lock === "locked") return `${backups}. Memory is encrypted and locked.`;
+  return `${backups}. Memory is encrypted; backups made with your passphrase are encrypted too.`;
+}
+
 function setupDoneHtml(ctx) {
   const { gitBound, workspaces, serviceOn, focused } = ctx;
   const mcpHint = focused?.slug
@@ -1641,20 +1664,30 @@ function setupDoneHtml(ctx) {
         </div>
       </header>
 
+      <nav class="settings-subnav" id="settingsSubnav" aria-label="Settings sections">
+        ${SETTINGS_SECTIONS.map((sec) => `<a href="#set-${sec.id}" data-section="${sec.id}">${esc(sec.label)}</a>`).join("")}
+      </nav>
+      <p class="settings-status" id="settingsStatusLine" role="status"></p>
+
       <div class="settings-grid">
-        <article class="card" id="connectionsCard">
+        <article class="card card-wide" id="set-apps">
           <header class="card-head"><h2>Connected apps</h2><span class="pill muted" id="connectionsBadge">Checking…</span></header>
           <p class="note">Which amem each app runs. They should all use the same, newest install.</p>
           <ul class="conn-list" id="connectionsList"><li class="note">Checking…</li></ul>
           <div id="connectionsAdvice"></div>
         </article>
 
-        <article class="card card-wide" id="settingsVaultCard">
-          <header class="card-head"><h2>Lock &amp; backup</h2></header>
+        <article class="card card-wide" id="set-backup">
+          <header class="card-head"><h2>Backup &amp; restore</h2></header>
           <div id="settingsVaultSlot"></div>
         </article>
 
-        <article class="card">
+        <article class="card card-wide" id="set-encryption">
+          <header class="card-head"><h2>Encryption</h2></header>
+          <div id="settingsEncryptionSlot"></div>
+        </article>
+
+        <article class="card" id="set-projects">
           <header class="card-head"><h2>Projects &amp; workspaces</h2></header>
           <dl class="kv">
             <dt>Projects</dt>
@@ -1666,12 +1699,12 @@ function setupDoneHtml(ctx) {
           </dl>
           <div class="card-actions">
             <button class="btn secondary small" id="editSetup" type="button">Change setup</button>
-            <button class="btn secondary small" id="openBrain" type="button">Open memory</button>
           </div>
         </article>
 
         <article class="card" id="setupVerify">
-          <header class="card-head"><h2>Check memory works</h2></header>
+          <span class="anchor" id="set-check"></span>
+          <header class="card-head"><h2>Check memory</h2></header>
           <p class="note">Asks amem a sample question, the same way an agent does. Green means agents get answers from this machine.</p>
           <div class="card-actions">
             <button class="btn small" type="button" id="probeContext">Run check</button>
@@ -1680,7 +1713,7 @@ function setupDoneHtml(ctx) {
           <details class="more"><summary>Address agents connect to</summary><code class="mcp-url-chip">${esc(mcpHint)}</code></details>
         </article>
 
-        <article class="card card-wide">
+        <article class="card card-wide" id="set-plan">
           <header class="card-head"><h2>Plan &amp; license</h2></header>
           ${recipeBlockHtml()}
           ${shopBuyCardHtml()}
@@ -1744,10 +1777,16 @@ function renderSetup() {
   if (showDone) {
     mountVaultIn($("#settingsVaultSlot"));
     paintConnections();
-    if (state.focusVault) {
-      state.focusVault = false;
-      $("#settingsVaultCard")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
+    const nav = $("#settingsSubnav");
+    nav?.querySelectorAll("a[data-section]").forEach((a) => {
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        openSettingsSection(a.dataset.section);
+      });
+    });
+    const wanted = state.settingsSection || initialUrl.get("section");
+    state.settingsSection = null;
+    if (wanted) openSettingsSection(wanted, false);
   }
 }
 
@@ -1755,11 +1794,19 @@ function renderSetup() {
 function mountVaultIn(slot) {
   const panel = $("#vaultPanel");
   if (!panel) return;
+  const encCard = $("#vaultLockTitle")?.closest(".vault-card");
   if (slot) {
     slot.appendChild(panel);
     panel.classList.remove("hidden");
     panel.classList.add("in-settings");
+    // Settings shows Encryption as its own section.
+    const encSlot = $("#settingsEncryptionSlot");
+    if (encSlot && encCard) encSlot.appendChild(encCard);
   } else if (panel.classList.contains("in-settings")) {
+    // Put Encryption back first: #main is about to be replaced and would take it along.
+    const grid = panel.querySelector(".vault-grid");
+    const restore = $("#vaultRestoreTitle")?.closest(".vault-card");
+    if (grid && encCard && encCard.parentElement !== grid) grid.insertBefore(encCard, restore || null);
     panel.classList.remove("in-settings");
     panel.classList.add("hidden");
     document.querySelector(".app-main")?.insertBefore(panel, $("#embedIndexBanner"));
@@ -1799,6 +1846,18 @@ async function paintConnections() {
   } catch (e) {
     list.innerHTML = `<li class="note">Could not check: ${esc(e.message || e)}</li>`;
   }
+}
+
+/** Scroll Settings to a sub-section and mark it in the sub-nav. */
+function openSettingsSection(id, smooth = true) {
+  const target = $(`#set-${id}`);
+  if (!target) return;
+  target.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+  $("#settingsSubnav")?.querySelectorAll("a[data-section]").forEach((a) => {
+    a.classList.toggle("active", a.dataset.section === id);
+    if (a.dataset.section === id) a.setAttribute("aria-current", "true");
+    else a.removeAttribute("aria-current");
+  });
 }
 
 function goSetupStep(step) {
@@ -2121,7 +2180,22 @@ function eventClaimIds(ev) {
 function eventQueryLabel(ev) {
   const q = String(ev.query || "").trim();
   if (!q || q === "(session start)") return "Session start";
-  return q;
+  return prettyQuery(q);
+}
+
+/** Turn agent plumbing markup into a readable line: `<cross-session-message from-name="X">hi` → "Message from X: hi". */
+function prettyQuery(raw) {
+  let t = String(raw || "").trim();
+  if (/^<~?scheduled-task\b/i.test(t)) return "Scheduled task run";
+  if (/^<~?task-notification\b/i.test(t)) return "Background task finished";
+  const xs = t.match(/^<~?cross-session-message\b([^>]*)>/i);
+  if (xs) {
+    const name = xs[1].match(/from-name="([^"]*)"/i)?.[1];
+    const body = t.slice(xs[0].length).replace(/<\/?~?[a-z][\w-]*\b[^>]*>/gi, " ").replace(/\s+/g, " ").trim();
+    return `Message from ${name || "another session"}${body ? `: ${body}` : ""}`;
+  }
+  t = t.replace(/<\/?~?[a-z][\w-]*\b[^>]*>/gi, " ").replace(/\s+/g, " ").trim();
+  return t || "Session start";
 }
 
 function relatedForClaim(claimId) {
@@ -2204,9 +2278,9 @@ function syncShellChrome(mode) {
   const isBrain = mode === "brain";
   $("#topSearchWrap")?.classList.toggle("hidden", !isBrain);
   document.querySelectorAll(".top-mem-only").forEach((el) => {
-    if (el.id === "rulesSyncBtn") return;
     el.classList.toggle("hidden", !isBrain);
   });
+  if (!isBrain) $("#topMore")?.removeAttribute("open");
   const rules = $("#rulesSyncBtn");
   if (rules) {
     const show = isBrain && state.license?.features?.includes("rules_sync") && !state.brainAll;
@@ -2416,13 +2490,14 @@ function renderBrain() {
   const pendingTotal = Number(state.graph?.pendingDraftTotal ?? drafts.length);
   const totalClaims = (state.graph?.claims || []).length;
   const showdownOpen = Boolean(state.showdownOpen);
+  const dupeGroups = exactDuplicateGroups(state.graph?.claims || []).length;
   const filterHelp = {
     files: "Everything your agents can be told, grouped by project. Click a fact to edit, pin, retire or delete it.",
     drafts: "Notes captured from chats, waiting for you. Keep the good ones, dismiss the rest.",
     chats: "Takeaways saved from chats.",
     used: "Facts an agent was actually given recently.",
     pinned: "Pinned facts are shown to agents first. Pin the ones that matter most.",
-    review: "Facts nobody has used in a while, and near-duplicates you can merge.",
+    review: "Duplicate facts (grouped, with a count) and facts nobody has used in a while. Merge or retire them here.",
   }[state.brainFilter] || "";
 
   main.innerHTML = `
@@ -2434,7 +2509,7 @@ function renderBrain() {
           <button type="button" data-filter="chats" class="${state.brainFilter === "chats" ? "active" : ""}" title="Takeaways saved from chats">From chats</button>
           <button type="button" data-filter="used" class="${state.brainFilter === "used" ? "active" : ""}" title="Facts agents were given recently">Recently used</button>
           <button type="button" data-filter="pinned" class="${state.brainFilter === "pinned" ? "active" : ""}" title="Facts shown to agents first">Pinned</button>
-          <button type="button" data-filter="review" class="${state.brainFilter === "review" ? "active" : ""}" title="Unused facts and duplicates">Tidy up</button>
+          <button type="button" data-filter="review" class="${state.brainFilter === "review" ? "active" : ""}" title="Unused facts and duplicates">Tidy up${dupeGroups ? ` <span class="count warn" title="${dupeGroups} groups of duplicate facts">${dupeGroups}</span>` : ""}</button>
         </div>
         ${vizToggleHtml()}
       </div>
@@ -2774,11 +2849,18 @@ function renderBrainMap() {
 
   if (state.brainFilter === "review") {
     el.innerHTML = `<div class="brain-empty">Loading cleanup inbox…</div>`;
+    // Unused-fact and near-duplicate checks are per memory; exact duplicates are found
+    // across whatever is loaded, so All memory still gets them.
     api("/api/hygiene")
+      .catch((err) => ({ stale: [], duplicates: [], scopeNote: err.message }))
       .then((h) => {
         const stale = h.stale || [];
         const dups = h.duplicates || [];
-        if (!stale.length && !dups.length) {
+        const claimsById = new Map((state.graph?.claims || []).map((c) => [c.id, c]));
+        const exact = exactDuplicateGroups(state.graph?.claims || []);
+        const near = clusterDuplicatePairs(dups);
+        const factText = (id, max = 180) => esc(cleanLine(claimsById.get(id)?.text || id, max));
+        if (!stale.length && !dups.length && !exact.length) {
           el.innerHTML = `<div class="brain-empty">Nothing to clean up. Unused facts (90 days) and near-duplicates show up here.${
             h.schedule?.installed ? " Weekly hygiene is scheduled." : ""
           }</div>`;
@@ -2795,11 +2877,30 @@ function renderBrainMap() {
             }
           </div>
           ${
-            dups.length
-              ? `<h2>Near-duplicates</h2>${dups
+            exact.length
+              ? `<h2>Duplicates <span class="count">${exact.length}</span></h2><p class="note">The same fact saved more than once. Merging keeps the newest (or pinned) copy and retires the rest.</p>${exact
+                  .slice(0, 30)
                   .map(
-                    (d) =>
-                      `<div class="draft-card"><strong>${esc(d.keepId)}</strong> vs ${esc(d.dropId)} · ${Math.round((d.similarity || 0) * 100)}%<div class="drawer-actions"><button class="btn secondary small" type="button" data-merge-keep="${esc(d.keepId)}" data-merge-drop="${esc(d.dropId)}">Merge into keep</button></div></div>`,
+                    (g, i) => `<div class="draft-card dupe-card">
+                      <div class="dupe-head"><span class="dupe-count" title="${g.count} copies">×${g.count}</span><strong>${esc(cleanLine(g.keep.text, 180))}</strong></div>
+                      <span class="meta">${state.brainAll ? `${esc(memoryLabel(g.keep.repo_id))} · ` : ""}kept: <code>${esc(g.keep.id)}</code> · ${g.drop.length} extra cop${g.drop.length === 1 ? "y" : "ies"}</span>
+                      <div class="drawer-actions"><button class="btn secondary small" type="button" data-merge-exact="${i}">Merge ${g.count} into one</button></div>
+                    </div>`,
+                  )
+                  .join("")}`
+              : ""
+          }
+          ${
+            near.length
+              ? `<h2>Near-duplicates <span class="count">${near.length}</span></h2>${near
+                  .map(
+                    (c, i) => `<div class="draft-card dupe-card">
+                      <div class="dupe-head"><span class="dupe-count" title="${c.count} similar facts">×${c.count}</span><strong>${factText(c.keepId)}</strong></div>
+                      <details class="dupe-more"><summary>${c.dropIds.length} similar · up to ${Math.round((c.similarity || 0) * 100)}% alike</summary><ul>${c.dropIds
+                        .map((id) => `<li>${factText(id, 160)} <code>${esc(id)}</code></li>`)
+                        .join("")}</ul></details>
+                      <div class="drawer-actions"><button class="btn secondary small" type="button" data-merge-near="${i}">Merge into the first</button></div>
+                    </div>`,
                   )
                   .join("")}`
               : ""
@@ -2852,6 +2953,35 @@ function renderBrainMap() {
           } catch (err) {
             notify(err.message);
           }
+        });
+        const mergeAll = async (btn, keepId, dropIds, repoId) => {
+          btn.disabled = true;
+          btn.textContent = "Merging…";
+          let merged = 0;
+          for (const dropId of dropIds) {
+            try {
+              await api("/api/hygiene/merge", { method: "POST", repoId, body: JSON.stringify({ keepId, dropId }) });
+              merged += 1;
+            } catch (err) {
+              notify(err.message);
+              break;
+            }
+          }
+          await refreshGraph();
+          renderBrain();
+          if (merged) notify(`Merged ${merged} duplicate${merged === 1 ? "" : "s"}.`);
+        };
+        el.querySelectorAll("[data-merge-exact]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const g = exact[Number(btn.dataset.mergeExact)];
+            if (g) mergeAll(btn, g.keep.id, g.drop.map((c) => c.id), g.keep.repo_id || undefined);
+          });
+        });
+        el.querySelectorAll("[data-merge-near]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const c = near[Number(btn.dataset.mergeNear)];
+            if (c) mergeAll(btn, c.keepId, c.dropIds, claimsById.get(c.keepId)?.repo_id || undefined);
+          });
         });
         el.querySelectorAll("[data-merge-keep]").forEach((btn) => {
           btn.addEventListener("click", async () => {
@@ -3586,14 +3716,37 @@ function showBrainDetail(node) {
  * the stat cards, so a million and up is shown compact (1.81B, 744.8M); the exact figure
  * goes in a title tooltip via fullNumber().
  */
+/** Compact counts everywhere: 9,876 · 23.5K · 198K · 23.5M · 745M · 1.8B. Exact value goes in a tooltip. */
 function formatTokens(n) {
   const v = Number(n || 0);
   if (!Number.isFinite(v)) return "0";
-  if (Math.abs(v) < 1_000_000) return v.toLocaleString();
-  return new Intl.NumberFormat(undefined, {
-    notation: "compact",
-    maximumFractionDigits: Math.abs(v) < 10_000_000 ? 2 : 1,
-  }).format(v);
+  const abs = Math.abs(v);
+  if (abs < 10_000) return Math.round(v).toLocaleString();
+  const units = [
+    [1e12, "T"],
+    [1e9, "B"],
+    [1e6, "M"],
+    [1e3, "K"],
+  ];
+  for (const [size, suffix] of units) {
+    if (abs >= size) {
+      const scaled = v / size;
+      const digits = Math.abs(scaled) < 100 ? 1 : 0;
+      return `${Number(scaled.toFixed(digits)).toLocaleString(undefined, { maximumFractionDigits: digits })}${suffix}`;
+    }
+  }
+  return v.toLocaleString();
+}
+
+/** Money, compact so cards never wrap: ~$42.10 · ~$2,236 · ~$12.4K. */
+function formatUsdCompact(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v === 0) return "$0";
+  const sign = v < 0 ? "-" : "~";
+  const abs = Math.abs(v);
+  if (abs < 100) return formatUsd(v);
+  if (abs < 10_000) return `${sign}$${Math.round(abs).toLocaleString()}`;
+  return `${sign}$${formatTokens(abs)}`;
 }
 
 function fullNumber(n) {
@@ -3669,11 +3822,11 @@ function renderStats() {
 }
 
 const TASK_COLS = [
-  { id: "backlog", label: "Backlog" },
-  { id: "next", label: "Next" },
-  { id: "doing", label: "Doing" },
-  { id: "blocked", label: "Blocked" },
-  { id: "done", label: "Done" },
+  { id: "backlog", label: "Backlog", empty: "Nothing parked. Add a task above, or let an agent file one." },
+  { id: "next", label: "Next", empty: "Drag a task here to line it up next." },
+  { id: "doing", label: "Doing", empty: "Drag a task here to start." },
+  { id: "blocked", label: "Blocked", empty: "Nothing blocked. Drag a task here when it is waiting on someone." },
+  { id: "done", label: "Done", empty: "Finished tasks land here." },
 ];
 
 async function refreshTasks() {
@@ -3722,33 +3875,62 @@ function skillCardHtml(s) {
     </article>`;
 }
 
-function skillDraftHtml(d) {
-  const why = (d.reasons || []).length
-    ? `<p class="skill-draft-why">${esc(d.reasons.join(" · "))}</p>`
-    : "";
-  const label =
-    d.kind === "revision"
-      ? `Revise <strong>${esc(d.target_skill || "")}</strong>`
-      : d.kind === "create"
-        ? "Staged for review"
-        : "Suggested";
-  // A suggestion has no body yet: only an agent can write one, so do not offer Approve.
-  const approve = d.has_content
-    ? `<button type="button" class="btn small skill-draft-apply">Approve</button>`
-    : "";
-  const hint = d.has_content
-    ? ""
-    : `<p class="skill-draft-hint">Ask your agent to write this up — it will see the nudge in its next context packet.</p>`;
+/** Pending skill drafts grouped by the skill they are about, biggest group first. */
+function skillDraftGroups(drafts) {
+  const groups = new Map();
+  for (const d of drafts || []) {
+    const key = d.kind === "revision" && d.target_skill ? `revise:${d.target_skill}` : `new:${d.name || d.title || d.id}`;
+    if (!groups.has(key)) groups.set(key, { key, kind: d.kind, skill: d.target_skill || d.name || "", title: d.title || d.name || "Suggested skill", drafts: [] });
+    groups.get(key).drafts.push(d);
+  }
+  return [...groups.values()]
+    .map((g) => ({ ...g, drafts: g.drafts.sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))) }))
+    .sort((x, y) => y.drafts.length - x.drafts.length || x.title.localeCompare(y.title));
+}
+
+/** The prompt to hand an agent so it writes (or revises) the skill. */
+function skillWriteUpPrompt(g) {
+  const reasons = [...new Set(g.drafts.flatMap((d) => d.reasons || []))];
+  const verb = g.kind === "revision" ? `Revise the amem skill "${g.skill}"` : `Write an amem skill for "${g.title}"`;
+  return `${verb}. amem flagged it ${g.drafts.length} time${g.drafts.length === 1 ? "" : "s"}${reasons.length ? `: ${reasons.join("; ")}` : ""}. Load it with amem_skill_view, fix the missing steps or pitfalls, and save it with amem_skill_save.`;
+}
+
+function skillDraftGroupHtml(g, i) {
+  const withContent = g.drafts.filter((d) => d.has_content);
+  const label = g.kind === "revision" ? `Revise <strong>${esc(g.skill)}</strong>` : esc(g.title);
+  const reasons = [...new Set(g.drafts.flatMap((d) => d.reasons || []))];
   return `
-    <article class="skill-draft" data-id="${esc(d.id)}">
-      <span class="skill-draft-kind">${label}</span>
-      <h4>${esc(d.title)}</h4>
-      ${why}
-      ${hint}
-      <div class="skill-draft-actions">
-        ${approve}
-        <button type="button" class="btn secondary small skill-draft-dismiss">Dismiss</button>
-      </div>
+    <article class="skill-group" data-group="${i}">
+      <header class="skill-group-head">
+        <button type="button" class="skill-group-toggle" aria-expanded="false" aria-controls="skillGroupBody${i}">
+          <span class="skill-group-caret" aria-hidden="true">▸</span>
+          <span class="skill-group-title">${label}</span>
+          <span class="count-badge" title="${g.drafts.length} pending">${g.drafts.length}</span>
+        </button>
+        <div class="skill-draft-actions">
+          ${
+            withContent.length
+              ? `<button type="button" class="btn small skill-group-approve">Approve${withContent.length > 1 ? ` latest` : ""}</button>`
+              : `<button type="button" class="btn small skill-group-write" title="Copy a prompt that asks your agent to write this up">Write it up</button>`
+          }
+          <button type="button" class="btn secondary small skill-group-dismiss" title="Dismiss every pending note for this skill">Dismiss all</button>
+        </div>
+      </header>
+      ${reasons.length ? `<p class="skill-draft-why">${esc(reasons.slice(0, 4).join(" · "))}</p>` : ""}
+      <ul class="skill-group-body" id="skillGroupBody${i}" hidden>
+        ${g.drafts
+          .map(
+            (d) => `<li class="skill-draft" data-id="${esc(d.id)}">
+              <span class="skill-draft-meta">${esc(formatWhen(d.created_at))}${d.repo_name ? ` · ${esc(d.repo_name)}` : ""}</span>
+              <span class="skill-draft-text">${esc(d.summary || (d.reasons || []).join(" · ") || d.title || "")}</span>
+              <span class="skill-draft-actions">
+                ${d.has_content ? `<button type="button" class="btn secondary small skill-draft-apply">Approve</button>` : ""}
+                <button type="button" class="btn secondary small skill-draft-dismiss">Dismiss</button>
+              </span>
+            </li>`,
+          )
+          .join("")}
+      </ul>
     </article>`;
 }
 
@@ -3759,13 +3941,16 @@ function renderSkills() {
 
   const skills = state.skills || [];
   const drafts = state.skillDrafts || [];
-  const draftsHtml = drafts.length
-    ? `<section class="skill-drafts">
-         <h2>Pending (${drafts.length})</h2>
-         <p class="note">Procedures amem noticed, or agent writes waiting on approval.</p>
-         <div class="skill-draft-list">${drafts.map(skillDraftHtml).join("")}</div>
-       </section>`
-    : "";
+  const groups = skillDraftGroups(drafts);
+  const draftsHtml = `<section class="skill-drafts">
+         <h2>Pending <span class="count-badge">${drafts.length}</span></h2>
+         ${
+           groups.length
+             ? `<p class="note">Skills amem thinks need writing or fixing, grouped by skill. Open a group to see each note.</p>
+                <div class="skill-group-list">${groups.map(skillDraftGroupHtml).join("")}</div>`
+             : `<p class="empty">Nothing pending. When an agent struggles with a skill or repeats a procedure, a suggestion shows up here.</p>`
+         }
+       </section>`;
 
   const listHtml = skills.length
     ? `<div class="skill-grid">${skills.map(skillCardHtml).join("")}</div>`
@@ -3784,9 +3969,10 @@ function renderSkills() {
         </div>
       </header>
       <p class="note">Stored in <code>${esc(state.skillsDir || "~/.amem/skills")}</code> · agents see names and descriptions only until they load one</p>
-      ${draftsHtml}
+      <h2 class="section-title">Installed <span class="count-badge">${skills.length}</span></h2>
       ${listHtml}
       <div class="skill-detail" id="skillDetail" hidden></div>
+      ${draftsHtml}
     </section>`;
 
   renderPageInsight();
@@ -3848,6 +4034,59 @@ function renderSkills() {
       notify(e.message || e);
     }
   };
+  const groupOf = (btn) => groups[Number(btn.closest(".skill-group")?.dataset.group)];
+  main.querySelectorAll(".skill-group-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const body = $(`#${btn.getAttribute("aria-controls")}`);
+      const open = btn.getAttribute("aria-expanded") !== "true";
+      btn.setAttribute("aria-expanded", String(open));
+      btn.querySelector(".skill-group-caret").textContent = open ? "▾" : "▸";
+      if (body) body.hidden = !open;
+    });
+  });
+  main.querySelectorAll(".skill-group-dismiss").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const g = groupOf(btn);
+      if (!g) return;
+      if (g.drafts.length > 1 && !(await askConfirm(`Dismiss all ${g.drafts.length} pending notes for "${g.skill || g.title}"?`, { confirmLabel: "Dismiss all", danger: false }))) return;
+      btn.disabled = true;
+      try {
+        for (const d of g.drafts) await apiUnscoped("/api/skills/drafts/dismiss", { method: "POST", body: JSON.stringify({ id: d.id }) });
+        notify(`Dismissed ${g.drafts.length} note${g.drafts.length === 1 ? "" : "s"}.`);
+      } catch (e) {
+        notify(e.message || e);
+      }
+      await refreshSkills();
+      renderSkills();
+    });
+  });
+  main.querySelectorAll(".skill-group-approve").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const d = groupOf(btn)?.drafts.find((x) => x.has_content);
+      if (!d) return;
+      try {
+        await apiUnscoped("/api/skills/drafts/apply", { method: "POST", body: JSON.stringify({ id: d.id }) });
+        notify("Skill saved.");
+      } catch (e) {
+        notify(e.message || e);
+      }
+      await refreshSkills();
+      renderSkills();
+    });
+  });
+  main.querySelectorAll(".skill-group-write").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const g = groupOf(btn);
+      if (!g) return;
+      const text = skillWriteUpPrompt(g);
+      try {
+        await navigator.clipboard.writeText(text);
+        notify("Copied a prompt for your agent. Paste it into your next chat to write this up.");
+      } catch {
+        notify(text);
+      }
+    });
+  });
   main.querySelectorAll(".skill-draft-apply").forEach((btn) => {
     btn.addEventListener("click", () => draftAction(btn, "/api/skills/drafts/apply"));
   });
@@ -3865,7 +4104,7 @@ function currentRepoLabel() {
 function taskCardHtml(t) {
   const bodyText = String(t.body || "");
   const body = bodyText
-    ? `<p class="tasks-card-body clamp" title="Click to expand">${esc(bodyText)}</p>`
+    ? `<details class="tasks-card-notes"><summary>Notes</summary><p class="tasks-card-body">${esc(bodyText)}</p></details>`
     : "";
   const opts = TASK_COLS.map(
     (c) => `<option value="${c.id}" ${c.id === t.status ? "selected" : ""}>${esc(c.label)}</option>`,
@@ -3878,7 +4117,7 @@ function taskCardHtml(t) {
   return `
     <article class="tasks-card" data-id="${esc(t.id)}" draggable="true">
       ${owner}
-      <h3>${esc(t.title)}</h3>
+      <h3 class="tasks-card-title" title="${esc(t.title)}">${esc(t.title)}</h3>
       ${body}
       <div class="tasks-card-actions">
         <select class="tasks-status" aria-label="Move status">${opts}</select>
@@ -3888,8 +4127,8 @@ function taskCardHtml(t) {
 }
 
 document.addEventListener("click", (e) => {
-  const body = e.target instanceof Element ? e.target.closest(".tasks-card-body") : null;
-  if (body) body.classList.toggle("clamp");
+  const title = e.target instanceof Element ? e.target.closest(".tasks-card-title") : null;
+  if (title) title.classList.toggle("expanded");
 });
 
 function renderTasks() {
@@ -3897,16 +4136,40 @@ function renderTasks() {
   setMainMode("page");
   stopAllViz();
   renderPageInsight();
-  const tasks = Array.isArray(state.tasks) ? state.tasks : [];
+  const allTasks = Array.isArray(state.tasks) ? state.tasks : [];
   const focus = statsFocusLabel();
-  const openCount = Number(state.taskCounts?.open ?? tasks.filter((t) => t.status !== "done").length);
+  // Filter by project (the memory each task was filed in).
+  const projectCounts = new Map();
+  for (const t of allTasks) {
+    const key = t.repo_name || "";
+    if (key) projectCounts.set(key, (projectCounts.get(key) || 0) + 1);
+  }
+  if (state.taskProject && !projectCounts.has(state.taskProject)) state.taskProject = "";
+  const tasks = state.taskProject ? allTasks.filter((t) => t.repo_name === state.taskProject) : allTasks;
+  const openCount = state.taskProject
+    ? tasks.filter((t) => t.status !== "done").length
+    : Number(state.taskCounts?.open ?? tasks.filter((t) => t.status !== "done").length);
   const byStatus = Object.fromEntries(TASK_COLS.map((c) => [c.id, []]));
   for (const t of tasks) {
     if (byStatus[t.status]) byStatus[t.status].push(t);
     else byStatus.backlog.push(t);
   }
-  // Done: keep last 12
-  byStatus.done = byStatus.done.slice(0, 12);
+  const doneTotal = byStatus.done.length;
+  // Done: collapsed by default; when open, show the latest 20.
+  byStatus.done = byStatus.done.slice(0, 20);
+  const doneOpen = Boolean(state.tasksDoneOpen);
+  const projectFilter =
+    state.brainAll && projectCounts.size > 1
+      ? `<label class="tasks-filter">Project
+          <select id="tasksProject" aria-label="Filter tasks by project">
+            <option value="">All projects (${allTasks.length})</option>
+            ${[...projectCounts.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .map(([name, n]) => `<option value="${esc(name)}" ${name === state.taskProject ? "selected" : ""}>${esc(prettyRepoName(name))} (${n})</option>`)
+              .join("")}
+          </select>
+        </label>`
+      : "";
 
   main.innerHTML = `
     <section class="dash-page">
@@ -3916,6 +4179,7 @@ function renderTasks() {
           <p class="sub">Deferred work for <strong>${esc(focus)}</strong> — agents park items here so they do not die in chat. Facts still live in Memory.</p>
         </div>
         <div class="dash-actions">
+          ${projectFilter}
           <button class="btn secondary small" type="button" id="tasksScope">${
             state.brainAll ? "Show this folder only" : "Show all memory"
           }</button>
@@ -3932,10 +4196,21 @@ function renderTasks() {
       <div class="tasks-board" id="tasksBoard">
         ${TASK_COLS.map((col) => {
           const list = byStatus[col.id] || [];
+          if (col.id === "done") {
+            return `
+            <section class="tasks-col tasks-col-done${doneOpen ? "" : " collapsed"}" data-status="done">
+              <header><button type="button" class="tasks-done-toggle" id="tasksDoneToggle" aria-expanded="${doneOpen}"><span aria-hidden="true">${doneOpen ? "▾" : "▸"}</span> <h2>Done</h2></button><span>${doneTotal}</span></header>
+              <div class="tasks-col-body">${
+                doneOpen
+                  ? list.map(taskCardHtml).join("") || `<p class="tasks-empty">${esc(col.empty)}</p>`
+                  : `<p class="tasks-empty">${doneTotal ? `${doneTotal} finished. Drop a task here to finish it.` : esc(col.empty)}</p>`
+              }</div>
+            </section>`;
+          }
           return `
             <section class="tasks-col" data-status="${col.id}">
               <header><h2>${esc(col.label)}</h2><span>${list.length}</span></header>
-              <div class="tasks-col-body">${list.map(taskCardHtml).join("") || `<p class="tasks-empty">Empty</p>`}</div>
+              <div class="tasks-col-body">${list.map(taskCardHtml).join("") || `<p class="tasks-empty">${esc(col.empty)}</p>`}</div>
             </section>`;
         }).join("")}
       </div>
@@ -3946,6 +4221,15 @@ function renderTasks() {
       const tab = b.getAttribute("data-go");
       if (tab) setTab(tab);
     });
+  });
+
+  $("#tasksProject")?.addEventListener("change", (e) => {
+    state.taskProject = e.target.value;
+    renderTasks();
+  });
+  $("#tasksDoneToggle")?.addEventListener("click", () => {
+    state.tasksDoneOpen = !state.tasksDoneOpen;
+    renderTasks();
   });
 
   $("#tasksScope")?.addEventListener("click", async () => {
@@ -4079,8 +4363,25 @@ function renderDashboard() {
     .sort((a, b) => ({ doing: 0, next: 1, blocked: 2, backlog: 3 })[a.status] - ({ doing: 0, next: 1, blocked: 2, backlog: 3 })[b.status])
     .slice(0, 5);
   const questions = events
-    .filter((e) => !/<scheduled-task|<task-notification|<system-reminder/i.test(eventQueryLabel(e)))
+    .filter((e) => String(e.query || "").trim() && e.query !== "(session start)")
+    .filter((e) => !/<~?(scheduled-task|task-notification|system-reminder)/i.test(String(e.query || "")))
     .slice(0, 6);
+  // Trends: this week vs the 7 days before, where the data has dates.
+  const prevSince = since - 7 * 86_400_000;
+  const factsThisWeek = claims.filter((c) => Date.parse(c.created_at) >= since).length;
+  const byDay = agg?.byDay || [];
+  const sumDays = (from, to, key) =>
+    byDay.filter((d) => { const t = Date.parse(d.day); return t >= from && t < to; }).reduce((n, d) => n + (Number(d[key]) || 0), 0);
+  const now = Date.now() + 86_400_000;
+  const queriesThisWeek = byDay.length ? sumDays(since, now, "queries") : usedThisWeek;
+  const queriesPrevWeek = sumDays(prevSince, since, "queries");
+  const msThisWeek = sumDays(since, now, "estimatedMsSaved");
+  const trend = (text, kind = "") => `<span class="stat-trend ${kind}">${esc(text)}</span>`;
+  const deltaTrend = (cur, prev) => {
+    if (!prev) return cur ? trend(`${formatTokens(cur)} this week`) : "";
+    const pct = Math.round(((cur - prev) / prev) * 100);
+    return trend(`${pct >= 0 ? "+" : ""}${pct}% vs last week`, pct >= 0 ? "up" : "down");
+  };
   const workStatus = (c) => {
     const m = String(c.text || "").match(/\bworklog \((done|in progress|next|blocked)\)/i);
     return m ? m[1].toLowerCase() : c.kind;
@@ -4094,23 +4395,28 @@ function renderDashboard() {
           <h1>${greeting()}</h1>
           <p class="sub">Here is what your agents remember${focus && focus !== "All memory" ? ` in <strong>${esc(prettyRepoName(focus))}</strong>` : ""}. It all stays on this machine.</p>
         </div>
-        <div class="page-actions">
-          <button class="btn small" type="button" data-go="memory">Open memory</button>
-        </div>
       </header>
 
       <div class="stat-row">
-        <button type="button" class="stat" data-go="memory" data-filter="files">
-          <span class="stat-num">${claims.length}</span><span class="stat-label">facts remembered</span>
+        <button type="button" class="stat" data-go="memory" data-filter="files" title="${fullNumber(claims.length)} facts">
+          <span class="stat-label">Facts remembered</span>
+          <span class="stat-num">${formatTokens(claims.length)}</span>
+          ${factsThisWeek ? trend(`+${formatTokens(factsThisWeek)} this week`, "up") : trend("none new this week")}
         </button>
         <button type="button" class="stat ${pendingTotal ? "attention" : ""}" data-go="memory" data-filter="drafts">
-          <span class="stat-num">${pendingTotal}</span><span class="stat-label">${pendingTotal === 1 ? "note" : "notes"} to review</span>
+          <span class="stat-label">Notes to review</span>
+          <span class="stat-num">${formatTokens(pendingTotal)}</span>
+          ${trend(pendingTotal ? "captured from chats, waiting for you" : "all caught up")}
         </button>
-        <button type="button" class="stat" data-go="insights">
-          <span class="stat-num">${usedThisWeek}</span><span class="stat-label">times agents used memory this week</span>
+        <button type="button" class="stat" data-go="insights" title="${fullNumber(queriesThisWeek)} lookups in the last 7 days">
+          <span class="stat-label">Memory lookups this week</span>
+          <span class="stat-num">${formatTokens(queriesThisWeek)}</span>
+          ${deltaTrend(queriesThisWeek, queriesPrevWeek)}
         </button>
-        <button type="button" class="stat" data-go="insights">
-          <span class="stat-num">~${esc(formatDuration(totals.estimatedMsSaved))}</span><span class="stat-label">saved in the last ${state.usage?.days ?? 30} days</span>
+        <button type="button" class="stat" data-go="insights" title="Estimated from avoided tool round-trips, not model latency">
+          <span class="stat-label">Time saved · ${state.usage?.days ?? 30} days</span>
+          <span class="stat-num">~${esc(formatDuration(totals.estimatedMsSaved))}</span>
+          ${msThisWeek ? trend(`~${formatDuration(msThisWeek)} this week`, "up") : ""}
         </button>
       </div>
 
@@ -4236,10 +4542,25 @@ function renderAnalytics() {
       return { id, n, text: c ? claimPreview(c, 100) : id };
     });
 
+  const usdRate = agg?.pricing?.usdPerMillionInputTokens ?? 3;
+  const monthly = agg?.monthly || {};
+  const trend = monthly.trendDays || 0;
+  const platforms = (agg?.byPlatform || []).filter((p) => p.queries || p.estimatedTokensSaved);
+  const maxQueries = Math.max(1, ...platforms.map((p) => p.queries || 0));
+  const maxSaved = Math.max(1, ...platforms.map((p) => p.estimatedTokensSaved || 0));
+  const info = (text) =>
+    `<span class="info-tip" tabindex="0" role="img" aria-label="${esc(text)}" data-tip="${esc(text)}">i</span>`;
+  const metric = ({ label, value, exact, meta, tip, accent = false }) => `
+    <div class="metric-card${accent ? " accented" : ""}">
+      <div class="metric-label">${esc(label)}${tip ? info(tip) : ""}</div>
+      <div class="metric-value"${exact ? ` title="${esc(exact)}"` : ""}>${value}</div>
+      ${meta ? `<div class="metric-meta">${meta}</div>` : ""}
+    </div>`;
+
   main.innerHTML = `
     <section class="stats-page analytics-page">
       <h1>Insights</h1>
-      <p class="sub">Deeper usage for <strong>${esc(focus)}</strong>. Hit rate is local memory success — not Cursor→model API trips. Time and $ are proxies.</p>
+      <p class="sub">How much amem helped your agents in <strong>${esc(focus)}</strong>. Time and money are estimates.</p>
       <div class="filters">
         <select id="days" aria-label="Insights time range">
           <option value="7" ${currentDays === "7" ? "selected" : ""}>7 days</option>
@@ -4249,6 +4570,13 @@ function renderAnalytics() {
         <button class="btn secondary small" type="button" data-export="json">Export JSON</button>
         <button class="btn secondary small" type="button" data-export="md">Export markdown</button>
         <button class="btn secondary small" type="button" data-export="pdf">Export PDF</button>
+      </div>
+
+      <div class="metric-row">
+        ${metric({ label: "Time saved", value: `~${esc(formatDuration(totals.estimatedMsSaved))}`, meta: `last ${esc(currentDays)} days`, tip: "Estimated from tool round-trips your agents did not need: each avoided file read ≈ 1.2s, each fact ≈ 80ms. Not model latency." })}
+        ${metric({ label: "Money saved", value: esc(formatUsdCompact(totals.estimatedUsdSaved)), exact: formatUsd(totals.estimatedUsdSaved), meta: `at $${usdRate}/1M input tokens`, tip: `Estimated tokens saved × $${usdRate} per million input tokens. ${savingsCaveat(agg)}.` })}
+        ${metric({ label: "Hit rate", value: esc(formatPct(totals.hitRate)), meta: `${esc(formatTokens(totals.localHits ?? 0))} hits · ${esc(formatTokens(totals.serverTrips ?? 0))} misses`, tip: "Share of memory lookups where amem had something useful. Misses are empty amem lookups, not model API calls." })}
+        ${metric({ label: "File reads avoided", value: esc(formatTokens(totals.anchorsAvoided ?? 0)), exact: `${fullNumber(totals.anchorsAvoided ?? 0)} files`, meta: "files agents did not have to open", tip: "Unique code anchors returned in context packets, each a file the agent could skip reading." })}
       </div>
 
       <div class="analytics-split">
@@ -4269,12 +4597,24 @@ function renderAnalytics() {
         </div>
       </div>
 
-      <div class="platform-cards" id="speedCards"></div>
-      <h2 class="stats-heading">Monthly projection</h2>
-      <div class="platform-cards" id="monthlyCards"></div>
-      <div class="platform-cards" id="cards"></div>
-
       <div class="analytics-split">
+        <article class="dash-panel">
+          <h2>By platform</h2>
+          ${
+            platforms.length
+              ? `<p class="chart-legend"><span><i class="hit"></i>Queries</span><span><i class="saved"></i>Tokens saved</span></p>
+                <ul class="hbar-list">${platforms
+                  .map(
+                    (p) => `<li>
+                      <div class="hbar-head"><strong>${esc(p.platform)}</strong><span title="${fullNumber(p.queries)} queries · ${fullNumber(p.estimatedTokensSaved)} tokens · ${esc(formatUsd(p.estimatedUsdSaved))}">${esc(formatTokens(p.queries))} queries · ~${esc(formatTokens(p.estimatedTokensSaved))} tokens · ${esc(formatUsdCompact(p.estimatedUsdSaved))}</span></div>
+                      <div class="hbar"><i class="q" style="width:${((100 * (p.queries || 0)) / maxQueries).toFixed(1)}%"></i></div>
+                      <div class="hbar"><i class="s" style="width:${((100 * (p.estimatedTokensSaved || 0)) / maxSaved).toFixed(1)}%"></i></div>
+                    </li>`,
+                  )
+                  .join("")}</ul>`
+              : `<p class="empty">No platform has asked amem for context in this window yet. Use amem from Claude Code, Cursor or the CLI and it shows up here.</p>`
+          }
+        </article>
         <article class="dash-panel">
           <h2>Top injected facts</h2>
           ${
@@ -4285,56 +4625,42 @@ function renderAnalytics() {
                       `<li><strong>${esc(c.text)}</strong><span class="meta">${c.n}× · <code>${esc(c.id)}</code></span></li>`,
                   )
                   .join("")}</ul>`
-              : `<p class="note">No claim injections logged in this window.</p>`
+              : `<p class="empty">No facts were injected in this window. Facts appear here once agents start asking amem for context.</p>`
           }
         </article>
-        <article class="dash-panel">
-          <h2>By platform</h2>
-          <ul class="dash-list" id="platformList"></ul>
-        </article>
       </div>
-      <p class="note">Tokens: max(0, anchors×4000 + claims×200 − packet tokens). Time: anchors×1.2s + claims×80ms. Money: tokens × $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input tokens. “Server trips” = empty amem lookups, not model API calls.</p>
+
+      <details class="insights-details">
+        <summary>Details: monthly projection and totals</summary>
+        <div class="metric-row">
+          ${metric({ label: "Tokens / month", value: `~${esc(formatTokens(monthly.estimatedTokensSaved ?? 0))}`, exact: fullNumber(monthly.estimatedTokensSaved ?? 0), meta: trend ? `from ${esc(formatTokens(monthly.sampleQueries ?? 0))} calls over ${trend} day${trend === 1 ? "" : "s"}` : "no usage yet", tip: "Current daily pace × 30. A projection, not a bill.", accent: true })}
+          ${metric({ label: "Money / month", value: esc(formatUsdCompact(monthly.estimatedUsdSaved)), exact: formatUsd(monthly.estimatedUsdSaved), meta: `at $${usdRate}/1M input tokens`, tip: `Same token estimate at $${usdRate} per million input tokens.`, accent: true })}
+          ${metric({ label: "Time / month", value: `~${esc(formatDuration(monthly.estimatedMsSaved))}`, meta: "at the current pace", tip: "Avoided tool round-trips at the current daily pace × 30.", accent: true })}
+          ${metric({ label: "Calls / month", value: esc(formatTokens(monthly.queries ?? 0)), exact: fullNumber(monthly.queries ?? 0), meta: "context lookups", accent: true })}
+          ${metric({ label: "File reads / month", value: esc(formatTokens(monthly.anchorsAvoided ?? 0)), exact: fullNumber(monthly.anchorsAvoided ?? 0), meta: "files that would be skipped", accent: true })}
+        </div>
+        <div class="metric-row">
+          ${metric({ label: "Tokens saved", value: `~${esc(formatTokens(totals.estimatedTokensSaved ?? 0))}`, exact: fullNumber(totals.estimatedTokensSaved ?? 0), meta: `${esc(formatTokens(totals.queries ?? 0))} context queries`, tip: "Estimated, not billed savings." })}
+          ${metric({ label: "Local lookup", value: totals.avgLocalMs != null ? esc(formatDuration(totals.avgLocalMs)) : "—", meta: "average, measured", tip: "Measured time for amem to answer from local SQLite." })}
+          ${
+            totals.reportedTokensSaved
+              ? metric({ label: "Reported by agents", value: `~${esc(formatTokens(totals.reportedTokensSaved))}`, exact: fullNumber(totals.reportedTokensSaved), meta: "tokens, self-reported", tip: "Tokens agents reported as saved via amem attest." })
+              : ""
+          }
+        </div>
+      </details>
+
+      <details class="insights-details">
+        <summary>How these are calculated</summary>
+        <ul class="method-list">
+          <li><b>Tokens saved</b> = max(0, file anchors × 4,000 + facts × 200 − packet tokens) per context packet.</li>
+          <li><b>Time saved</b> = file anchors × 1.2s + facts × 80ms. A proxy for avoided tool round-trips, not model latency.</li>
+          <li><b>Money saved</b> = tokens saved × $${usdRate} per million input tokens. ${esc(savingsCaveat(agg))}.</li>
+          <li><b>Hit rate</b> = lookups where memory returned something ÷ all lookups. A miss is an empty amem lookup, not a model API call.</li>
+          <li><b>Monthly projection</b> = the daily pace over the last ${trend || "few"} day${trend === 1 ? "" : "s"} × 30.</li>
+        </ul>
+      </details>
     </section>`;
-
-  const speedCards = $("#speedCards");
-  speedCards.innerHTML = `
-    <div class="platform-card"><div class="label">Estimated time saved</div><div class="value">~${formatDuration(totals.estimatedMsSaved)}</div><div class="meta">proxy vs tool round-trips · not model latency</div></div>
-    <div class="platform-card"><div class="label">Estimated money saved</div><div class="value">${formatUsd(totals.estimatedUsdSaved)}</div><div class="meta">at $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input tokens · ${esc(savingsCaveat(agg))}</div></div>
-    <div class="platform-card"><div class="label">Local lookup</div><div class="value">${totals.avgLocalMs != null ? formatDuration(totals.avgLocalMs) : "—"}</div><div class="meta">measured SQLite / localhost avg</div></div>
-    <div class="platform-card"><div class="label">Hit rate</div><div class="value">${formatPct(totals.hitRate)}</div><div class="meta">${totals.localHits ?? 0} keyword hits · ${totals.serverTrips ?? 0} misses · not model API calls</div></div>
-    <div class="platform-card"><div class="label">Avoided file reads</div><div class="value" title="${fullNumber(totals.anchorsAvoided ?? 0)}">${formatTokens(totals.anchorsAvoided ?? 0)}</div><div class="meta">unique anchors returned in packets</div></div>`;
-
-  const monthly = agg?.monthly || {};
-  const monthlyCards = $("#monthlyCards");
-  const trend = monthly.trendDays || 0;
-  monthlyCards.innerHTML = `
-    <div class="platform-card accented"><div class="label">Est. tokens / month</div><div class="value" title="${fullNumber(monthly.estimatedTokensSaved ?? 0)}">~${formatTokens(monthly.estimatedTokensSaved ?? 0)}</div><div class="meta">${trend ? `from ${monthly.sampleQueries} calls over ${trend} day${trend === 1 ? "" : "s"} × 30` : "no usage yet"} · proxy, not a bill</div></div>
-    <div class="platform-card accented"><div class="label">Est. $ / month</div><div class="value">${formatUsd(monthly.estimatedUsdSaved)}</div><div class="meta">same token proxy at $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input · ${esc(savingsCaveat(agg))}</div></div>
-    <div class="platform-card accented"><div class="label">Est. time / month</div><div class="value">~${formatDuration(monthly.estimatedMsSaved)}</div><div class="meta">avoided tool round-trips at current pace</div></div>
-    <div class="platform-card accented"><div class="label">Est. calls / month</div><div class="value" title="${fullNumber(monthly.queries ?? 0)}">${formatTokens(monthly.queries ?? 0)}</div><div class="meta">amem context hits if this rate holds</div></div>
-    <div class="platform-card accented"><div class="label">Est. file reads / month</div><div class="value" title="${fullNumber(monthly.anchorsAvoided ?? 0)}">${formatTokens(monthly.anchorsAvoided ?? 0)}</div><div class="meta">anchors that would be skipped</div></div>`;
-
-  const cards = $("#cards");
-  const platforms = agg?.byPlatform?.length
-    ? agg.byPlatform
-    : [{ platform: "—", queries: 0, estimatedTokensSaved: 0, reportedTokensSaved: 0 }];
-  cards.innerHTML = `
-    <div class="platform-card"><div class="label">Total estimated</div><div class="value" title="${fullNumber(agg?.totals?.estimatedTokensSaved ?? 0)}">~${formatTokens(agg?.totals?.estimatedTokensSaved ?? 0)}</div><div class="meta">${formatUsd(agg?.totals?.estimatedUsdSaved)} · ${agg?.totals?.queries ?? 0} context queries · proxy, not billed savings</div></div>
-    ${platforms
-      .map(
-        (p) => `<div class="platform-card"><div class="label">${p.platform}</div><div class="value" title="${fullNumber(p.estimatedTokensSaved)}">~${formatTokens(p.estimatedTokensSaved)}</div><div class="meta">${p.queries} ${p.queries === 1 ? "query" : "queries"} · ~${formatDuration(p.estimatedMsSaved)}${p.avgLocalMs != null ? ` · ${formatDuration(p.avgLocalMs)} local` : ""}${p.reportedTokensSaved ? ` · reported ${formatTokens(p.reportedTokensSaved)}` : ""}</div></div>`,
-      )
-      .join("")}`;
-
-  const platformList = $("#platformList");
-  if (platformList) {
-    platformList.innerHTML = platforms
-      .map(
-        (p) =>
-          `<li><strong>${esc(p.platform)}</strong><span class="meta">${p.queries} queries · hit-ish savings ~${formatTokens(p.estimatedTokensSaved)} · ${formatUsd(p.estimatedUsdSaved)}</span></li>`,
-      )
-      .join("");
-  }
 
   drawChart(byDay);
   drawHitMissChart(byDay);
@@ -4722,6 +5048,12 @@ $("#tryRetrievalBtn")?.addEventListener("click", async () => {
     /* showdown result is enough */
   }
 });
+document.querySelectorAll("#topMore .menu-item").forEach((el) => {
+  if (el.tagName === "BUTTON") el.addEventListener("click", () => $("#topMore")?.removeAttribute("open"));
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#topMore")) $("#topMore")?.removeAttribute("open");
+});
 $("#showdownToggle")?.addEventListener("click", () => {
   if (state.tab !== "memory") return;
   state.showdownOpen = !state.showdownOpen;
@@ -4863,44 +5195,45 @@ $("#vaultScheduleBtn")?.addEventListener("click", async (e) => {
   if (res) delete $("#vaultHour").dataset.touched;
   paintVault();
 });
-$("#vaultUnscheduleBtn")?.addEventListener("click", (e) =>
-  vaultAction("/api/vault/backup/unschedule", {}, {
-    button: e.currentTarget,
+$("#vaultUnscheduleBtn")?.addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  if (!(await askConfirm("Turn off daily backups? Existing backups are kept, but no new ones are made until you turn this back on.", { confirmLabel: "Turn off backups" }))) return;
+  await vaultAction("/api/vault/backup/unschedule", {}, {
+    button,
     busy: "Turning off…",
     sendPassphrase: false,
     clearPassphrase: false,
     success: "Daily backup turned off.",
-  }),
-);
+  });
+});
 $("#vaultRestorePick")?.addEventListener("change", (e) => {
   $("#vaultRestorePath")?.classList.toggle("hidden", e.currentTarget.value !== "__other__");
-  $("#vaultRestoreConfirm")?.classList.add("hidden");
 });
 function vaultRestoreTarget() {
   const pick = $("#vaultRestorePick")?.value;
   return pick === "__other__" ? $("#vaultRestorePath")?.value?.trim() || "" : pick || "";
 }
-$("#vaultRestoreBtn")?.addEventListener("click", () => {
+$("#vaultRestoreBtn")?.addEventListener("click", async (e) => {
   const file = vaultRestoreTarget();
   if (!file) {
     vaultMessage("Choose a backup, or enter the path to a backup file.", "error");
     return;
   }
   const encrypted = file.endsWith(".enc");
-  $("#vaultRestoreConfirmText").textContent =
-    `Replace current memory with ${file.split("/").pop()}? A safety copy of the current memory is saved to the backups folder first.` +
-    (encrypted && !vaultPassphrase() ? " This backup is encrypted: enter its passphrase in Encryption first." : "");
-  $("#vaultRestoreConfirm")?.classList.remove("hidden");
-});
-$("#vaultRestoreNo")?.addEventListener("click", () => $("#vaultRestoreConfirm")?.classList.add("hidden"));
-$("#vaultRestoreYes")?.addEventListener("click", async (e) => {
-  const file = vaultRestoreTarget();
-  const res = await vaultAction("/api/vault/restore", { file }, {
+  if (encrypted && !vaultPassphrase()) {
+    vaultMessage("This backup is encrypted: enter its passphrase under Encryption first.", "error");
+    return;
+  }
+  const ok = await askConfirm(
+    `Replace your current memory with ${file.split("/").pop()}? A safety copy of the current memory is saved to the backups folder first.`,
+    { confirmLabel: "Replace memory" },
+  );
+  if (!ok) return;
+  await vaultAction("/api/vault/restore", { file }, {
     button: e.currentTarget,
     busy: "Restoring…",
     success: (r) => `Restored ${file.split("/").pop()}${r.safetyCopy ? `. Previous memory saved as ${String(r.safetyCopy).split("/").pop()}` : ""}.`,
   });
-  if (res) $("#vaultRestoreConfirm")?.classList.add("hidden");
 });
 $("#renameWsBtn")?.addEventListener("click", () => {
   renameWorkspaceUi(matchBoundRepo() || state.status?.repo);

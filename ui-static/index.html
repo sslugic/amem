@@ -86,20 +86,25 @@
               placeholder="Search your memory…"
               autocomplete="off"
             />
-            <button class="btn secondary small top-mem-only hidden" type="button" id="tryRetrievalBtn" title="See exactly what an agent would get for this question">
-              Test as a question
-            </button>
           </div>
           <div class="top-actions" id="topActions">
-            <label class="autostart brain-auto top-mem-only hidden" id="autoApplyLabel" title="Save new captures from chats without asking you first">
-              <input type="checkbox" id="autoApplyAll" /> Save new captures automatically
-            </label>
-            <button class="btn secondary small top-mem-only hidden" type="button" id="showdownToggle">
-              Compare search modes
-            </button>
-            <button class="btn secondary small top-mem-only hidden" type="button" id="rulesSyncBtn">
-              Sync pinned → rules
-            </button>
+            <details class="top-more top-mem-only hidden" id="topMore">
+              <summary class="btn secondary small" aria-label="More memory tools">More ▾</summary>
+              <div class="top-more-menu" role="menu">
+                <button class="menu-item" role="menuitem" type="button" id="tryRetrievalBtn" title="See exactly what an agent would get for the text in the search box">
+                  Test search as a question
+                </button>
+                <button class="menu-item" role="menuitem" type="button" id="showdownToggle">
+                  Compare search modes
+                </button>
+                <button class="menu-item hidden" role="menuitem" type="button" id="rulesSyncBtn">
+                  Sync pinned → rules
+                </button>
+                <label class="menu-item menu-check" id="autoApplyLabel" title="Save new captures from chats without asking you first">
+                  <input type="checkbox" id="autoApplyAll" /> Save new captures automatically
+                </label>
+              </div>
+            </details>
           </div>
         </header>
 
@@ -164,13 +169,6 @@
                   <select id="vaultRestorePick" aria-label="Backup to restore"></select>
                   <input id="vaultRestorePath" class="hidden" type="text" placeholder="/path/to/amem-backup.db or .db.enc" aria-label="Backup file path" />
                   <button class="btn secondary" id="vaultRestoreBtn" type="button">Restore…</button>
-                </div>
-                <div class="vault-confirm hidden" id="vaultRestoreConfirm" role="alertdialog" aria-labelledby="vaultRestoreConfirmText">
-                  <p id="vaultRestoreConfirmText"></p>
-                  <div class="vault-row">
-                    <button class="btn" id="vaultRestoreYes" type="button">Replace memory</button>
-                    <button class="btn secondary" id="vaultRestoreNo" type="button">Cancel</button>
-                  </div>
                 </div>
               </section>
             </div>

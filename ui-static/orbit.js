@@ -86,6 +86,27 @@ export function createOrbitViz(canvas, opts = {}) {
   let pointer = { x: -9999, y: -9999 };
   let t0 = performance.now();
 
+  /** Draw labels without overlap: highest priority first, skip any that would collide. */
+  function drawLabels(ctx, labels) {
+    const placed = [];
+    const overlaps = (a) => placed.some((b) => a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    for (const l of labels.sort((a, b) => b.priority - a.priority)) {
+      ctx.font = `${l.strong ? 600 : 500} ${l.size}px 'IBM Plex Sans', system-ui, sans-serif`;
+      const width = Math.max(...l.lines.map((t) => ctx.measureText(t).width));
+      const height = l.lines.length * (l.size + 3);
+      const box = { x0: l.x - width / 2 - 3, x1: l.x + width / 2 + 3, y0: l.y - 1, y1: l.y + height + 1 };
+      if (!l.strong && overlaps(box)) continue;
+      placed.push(box);
+      l.lines.forEach((text, i) => {
+        ctx.fillStyle = i === 0 && l.strong ? "#e8eef2" : "#a9b8c3";
+        ctx.font = i === 0 ? `${l.strong ? 600 : 500} ${l.size}px 'IBM Plex Sans', system-ui, sans-serif` : `500 ${l.size - 1}px 'IBM Plex Sans', system-ui, sans-serif`;
+        ctx.fillText(text, l.x, l.y + i * (l.size + 3));
+      });
+    }
+  }
+
   function setData({ claims, recentClaimIds, selectedFile, selectedClaim, label, ringLabel }) {
     recentIds = new Set(recentClaimIds || []);
     const tagged = (claims || []).map((c) => ({
@@ -234,6 +255,9 @@ export function createOrbitViz(canvas, opts = {}) {
     );
 
     hover = null;
+    // Labels are collected and placed after all circles, biggest/hovered first, and a
+    // label that would overlap one already placed is skipped (it shows on hover).
+    const labels = [];
 
     // file nodes
     for (const n of nodes) {
@@ -255,14 +279,14 @@ export function createOrbitViz(canvas, opts = {}) {
         ctx.lineWidth = 2;
         ctx.stroke();
       }
-      ctx.fillStyle = over || active ? "#e8eef2" : "#8fa3b0";
-      ctx.font = `${active || over ? 600 : 500} 11px 'IBM Plex Sans', system-ui, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      ctx.fillText(n.label || nodeLabel(n.id), n.x, n.y + n.r + 6);
-      ctx.fillStyle = "#8fa3b0";
-      ctx.font = "500 10px 'IBM Plex Sans', system-ui, sans-serif";
-      ctx.fillText(`${n.items.length}`, n.x, n.y + n.r + 20);
+      labels.push({
+        lines: [n.label || nodeLabel(n.id), `${n.items.length}`],
+        x: n.x,
+        y: n.y + n.r + 6,
+        size: 11,
+        strong: Boolean(active || over),
+        priority: (active || over ? 1e9 : 0) + n.items.length + 1000,
+      });
     }
 
     // outer ring: individual facts inside a file, or the files inside a memory
@@ -286,13 +310,18 @@ export function createOrbitViz(canvas, opts = {}) {
         ctx.stroke();
       }
       if (!f.claim) {
-        ctx.fillStyle = over ? "#e8eef2" : "#8fa3b0";
-        ctx.font = `${over ? 600 : 500} 10px 'IBM Plex Sans', system-ui, sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        ctx.fillText(`${f.label || nodeLabel(f.id)} · ${f.count}`, f.x, f.y + f.r + 5);
+        labels.push({
+          lines: [`${f.label || nodeLabel(f.id)} · ${f.count}`],
+          x: f.x,
+          y: f.y + f.r + 5,
+          size: 10,
+          strong: over,
+          priority: (over ? 1e9 : 0) + (f.count || 0),
+        });
       }
     }
+
+    drawLabels(ctx, labels);
 
     if (hover?.type === "claim" || hover?.type === "sub") {
       const text =
