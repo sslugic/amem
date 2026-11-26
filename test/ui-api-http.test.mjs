@@ -219,7 +219,7 @@ describe("UI setup stepper + brain defaults", () => {
     assert.match(UI_APP, /function setupIsComplete/);
     // Once set up, Settings shows connections, backup and projects as cards.
     assert.match(UI_APP, /section class="page settings-page"/);
-    assert.match(UI_APP, /id="connectionsCard"/);
+    assert.match(UI_APP, /id="set-apps"/);
     assert.match(UI_APP, /function mountVaultIn/);
     assert.match(UI_APP, /data-setup-step/);
     assert.match(UI_APP, /id="editSetup"/);
