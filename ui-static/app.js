@@ -3462,7 +3462,22 @@ function showBrainDetail(node) {
   showBrainOverview();
 }
 
+/**
+ * Token and count totals reach the billions on a busy machine. Full digits overflowed
+ * the stat cards, so a million and up is shown compact (1.81B, 744.8M); the exact figure
+ * goes in a title tooltip via fullNumber().
+ */
 function formatTokens(n) {
+  const v = Number(n || 0);
+  if (!Number.isFinite(v)) return "0";
+  if (Math.abs(v) < 1_000_000) return v.toLocaleString();
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: Math.abs(v) < 10_000_000 ? 2 : 1,
+  }).format(v);
+}
+
+function fullNumber(n) {
   return Number(n || 0).toLocaleString();
 }
 
@@ -4091,9 +4106,13 @@ function renderAnalytics() {
   const byDay = agg?.byDay || [];
   const g = state.graph || {};
   const claimUse = new Map();
-  for (const e of state.usage?.events || g.recentEvents || []) {
-    for (const id of eventClaimIds(e)) {
-      claimUse.set(id, (claimUse.get(id) || 0) + 1);
+  if (Array.isArray(state.usage?.topClaims)) {
+    for (const { id, n } of state.usage.topClaims) claimUse.set(id, n);
+  } else {
+    for (const e of state.usage?.events || g.recentEvents || []) {
+      for (const id of eventClaimIds(e)) {
+        claimUse.set(id, (claimUse.get(id) || 0) + 1);
+      }
     }
   }
   const topClaims = [...claimUse.entries()]
@@ -4168,27 +4187,27 @@ function renderAnalytics() {
     <div class="platform-card"><div class="label">Estimated money saved</div><div class="value">${formatUsd(totals.estimatedUsdSaved)}</div><div class="meta">at $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input tokens · ${esc(savingsCaveat(agg))}</div></div>
     <div class="platform-card"><div class="label">Local lookup</div><div class="value">${totals.avgLocalMs != null ? formatDuration(totals.avgLocalMs) : "—"}</div><div class="meta">measured SQLite / localhost avg</div></div>
     <div class="platform-card"><div class="label">Hit rate</div><div class="value">${formatPct(totals.hitRate)}</div><div class="meta">${totals.localHits ?? 0} keyword hits · ${totals.serverTrips ?? 0} misses · not model API calls</div></div>
-    <div class="platform-card"><div class="label">Avoided file reads</div><div class="value">${formatTokens(totals.anchorsAvoided ?? 0)}</div><div class="meta">unique anchors returned in packets</div></div>`;
+    <div class="platform-card"><div class="label">Avoided file reads</div><div class="value" title="${fullNumber(totals.anchorsAvoided ?? 0)}">${formatTokens(totals.anchorsAvoided ?? 0)}</div><div class="meta">unique anchors returned in packets</div></div>`;
 
   const monthly = agg?.monthly || {};
   const monthlyCards = $("#monthlyCards");
   const trend = monthly.trendDays || 0;
   monthlyCards.innerHTML = `
-    <div class="platform-card accented"><div class="label">Est. tokens / month</div><div class="value">~${formatTokens(monthly.estimatedTokensSaved ?? 0)}</div><div class="meta">${trend ? `from ${monthly.sampleQueries} calls over ${trend} day${trend === 1 ? "" : "s"} × 30` : "no usage yet"} · proxy, not a bill</div></div>
+    <div class="platform-card accented"><div class="label">Est. tokens / month</div><div class="value" title="${fullNumber(monthly.estimatedTokensSaved ?? 0)}">~${formatTokens(monthly.estimatedTokensSaved ?? 0)}</div><div class="meta">${trend ? `from ${monthly.sampleQueries} calls over ${trend} day${trend === 1 ? "" : "s"} × 30` : "no usage yet"} · proxy, not a bill</div></div>
     <div class="platform-card accented"><div class="label">Est. $ / month</div><div class="value">${formatUsd(monthly.estimatedUsdSaved)}</div><div class="meta">same token proxy at $${agg?.pricing?.usdPerMillionInputTokens ?? 3}/1M input · ${esc(savingsCaveat(agg))}</div></div>
     <div class="platform-card accented"><div class="label">Est. time / month</div><div class="value">~${formatDuration(monthly.estimatedMsSaved)}</div><div class="meta">avoided tool round-trips at current pace</div></div>
-    <div class="platform-card accented"><div class="label">Est. calls / month</div><div class="value">${formatTokens(monthly.queries ?? 0)}</div><div class="meta">amem context hits if this rate holds</div></div>
-    <div class="platform-card accented"><div class="label">Est. file reads / month</div><div class="value">${formatTokens(monthly.anchorsAvoided ?? 0)}</div><div class="meta">anchors that would be skipped</div></div>`;
+    <div class="platform-card accented"><div class="label">Est. calls / month</div><div class="value" title="${fullNumber(monthly.queries ?? 0)}">${formatTokens(monthly.queries ?? 0)}</div><div class="meta">amem context hits if this rate holds</div></div>
+    <div class="platform-card accented"><div class="label">Est. file reads / month</div><div class="value" title="${fullNumber(monthly.anchorsAvoided ?? 0)}">${formatTokens(monthly.anchorsAvoided ?? 0)}</div><div class="meta">anchors that would be skipped</div></div>`;
 
   const cards = $("#cards");
   const platforms = agg?.byPlatform?.length
     ? agg.byPlatform
     : [{ platform: "—", queries: 0, estimatedTokensSaved: 0, reportedTokensSaved: 0 }];
   cards.innerHTML = `
-    <div class="platform-card"><div class="label">Total estimated</div><div class="value">~${formatTokens(agg?.totals?.estimatedTokensSaved ?? 0)}</div><div class="meta">${formatUsd(agg?.totals?.estimatedUsdSaved)} · ${agg?.totals?.queries ?? 0} context queries · proxy, not billed savings</div></div>
+    <div class="platform-card"><div class="label">Total estimated</div><div class="value" title="${fullNumber(agg?.totals?.estimatedTokensSaved ?? 0)}">~${formatTokens(agg?.totals?.estimatedTokensSaved ?? 0)}</div><div class="meta">${formatUsd(agg?.totals?.estimatedUsdSaved)} · ${agg?.totals?.queries ?? 0} context queries · proxy, not billed savings</div></div>
     ${platforms
       .map(
-        (p) => `<div class="platform-card"><div class="label">${p.platform}</div><div class="value">~${formatTokens(p.estimatedTokensSaved)}</div><div class="meta">${p.queries} ${p.queries === 1 ? "query" : "queries"} · ~${formatDuration(p.estimatedMsSaved)}${p.avgLocalMs != null ? ` · ${formatDuration(p.avgLocalMs)} local` : ""}${p.reportedTokensSaved ? ` · reported ${formatTokens(p.reportedTokensSaved)}` : ""}</div></div>`,
+        (p) => `<div class="platform-card"><div class="label">${p.platform}</div><div class="value" title="${fullNumber(p.estimatedTokensSaved)}">~${formatTokens(p.estimatedTokensSaved)}</div><div class="meta">${p.queries} ${p.queries === 1 ? "query" : "queries"} · ~${formatDuration(p.estimatedMsSaved)}${p.avgLocalMs != null ? ` · ${formatDuration(p.avgLocalMs)} local` : ""}${p.reportedTokensSaved ? ` · reported ${formatTokens(p.reportedTokensSaved)}` : ""}</div></div>`,
       )
       .join("")}`;
 

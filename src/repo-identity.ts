@@ -43,7 +43,32 @@ export function normalizeRemoteUrl(url: string): string {
   return u.toLowerCase().replace(/\/+$/, "").replace(/\.git$/i, "");
 }
 
+/**
+ * Detecting a repo runs up to four git subprocesses (~70 ms). The dashboard resolves
+ * it on every API call, several per tab switch, so the long-running UI server turns on
+ * a short cache. Off by default: CLI runs and hooks are one-shot and must see changes.
+ */
+let identityTtlMs = 0;
+const identityCache = new Map<string, { at: number; value: RepoIdentity }>();
+
+export function setRepoIdentityCacheTtl(ms: number): void {
+  identityTtlMs = Math.max(0, ms);
+  identityCache.clear();
+}
+
 export function detectRepoIdentity(cwd: string = process.cwd()): RepoIdentity {
+  if (identityTtlMs <= 0) return detectRepoIdentityUncached(cwd);
+  const key = resolve(cwd);
+  const hit = identityCache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < identityTtlMs) return { ...hit.value };
+  const value = detectRepoIdentityUncached(cwd);
+  if (identityCache.size > 256) identityCache.clear();
+  identityCache.set(key, { at: now, value });
+  return { ...value };
+}
+
+function detectRepoIdentityUncached(cwd: string): RepoIdentity {
   const rootPath = findGitRoot(cwd) ?? resolve(cwd);
   const remoteRaw = runGit(rootPath, ["remote", "get-url", "origin"]);
   const remoteUrl = remoteRaw ? normalizeRemoteUrl(remoteRaw) : null;

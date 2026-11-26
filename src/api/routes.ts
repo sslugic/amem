@@ -92,7 +92,7 @@ import {
   writeSkill,
   type SkillMeta,
 } from "../skills.js";
-import { buildContext, buildRetrievalShowdown, decorateUsageEvents, renderContextWithinBudget } from "../context.js";
+import { buildContext, buildRetrievalShowdown, decorateUsageEvents, renderContextWithinBudget, topClaimUse } from "../context.js";
 import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
 import { hostInstallHealth, installHost } from "../install/hosts.js";
@@ -2037,10 +2037,15 @@ export function handleApi(req: ApiRequest): ApiResponse {
       if (!repo) return err(400, "Repo not initialized");
       events = decorateUsageEvents(listUsageEvents({ repoId: repo.id, days }));
     }
+    // The full event list was tens of MB on a busy machine and the page only needs the
+    // aggregate, the most-served claims and a short recent list.
+    const limit = Math.min(2000, Math.max(0, Number(searchParams.get("events") ?? "50") || 0));
     return ok({
       scope,
       days,
-      events,
+      events: events.slice(0, limit),
+      eventsTotal: events.length,
+      topClaims: topClaimUse(events),
       aggregate: aggregateUsage(events, days),
       repos: listRepos().map((r) => ({ id: r.id, name: r.repo_name })),
     });
