@@ -178,3 +178,27 @@ test("npm install beacons roll up with bot/dc filter and session dedupe", async 
   assert.ok(!JSON.stringify(stats).includes("203.0.113.88"));
   _resetHitsForTests();
 });
+
+test("beacon utm tags roll up into campaigns, cleaned and per visitor", async () => {
+  _resetHitsForTests();
+  delete process.env.AMEM_HITS_S3_BUCKET;
+  const prev = process.env.AMEM_SHOP_STARTED_AT;
+  process.env.AMEM_SHOP_STARTED_AT = "2026-01-01T00:00:00.000Z";
+  const req = (ip) => ({ headers: { "user-agent": "Mozilla/5.0 (iPhone) Safari/604.1", "x-forwarded-for": ip }, method: "GET" });
+  const banner = { source: "simply-remote", medium: "app", campaign: "more-from-us", content: "amem" };
+
+  recordBeacon(req("203.0.113.60"), { path: "/", sid: "sr_1", utm: banner });
+  recordBeacon(req("203.0.113.60"), { path: "/pricing", sid: "sr_1", utm: banner });
+  recordBeacon(req("203.0.113.61"), { path: "/", sid: "sr_2", utm: { ...banner, content: "AMEM<script>", extra: "x" } });
+  recordBeacon(req("203.0.113.62"), { path: "/", sid: "plain", utm: {} });
+  recordBeacon(req("203.0.113.63"), { path: "/", sid: "junk", utm: "nope" });
+
+  const stats = await getHitStats({ days: 7 });
+  assert.deepEqual(stats.topCampaigns, [{ campaign: "simply-remote · more-from-us · amem", count: 2, visitors: 1 }, { campaign: "simply-remote · more-from-us · amemscript", count: 1, visitors: 1 }]);
+  assert.equal(stats.pageviews.today, 5);
+  assert.ok(stats.recent.every((r) => !r.utm || !("extra" in r.utm)));
+
+  if (prev == null) delete process.env.AMEM_SHOP_STARTED_AT;
+  else process.env.AMEM_SHOP_STARTED_AT = prev;
+  _resetHitsForTests();
+});
