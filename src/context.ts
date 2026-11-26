@@ -48,6 +48,7 @@ import {
   queryOverlap,
 } from "./personal.js";
 import { clipText } from "./text-clip.js";
+import { estimateTokensFromText } from "./estimate.js";
 
 /** Reasons are stored as JSON; a malformed row must not break the whole packet. */
 function safeReasons(raw: string): string {
@@ -813,4 +814,64 @@ export function renderContextMarkdown(packet: ContextPacket): string {
     "_Memory is personal and local (`~/.amem`). Prefer these anchors over broad exploration. Verify current code before changing anything._",
   );
   return lines.join("\n");
+}
+
+export type BudgetedContext = { markdown: string; tokens: number; truncated: boolean; dropped: number };
+
+/**
+ * Render a packet under `maxTokens` (~4 chars per token). Drops the lowest-value parts
+ * first: chat notes, related components/flows, completed tasks, then the lowest-ranked
+ * claims and skills, then open tasks. Claims are already ranked by relevance, recency,
+ * pins and kind, so trimming from the tail keeps the best ones. Never cuts an item mid-way.
+ */
+export function renderContextWithinBudget(packet: ContextPacket, maxTokens?: number | null): BudgetedContext {
+  const full = renderContextMarkdown(packet);
+  const fullTokens = estimateTokensFromText(full);
+  if (!maxTokens || maxTokens <= 0 || fullTokens <= maxTokens) {
+    return { markdown: full, tokens: fullTokens, truncated: false, dropped: 0 };
+  }
+  const p: ContextPacket = {
+    ...packet,
+    claims: [...packet.claims],
+    flows: [...packet.flows],
+    components: [...packet.components],
+    notes: [...packet.notes],
+    tasks: [...(packet.tasks ?? [])],
+    skills: [...(packet.skills ?? [])],
+    skillDrafts: [...(packet.skillDrafts ?? [])],
+  };
+  const noteFor = (dropped: number) =>
+    `\n\n_Truncated to fit max_tokens=${maxTokens}: ${dropped} lower-ranked item(s) left out. Ask a narrower question or raise max_tokens._`;
+  const steps: Array<() => boolean> = [
+    () => p.notes.pop() !== undefined,
+    () => p.components.pop() !== undefined,
+    () => p.flows.pop() !== undefined,
+    () => p.skillDrafts.pop() !== undefined,
+    () => {
+      const i = p.tasks.map((t) => t.status).lastIndexOf("done");
+      if (i < 0) return false;
+      p.tasks.splice(i, 1);
+      return true;
+    },
+    () => (p.claims.length > 1 ? p.claims.pop() !== undefined : false),
+    () => p.skills.pop() !== undefined,
+    // The best claim always stays; if it alone is too big, the hard clip below trims it.
+    () => p.tasks.pop() !== undefined,
+  ];
+  let dropped = 0;
+  let markdown = full;
+  for (const step of steps) {
+    while (estimateTokensFromText(markdown + noteFor(dropped + 1)) > maxTokens && step()) {
+      dropped += 1;
+      markdown = renderContextMarkdown(p);
+    }
+  }
+  markdown += noteFor(dropped);
+  // Still over (a single huge claim or the fixed header): hard-clip at a line boundary.
+  const cap = maxTokens * 4;
+  if (markdown.length > cap) {
+    const cut = markdown.slice(0, Math.max(0, cap - 40));
+    markdown = `${cut.slice(0, Math.max(0, cut.lastIndexOf("\n")))}\n_…clipped to max_tokens=${maxTokens}._`;
+  }
+  return { markdown, tokens: estimateTokensFromText(markdown), truncated: true, dropped };
 }

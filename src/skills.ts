@@ -18,10 +18,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { pruneSkillRows, upsertSkillRow } from "./db.js";
+import { openDb, pruneSkillRows, upsertSkillRow } from "./db.js";
 import { amemHome } from "./paths.js";
 import { compiledDenyPatterns } from "./policy.js";
-import { contentTokens, wordHit } from "./search.js";
+import { contentTokens, pruneItemFts, upsertItemFts, wordHit } from "./search.js";
 import { redactSecrets } from "./secret-detect.js";
 
 export const SKILL_FILE = "SKILL.md";
@@ -35,6 +35,10 @@ export type SkillMeta = {
   description: string;
   version: string | null;
   tags: string[];
+  /** Trigger file globs (frontmatter `files:` / `globs:`), e.g. ["*.swift", "Package.swift"]. */
+  files: string[];
+  /** Trigger keywords (frontmatter `keywords:`), e.g. ["deploy", "migration"]. */
+  keywords: string[];
   /** Absolute path to the skill's SKILL.md. */
   path: string;
   /** Absolute path to the skill directory. */
@@ -152,6 +156,8 @@ export function readSkillMeta(dir: string, source: SkillSource = "local"): Skill
     description: metaString(meta, "description") || firstHeading(body),
     version: metaString(meta, "version"),
     tags: metaList(meta, "tags"),
+    files: [...metaList(meta, "files"), ...metaList(meta, "globs")],
+    keywords: metaList(meta, "keywords").map((k) => k.toLowerCase()),
     path: file,
     dir,
     hash: hashSkillContent(raw),
@@ -235,10 +241,14 @@ export function renderSkillMarkdown(input: {
   body?: string;
   version?: string;
   tags?: string[];
+  files?: string[];
+  keywords?: string[];
 }): string {
   const lines = ["---", `name: ${input.name}`, `description: ${input.description}`];
   if (input.version) lines.push(`version: ${input.version}`);
   if (input.tags?.length) lines.push(`tags: [${input.tags.join(", ")}]`);
+  if (input.files?.length) lines.push(`files: [${input.files.map((f) => `"${f.replace(/"/g, "")}"`).join(", ")}]`);
+  if (input.keywords?.length) lines.push(`keywords: [${input.keywords.join(", ")}]`);
   lines.push("---", "");
   const body = (input.body || "").trim();
   lines.push(body || defaultSkillBody(input.name));
@@ -408,6 +418,85 @@ export function syncSkillIndex(root = skillsDir()): IndexedSkill[] {
     });
   }
   pruneSkillRows(found.map((s) => s.name));
+  indexSkillsFts(found);
+  return out;
+}
+
+/** Keep the skills part of the FTS index in step with disk. Best-effort. */
+function indexSkillsFts(found: SkillMeta[]): void {
+  try {
+    const db = openDb();
+    for (const meta of found) {
+      upsertItemFts(db, {
+        type: "skill",
+        ref: meta.name,
+        repoId: null,
+        title: `${meta.name} ${meta.description}`,
+        body: [...meta.keywords, ...meta.files].join(" "),
+        tags: meta.tags,
+      });
+    }
+    pruneItemFts(db, "skill", found.map((s) => s.name));
+  } catch {
+    // FTS is an accelerator; skill listing must never fail on it.
+  }
+}
+
+/** Glob → RegExp: `**` any path, `*` within a segment, `?` one char. */
+export function globToRegExp(glob: string): RegExp {
+  let re = "";
+  for (let i = 0; i < glob.length; i += 1) {
+    const c = glob[i]!;
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        re += ".*";
+        i += 1;
+        if (glob[i + 1] === "/") i += 1;
+      } else re += "[^/]*";
+    } else if (c === "?") re += "[^/]";
+    else re += /[.+^${}()|[\]\\]/.test(c) ? `\\${c}` : c;
+  }
+  return new RegExp(`^${re}$`, "i");
+}
+
+/** Does `path` match `glob`? Globs without a slash match the basename anywhere. */
+export function matchGlob(path: string, glob: string): boolean {
+  const p = path.replace(/\\/g, "/").replace(/^\.\//, "");
+  const re = globToRegExp(glob.trim());
+  if (!glob.includes("/")) return re.test(p.split("/").pop() || p);
+  return re.test(p) || re.test(p.replace(/^.*?\//, ""));
+}
+
+export type SkillHint = { name: string; match: string; summary: string };
+
+/**
+ * One-line hints for skills whose triggers fire on the given files or text. Bodies stay
+ * on disk; the agent loads one with amem_skill_view if the hint looks right.
+ */
+export function matchSkillTriggers(
+  skills: Array<Pick<SkillMeta, "name" | "description" | "files" | "keywords">>,
+  input: { files?: string[]; text?: string },
+  limit = 5,
+): SkillHint[] {
+  const files = (input.files ?? []).filter(Boolean).slice(0, 500);
+  const hay = (input.text ?? "").toLowerCase();
+  const out: SkillHint[] = [];
+  for (const s of skills) {
+    let match: string | null = null;
+    for (const g of s.files ?? []) {
+      const f = files.find((file) => matchGlob(file, g));
+      if (f) {
+        match = `file ${g} (${f})`;
+        break;
+      }
+    }
+    if (!match && hay) {
+      const k = (s.keywords ?? []).find((kw) => kw && wordHit(hay, kw.toLowerCase()));
+      if (k) match = `keyword "${k}"`;
+    }
+    if (match) out.push({ name: s.name, match, summary: (s.description || "").replace(/\s+/g, " ").slice(0, 120) });
+    if (out.length >= limit) break;
+  }
   return out;
 }
 
@@ -428,6 +517,8 @@ export function skillSummary(s: SkillMeta | IndexedSkill): Record<string, unknow
     description: s.description,
     version: s.version,
     tags: s.tags,
+    ...(s.files?.length ? { files: s.files } : {}),
+    ...(s.keywords?.length ? { keywords: s.keywords } : {}),
     path: s.path,
     dir: s.dir,
     hash: s.hash,
@@ -457,7 +548,7 @@ export function rankSkills(
   for (const skill of skills) {
     if (isPromptDerivedSkill(skill)) continue;
     const name = skill.name.toLowerCase();
-    const haystack = `${name} ${skill.description} ${skill.tags.join(" ")}`.toLowerCase();
+    const haystack = `${name} ${skill.description} ${skill.tags.join(" ")} ${(skill.keywords ?? []).join(" ")}`.toLowerCase();
     let score = 0;
     const reasons: string[] = [];
     let hits = 0;

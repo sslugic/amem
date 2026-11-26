@@ -3,6 +3,8 @@ import type { ClaimRow } from "./db.js";
 
 const FTS_TABLE = "claims_fts";
 const FTS_MAP = "claims_fts_map";
+/** Skills and tasks share one FTS index; claims keep their own (older, per-repo map). */
+const ITEMS_FTS = "amem_fts";
 
 /** Tokenize for keyword fallback / conflict heuristics. */
 /**
@@ -138,8 +140,35 @@ export function buildFtsMatchQuery(query: string): string | null {
   return terms.join(" OR ");
 }
 
+/**
+ * FTS5 is compiled into the better-sqlite3 build we ship, but a custom SQLite (or
+ * AMEM_DISABLE_FTS=1, used by tests) may lack it. Then every FTS helper turns into a
+ * no-op and retrieval falls back to keyword + embedding scoring.
+ */
+const ftsState = new WeakMap<Database.Database, boolean>();
+
+export function ftsDisabledByEnv(): boolean {
+  return process.env.AMEM_DISABLE_FTS === "1";
+}
+
+function tableExists(db: Database.Database, name: string): boolean {
+  return Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE name = ?`).get(name));
+}
+
+/** True when the FTS tables exist on this connection (created by the migration). */
+export function ftsReady(db: Database.Database): boolean {
+  if (ftsDisabledByEnv()) return false;
+  const known = ftsState.get(db);
+  if (known !== undefined) return known;
+  const ready = tableExists(db, FTS_TABLE) && tableExists(db, ITEMS_FTS);
+  if (ready) ftsState.set(db, true);
+  return ready;
+}
+
 export function ensureClaimsFts(db: Database.Database): void {
-  db.exec(`
+  if (ftsDisabledByEnv()) return;
+  try {
+    db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS_TABLE} USING fts5(
       kind,
       text,
@@ -149,6 +178,12 @@ export function ensureClaimsFts(db: Database.Database): void {
       claim_id UNINDEXED,
       tokenize = 'porter unicode61'
     );
+  `);
+  } catch {
+    // No FTS5 in this SQLite build: keyword fallback.
+    return;
+  }
+  db.exec(`
     CREATE TABLE IF NOT EXISTS ${FTS_MAP} (
       repo_id TEXT NOT NULL,
       claim_id TEXT NOT NULL,
@@ -159,6 +194,7 @@ export function ensureClaimsFts(db: Database.Database): void {
 }
 
 function deleteFtsRow(db: Database.Database, repoId: string, claimId: string): void {
+  if (!tableExists(db, FTS_TABLE) || ftsDisabledByEnv()) return;
   const mapped = db
     .prepare(`SELECT fts_rowid AS rowid FROM ${FTS_MAP} WHERE repo_id = ? AND claim_id = ?`)
     .get(repoId, claimId) as { rowid: number } | undefined;
@@ -168,6 +204,7 @@ function deleteFtsRow(db: Database.Database, repoId: string, claimId: string): v
 }
 
 export function upsertClaimFts(db: Database.Database, claim: ClaimRow): void {
+  if (!tableExists(db, FTS_TABLE) || ftsDisabledByEnv()) return;
   if ((claim.status ?? "active") !== "active") {
     deleteFtsRow(db, claim.repo_id, claim.id);
     return;
@@ -197,6 +234,7 @@ export function removeClaimFts(db: Database.Database, repoId: string, claimId: s
 }
 
 export function reindexRepoClaimsFts(db: Database.Database, repoId: string): void {
+  if (!tableExists(db, FTS_TABLE) || ftsDisabledByEnv()) return;
   const mapped = db
     .prepare(`SELECT claim_id, fts_rowid FROM ${FTS_MAP} WHERE repo_id = ?`)
     .all(repoId) as Array<{ claim_id: string; fts_rowid: number }>;
@@ -216,6 +254,7 @@ export function reindexRepoClaimsFts(db: Database.Database, repoId: string): voi
 }
 
 export function reindexAllClaimsFts(db: Database.Database): void {
+  if (!tableExists(db, FTS_TABLE) || ftsDisabledByEnv()) return;
   const mapped = db
     .prepare(`SELECT fts_rowid FROM ${FTS_MAP}`)
     .all() as Array<{ fts_rowid: number }>;
@@ -245,8 +284,10 @@ export function searchClaimsFts(
   query: string,
   limit = 24,
 ): FtsHit[] {
-  const match = buildFtsMatchQuery(query);
-  if (!match) return [];
+  const base = buildFtsMatchQuery(query);
+  // Synonym members join as OR terms so "auth flow" reaches "JWT login middleware".
+  const match = base ? ftsOrQuery(expandQueryTerms(contentTokens(query).slice(0, 12))) : null;
+  if (!match || !tableExists(db, FTS_TABLE) || ftsDisabledByEnv()) return [];
   try {
     return db
       .prepare(
@@ -290,4 +331,151 @@ export function tokenJaccard(a: string, b: string): number {
   let inter = 0;
   for (const t of sa) if (sb.has(t)) inter += 1;
   return inter / (sa.size + sb.size - inter);
+}
+
+/**
+ * Small hand-written synonym groups so natural phrasing reaches the words people
+ * actually wrote ("auth flow" finds "JWT login middleware"). No model, no download:
+ * a query term in a group adds the other members as OR terms.
+ */
+const SYNONYM_GROUPS: string[][] = [
+  ["auth", "authentication", "authenticate", "login", "signin", "jwt", "token", "oauth", "sso", "session", "credential"],
+  ["deploy", "deployment", "release", "rollout", "ship", "publish"],
+  ["database", "db", "sqlite", "postgres", "sql", "schema", "migration"],
+  ["test", "tests", "testing", "spec", "e2e", "regression", "qa"],
+  ["bug", "error", "failure", "crash", "defect", "exception"],
+  ["ci", "pipeline", "workflow", "actions"],
+  ["config", "configuration", "settings", "env", "environment"],
+  ["performance", "perf", "latency", "slow", "speed"],
+  ["ui", "frontend", "interface", "dashboard"],
+  ["api", "endpoint", "route", "rest"],
+  ["docs", "documentation", "readme"],
+];
+const SYNONYMS = new Map<string, string[]>();
+for (const group of SYNONYM_GROUPS) for (const w of group) SYNONYMS.set(w, group);
+
+/** Query tokens plus their synonym-group members, deduped, capped. */
+export function expandQueryTerms(tokens: string[], cap = 24): string[] {
+  const out = new Set<string>();
+  for (const t of tokens) {
+    out.add(t);
+    const group = SYNONYMS.get(t) ?? SYNONYMS.get(stem(t));
+    if (group) for (const g of group) out.add(g);
+  }
+  return [...out].slice(0, cap);
+}
+
+function ftsOrQuery(tokens: string[]): string | null {
+  const terms = tokens
+    .map((t) => t.replace(/["']/g, ""))
+    .filter((t) => t.length > 1 && !/^[.]+$/.test(t))
+    .map((t) => `"${t}"`);
+  return terms.length ? terms.join(" OR ") : null;
+}
+
+export type ItemType = "skill" | "task";
+
+export function ensureItemsFts(db: Database.Database): void {
+  if (ftsDisabledByEnv()) return;
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS ${ITEMS_FTS} USING fts5(
+        type UNINDEXED,
+        title,
+        body,
+        tags,
+        ref UNINDEXED,
+        repo_id UNINDEXED,
+        tokenize = 'porter unicode61'
+      );
+    `);
+  } catch {
+    // No FTS5: skills and tasks are searched by keyword instead.
+  }
+}
+
+export function upsertItemFts(
+  db: Database.Database,
+  item: { type: ItemType; ref: string; repoId: string | null; title: string; body: string; tags: string[] },
+): void {
+  if (!tableExists(db, ITEMS_FTS) || ftsDisabledByEnv()) return;
+  db.prepare(`DELETE FROM ${ITEMS_FTS} WHERE type = ? AND ref = ?`).run(item.type, item.ref);
+  db.prepare(
+    `INSERT INTO ${ITEMS_FTS} (type, title, body, tags, ref, repo_id) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(item.type, item.title, item.body, item.tags.join(" "), item.ref, item.repoId ?? "");
+}
+
+export function removeItemFts(db: Database.Database, type: ItemType, ref: string): void {
+  if (!tableExists(db, ITEMS_FTS) || ftsDisabledByEnv()) return;
+  db.prepare(`DELETE FROM ${ITEMS_FTS} WHERE type = ? AND ref = ?`).run(type, ref);
+}
+
+/** Drop rows of `type` whose ref is not in `keep` (skills deleted on disk). */
+export function pruneItemFts(db: Database.Database, type: ItemType, keep: string[]): void {
+  if (!tableExists(db, ITEMS_FTS) || ftsDisabledByEnv()) return;
+  const rows = db.prepare(`SELECT rowid, ref FROM ${ITEMS_FTS} WHERE type = ?`).all(type) as Array<{ rowid: number; ref: string }>;
+  const live = new Set(keep);
+  const del = db.prepare(`DELETE FROM ${ITEMS_FTS} WHERE rowid = ?`);
+  for (const r of rows) if (!live.has(r.ref)) del.run(r.rowid);
+}
+
+export type ItemHit = { type: ItemType | "claim"; ref: string; repoId: string; bm25: number };
+
+/**
+ * One BM25 ranking over facts, skills and tasks. Claims come from claims_fts (scoped by
+ * repo ids), skills/tasks from amem_fts (skills are global, tasks per repo).
+ * Returns [] when FTS5 is unavailable; callers fall back to keyword scoring.
+ */
+export function searchAllFts(
+  db: Database.Database,
+  query: string,
+  opts: { repoIds: string[]; types: Array<ItemType | "claim">; limit?: number; expand?: boolean },
+): ItemHit[] {
+  const base = contentTokens(query).slice(0, 12);
+  const match = ftsOrQuery(opts.expand === false ? base : expandQueryTerms(base));
+  if (!match || !ftsReady(db)) return [];
+  const limit = opts.limit ?? 50;
+  const hits: ItemHit[] = [];
+  const marks = opts.repoIds.map(() => "?").join(",") || "''";
+  try {
+    if (opts.types.includes("claim") && opts.repoIds.length) {
+      const rows = db
+        .prepare(
+          `SELECT claim_id AS ref, repo_id AS repoId, bm25(${FTS_TABLE}) AS bm25 FROM ${FTS_TABLE}
+           WHERE ${FTS_TABLE} MATCH ? AND repo_id IN (${marks}) ORDER BY bm25 LIMIT ?`,
+        )
+        .all(match, ...opts.repoIds, limit) as Array<{ ref: string; repoId: string; bm25: number }>;
+      for (const r of rows) hits.push({ type: "claim", ...r });
+    }
+    const itemTypes = opts.types.filter((t): t is ItemType => t === "skill" || t === "task");
+    if (itemTypes.length) {
+      const rows = db
+        .prepare(
+          `SELECT type, ref, repo_id AS repoId, bm25(${ITEMS_FTS}) AS bm25 FROM ${ITEMS_FTS}
+           WHERE ${ITEMS_FTS} MATCH ? ORDER BY bm25 LIMIT ?`,
+        )
+        .all(match, limit * 2) as Array<{ type: ItemType; ref: string; repoId: string; bm25: number }>;
+      const repoSet = new Set(opts.repoIds);
+      for (const r of rows) {
+        if (!itemTypes.includes(r.type)) continue;
+        if (r.type === "task" && !repoSet.has(r.repoId)) continue;
+        hits.push(r);
+      }
+    }
+  } catch {
+    return [];
+  }
+  return hits.sort((a, b) => a.bm25 - b.bm25).slice(0, limit);
+}
+
+/** Keyword relevance used when FTS5 is missing: synonym-expanded word-prefix hits. */
+export function keywordRelevance(text: string, query: string): number {
+  const hay = text.toLowerCase();
+  const base = contentTokens(query);
+  let score = 0;
+  for (const t of expandQueryTerms(base)) {
+    const direct = base.includes(t);
+    if (wordHit(hay, t) || (stem(t) !== t && wordHit(hay, stem(t)))) score += direct ? 3 : 1.5;
+  }
+  return score;
 }

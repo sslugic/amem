@@ -3,7 +3,16 @@ import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { dbPath, ensureAmemHome } from "./paths.js";
 import { detectRepoIdentity, newId, parseWorkspaceSlug, slugifyWorkspace, type RepoIdentity } from "./repo-identity.js";
-import { ensureClaimsFts, reindexAllClaimsFts, reindexRepoClaimsFts, removeClaimFts, upsertClaimFts } from "./search.js";
+import {
+  ensureClaimsFts,
+  ensureItemsFts,
+  reindexAllClaimsFts,
+  reindexRepoClaimsFts,
+  removeClaimFts,
+  removeItemFts,
+  upsertClaimFts,
+  upsertItemFts,
+} from "./search.js";
 import {
   ensureClaimsEmbed,
   reindexRepoEmbeds,
@@ -42,6 +51,8 @@ export type ClaimRow = {
   pinned: number;
   /** JSON {anchor: sha256} of the file anchors when the claim was written; drives freshness. */
   anchor_hashes?: string | null;
+  /** ISO time after which the claim is excluded from recall (TTL); null = never. */
+  expires_at?: string | null;
 };
 
 export type ProposalDraftRow = {
@@ -370,6 +381,11 @@ export function openDb(): Database.Database {
   db.pragma("foreign_keys = ON");
   migrate(db);
   cached = db;
+  try {
+    expireDueClaims();
+  } catch {
+    // A busy database must not block opening; the next open sweeps again.
+  }
   return db;
 }
 
@@ -410,7 +426,26 @@ const MIGRATIONS: Array<(db: Database.Database) => void> = [
       );
       CREATE INDEX IF NOT EXISTS activity_events_ts_idx ON activity_events(ts);
     `),
+  // 5: TTL on claims, and one FTS5 index over skills and tasks (claims keep claims_fts).
+  (db) => {
+    addColumn(db, "claims", "expires_at", "TEXT");
+    db.exec(`CREATE INDEX IF NOT EXISTS claims_expires_idx ON claims(expires_at) WHERE expires_at IS NOT NULL`);
+    ensureItemsFts(db);
+    const tasks = db.prepare(`SELECT * FROM agent_tasks`).all() as AgentTaskRow[];
+    for (const t of tasks) indexTaskFts(db, t);
+  },
 ];
+
+function indexTaskFts(db: Database.Database, t: AgentTaskRow): void {
+  upsertItemFts(db, {
+    type: "task",
+    ref: `${t.repo_id}:${t.id}`,
+    repoId: t.repo_id,
+    title: t.title,
+    body: t.body ?? "",
+    tags: [t.status],
+  });
+}
 
 function redactStoredSecrets(db: Database.Database): void {
   const notes = db.prepare(`SELECT id, text FROM conversation_notes`).all() as Array<{ id: string; text: string }>;
@@ -720,9 +755,10 @@ export function listClaims(
     .prepare(
       `SELECT * FROM claims WHERE repo_id = ?
        AND COALESCE(status, 'active') = 'active'
+       AND (expires_at IS NULL OR expires_at > ?)
        ORDER BY COALESCE(pinned, 0) DESC, updated_at DESC`,
     )
-    .all(repoId) as ClaimRow[];
+    .all(repoId, nowIso()) as ClaimRow[];
 }
 
 export function listClaimsAll(opts: { includeSuperseded?: boolean } = {}): ClaimRow[] {
@@ -738,9 +774,10 @@ export function listClaimsAll(opts: { includeSuperseded?: boolean } = {}): Claim
     .prepare(
       `SELECT * FROM claims
        WHERE COALESCE(status, 'active') = 'active'
+       AND (expires_at IS NULL OR expires_at > ?)
        ORDER BY COALESCE(pinned, 0) DESC, updated_at DESC`,
     )
-    .all() as ClaimRow[];
+    .all(nowIso()) as ClaimRow[];
 }
 
 export function getClaim(repoId: string, claimId: string): ClaimRow | null {
@@ -749,6 +786,43 @@ export function getClaim(repoId: string, claimId: string): ClaimRow | null {
       .prepare("SELECT * FROM claims WHERE repo_id = ? AND id = ?")
       .get(repoId, claimId) as ClaimRow | undefined) ?? null
   );
+}
+
+/**
+ * TTL: set (or clear, with null) when a claim stops being served. Recall already skips
+ * claims past expires_at; expireDueClaims() later flips them to status 'expired'.
+ */
+export function setClaimExpiry(repoId: string, claimId: string, expiresAt: string | null): ClaimRow | null {
+  return writeTx(() => {
+    openDb()
+      .prepare(`UPDATE claims SET expires_at = ? WHERE repo_id = ? AND id = ?`)
+      .run(expiresAt, repoId, claimId);
+    return getClaim(repoId, claimId);
+  });
+}
+
+/**
+ * Mark active claims past their expires_at as 'expired' (kept for history, not served)
+ * and drop them from the search indexes. Reads first so the common case takes no lock.
+ */
+export function expireDueClaims(now: string = nowIso()): number {
+  const db = openDb();
+  const due = db
+    .prepare(
+      `SELECT repo_id, id FROM claims
+       WHERE expires_at IS NOT NULL AND expires_at <= ? AND COALESCE(status, 'active') = 'active'`,
+    )
+    .all(now) as Array<{ repo_id: string; id: string }>;
+  if (due.length === 0) return 0;
+  return writeTx(() => {
+    const stmt = db.prepare(`UPDATE claims SET status = 'expired', updated_at = ? WHERE repo_id = ? AND id = ?`);
+    for (const c of due) {
+      stmt.run(now, c.repo_id, c.id);
+      removeClaimFts(db, c.repo_id, c.id);
+      removeClaimEmbed(db, c.repo_id, c.id);
+    }
+    return due.length;
+  });
 }
 
 export function updateClaim(...args: Parameters<typeof updateClaimUnlocked>): ReturnType<typeof updateClaimUnlocked> {
@@ -1841,7 +1915,9 @@ export function insertTask(input: {
       ts,
       completed,
     );
-  return getTask(input.repoId, id)!;
+  const row = getTask(input.repoId, id)!;
+  indexTaskFts(openDb(), row);
+  return row;
 }
 
 export function updateTask(...args: Parameters<typeof updateTaskUnlocked>): ReturnType<typeof updateTaskUnlocked> {
@@ -1888,7 +1964,9 @@ function updateTaskUnlocked(
        updated_at = ?, completed_at = ? WHERE repo_id = ? AND id = ?`,
     )
     .run(title, body, status, anchors, ts, completedAt, repoId, id);
-  return getTask(repoId, id);
+  const row = getTask(repoId, id);
+  if (row) indexTaskFts(openDb(), row);
+  return row;
 }
 
 export function completeTask(repoId: string, id: string): AgentTaskRow | null {
@@ -1899,6 +1977,7 @@ export function deleteTask(repoId: string, id: string): boolean {
   const info = openDb()
     .prepare(`DELETE FROM agent_tasks WHERE repo_id = ? AND id = ?`)
     .run(repoId, id);
+  removeItemFts(openDb(), "task", `${repoId}:${id}`);
   return Number(info.changes || 0) > 0;
 }
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { installIssues } from "./install-check.js";
-import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { buildBootstrap, renderRecallMarkdown, resolveScope as resolveMemoryScope, searchMemory, type RecallType } from "./recall.js";
+import { exportBlock, exportSkills, importIntoRepo, parseImportFile, renderExportMarkdown } from "./import-export.js";
 import { dirname, join, resolve } from "node:path";
 import { buildAttestReport, formatAttestHuman, readVersion } from "./attest.js";
 import { handleApi, logContextUsage } from "./api/routes.js";
@@ -183,8 +185,8 @@ Usage:
   amem status [--workspace <name>]
   amem doctor [--fix] [--attest] [--json]
   amem uninstall [--yes] [--purge]        # dry run unless --yes; --purge also deletes memory
-  amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna]
-  amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>] [--supersedes <id,id>]
+  amem context "<query>" [--workspace <name>] [--platform cursor|claude|luna] [--max-tokens N]
+  amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>] [--supersedes <id,id>] [--ttl-days N | --expires-at <iso>]
   amem supersede <claimId...> [--by <newerClaimId>] [--workspace <name>]
   amem recipe [--json]
   amem platforms [--json]
@@ -196,7 +198,10 @@ Usage:
   amem propose validate <file.json>
   amem propose diff <file.json>
   amem propose apply <file.json>
-  amem export [--out <file.json>]
+  amem export [--out <file>] [--format json|md] [--all] [--scope global|project:<path>]
+  amem import <file|dir> [--scope global|project|project:<path>] [--workspace <name>] [--dry-run] [--json]
+  amem search "<query>" [--types claim,skill,task] [--scope <scope>] [--status <s>] [--tags a,b] [--max-tokens N] [--json]
+  amem bootstrap [--scope <scope>] [--files a,b] [--max-tokens 350] [--json]
   amem wipe --yes
   amem wipe --all --yes
   amem lock --passphrase <secret>
@@ -293,6 +298,20 @@ function resolveBinding(flags: Map<string, string | boolean>) {
     return repo;
   }
   return requireRepo();
+}
+
+/** A file, or the rules files a project directory usually has. */
+function importCandidates(path: string): string[] {
+  if (!existsSync(path)) throw new Error(`Not found: ${path}`);
+  if (!statSync(path).isDirectory()) return [path];
+  const out = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules", ".windsurfrules"]
+    .map((f) => join(path, f))
+    .filter((f) => existsSync(f));
+  const rulesDir = join(path, ".cursor", "rules");
+  if (existsSync(rulesDir)) {
+    for (const f of readdirSync(rulesDir)) if (/\.(mdc|md)$/.test(f) && !f.startsWith("amem-")) out.push(join(rulesDir, f));
+  }
+  return out;
 }
 
 async function readStdin(): Promise<string> {
@@ -822,6 +841,7 @@ async function main(): Promise<void> {
           platform,
           sessionId,
           query,
+          maxTokens: Number(flagString(flags, "max-tokens")) || undefined,
         });
         console.log(markdown);
         console.log("");
@@ -845,6 +865,8 @@ async function main(): Promise<void> {
             kind: flagString(flags, "kind") ?? "session",
             anchors: anchor ? [anchor] : undefined,
             supersedes: flagString(flags, "supersedes"),
+            ttl_days: flagString(flags, "ttl-days"),
+            expires_at: flagString(flags, "expires-at"),
             source: "cli",
           },
           cwd: process.cwd(),
@@ -856,9 +878,11 @@ async function main(): Promise<void> {
           claimId?: string;
           workspace?: string;
           superseded?: string[];
+          expiresAt?: string;
           possiblySupersedes?: Array<{ id: string; updatedAt: string; text: string; similarity: number }>;
         };
         console.log(`Remembered ${remembered.claimId} in ${remembered.workspace || repo.repo_name}`);
+        if (remembered.expiresAt) console.log(`Expires: ${remembered.expiresAt}`);
         if (remembered.superseded?.length) console.log(`Superseded: ${remembered.superseded.join(", ")}`);
         for (const c of remembered.possiblySupersedes ?? []) {
           console.log(`  possibly outdated: ${c.id} (${c.updatedAt.slice(0, 10)}, ${Math.round(c.similarity * 100)}% similar) ${c.text.slice(0, 90)}`);
@@ -941,28 +965,103 @@ async function main(): Promise<void> {
       }
       case "export": {
         assertExportAllowed();
-        const repo = resolveBinding(flags);
-        const data = {
-          exported_at: new Date().toISOString(),
-          repo: {
-            id: repo.id,
-            repo_key: repo.repo_key,
-            repo_name: repo.repo_name,
-            remote_url: repo.remote_url,
-          },
-          ...exportRepoMemory(repo.id),
-        };
+        const format = flagString(flags, "format") === "md" ? "md" : "json";
+        const scope = flagString(flags, "scope");
+        const all = Boolean(flags.get("all"));
+        const scoped = scope ? resolveMemoryScope(scope) : null;
+        if (scope && !scoped) throw new Error(`Unknown scope: ${scope}`);
+        const repo = all ? null : (scoped ?? resolveBinding(flags));
+        const blocks = all ? listRepos().map(exportBlock) : [exportBlock(repo!)];
+        const skills = flags.get("no-skills") ? [] : exportSkills();
+        let text: string;
+        if (format === "md") {
+          text = renderExportMarkdown(blocks, skills);
+        } else if (all) {
+          text = `${JSON.stringify({ exported_at: new Date().toISOString(), version: 2, repos: blocks, skills }, null, 2)}\n`;
+        } else {
+          const data = {
+            exported_at: new Date().toISOString(),
+            version: 2,
+            scope: blocks[0]!.scope,
+            repo: {
+              id: repo!.id,
+              repo_key: repo!.repo_key,
+              repo_name: repo!.repo_name,
+              remote_url: repo!.remote_url,
+            },
+            ...exportRepoMemory(repo!.id),
+            tasks: blocks[0]!.tasks,
+            skills,
+          };
+          text = `${JSON.stringify(data, null, 2)}\n`;
+        }
         const out = flagString(flags, "out");
-        const json = `${JSON.stringify(data, null, 2)}\n`;
         if (out) {
           const path = resolve(out);
           mkdirSync(dirname(path), { recursive: true });
-          writeFileSync(path, json, "utf8");
+          writeFileSync(path, text, "utf8");
           console.log(`Wrote personal export to ${path}`);
           console.log("Do not commit this file to a shared repository.");
         } else {
-          process.stdout.write(json);
+          process.stdout.write(text);
         }
+        break;
+      }
+      case "import": {
+        const target = positional[1];
+        if (!target) throw new Error("Usage: amem import <file|dir> [--scope global|project] [--dry-run]");
+        const scope = flagString(flags, "scope");
+        const repo = scope ? resolveMemoryScope(scope) : resolveBinding(flags);
+        if (!repo) throw new Error(`Unknown scope: ${scope}. Run amem init in that project first.`);
+        const files = importCandidates(resolve(target));
+        if (files.length === 0) throw new Error(`Nothing to import at ${target}`);
+        const dryRun = Boolean(flags.get("dry-run"));
+        const reports = files.map((file) => ({
+          file,
+          ...importIntoRepo(repo, parseImportFile(file, readFileSync(file, "utf8")), { dryRun }),
+        }));
+        if (flags.get("json")) {
+          console.log(JSON.stringify(reports, null, 2));
+          break;
+        }
+        for (const r of reports) {
+          console.log(
+            `${dryRun ? "[dry run] " : ""}${r.file} → ${r.workspace} (${r.scope}): ` +
+              `facts +${r.claims.added} (${r.claims.skipped} already there), ` +
+              `tasks +${r.tasks.added} (${r.tasks.skipped}), skills +${r.skills.added} (${r.skills.skipped})`,
+          );
+          for (const e of r.errors) console.log(`  skipped: ${e}`);
+        }
+        break;
+      }
+      case "search": {
+        const query = positional.slice(1).join(" ").trim();
+        if (!query) throw new Error('Usage: amem search "<query>" [--types claim,skill,task] [--max-tokens N]');
+        const scope = flagString(flags, "scope");
+        const repo = scope ? resolveMemoryScope(scope) : flagString(flags, "workspace") ? resolveBinding(flags) : getRepoByCwd();
+        const list = (name: string) => (flagString(flags, name) ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+        const result = searchMemory({
+          query,
+          repo,
+          types: list("types").filter((t): t is RecallType => t === "claim" || t === "skill" || t === "task"),
+          tags: list("tags"),
+          status: flagString(flags, "status"),
+          maxTokens: Number(flagString(flags, "max-tokens")) || undefined,
+          limit: Number(flagString(flags, "limit")) || undefined,
+        });
+        if (flags.get("json")) console.log(JSON.stringify(result, null, 2));
+        else console.log(renderRecallMarkdown(result));
+        break;
+      }
+      case "bootstrap": {
+        const scope = flagString(flags, "scope");
+        const repo = scope ? resolveMemoryScope(scope) : flagString(flags, "workspace") ? resolveBinding(flags) : getRepoByCwd();
+        const payload = buildBootstrap(repo, {
+          files: (flagString(flags, "files") ?? "").split(",").filter(Boolean),
+          maxTokens: Number(flagString(flags, "max-tokens")) || undefined,
+        });
+        if (flags.get("json")) console.log(JSON.stringify(payload, null, 2));
+        else console.log(payload.markdown);
         break;
       }
       case "lock": {

@@ -59,6 +59,19 @@ Stripe webhooks must be verified with the raw body.
 Anchors: `src/webhooks/stripe.ts`
 ```
 
+More you can do:
+
+```bash
+amem bootstrap                                   # ~350-token startup brief: global rules, project facts, active tasks, skill hints
+amem search "auth flow" --types claim,task --max-tokens 200   # BM25 over facts, skills and tasks
+amem remember "Staging queue paused for the incident" --ttl-days 2   # expires; kept as history
+amem import .                                    # CLAUDE.md, AGENTS.md, .cursorrules, .cursor/rules/*.mdc (idempotent)
+amem import notes.md --scope global              # global = shared across every project
+amem export --format md --all                    # or JSON (default) for backups and round-trips
+```
+
+Agents get the same through MCP: `amem_bootstrap` at session start, `amem_search`, `max_tokens` on `amem_context`, and `ttl_days` / `supersedes` on `amem_remember`. Skills can declare triggers in their frontmatter (`files: ["*.swift", "Package.swift"]`, `keywords: [deploy, migration]`), and amem surfaces a one-line hint when they match.
+
 Any MCP client can use the same memory: `amem mcp --print-config` prints a ready-to-paste config.
 
 Something off? `amem doctor --fix` rewires the current repo's client. To remove amem, run `amem uninstall` to see what it added, then `amem uninstall --yes`. Your memory stays unless you add `--purge`.

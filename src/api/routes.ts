@@ -1,6 +1,9 @@
 import { readVersion } from "../attest.js";
 import { currentInstall, findInstalls, hostLaunches, installIssues } from "../install-check.js";
 import { contentTokens } from "../search.js";
+import { buildBootstrap, renderRecallMarkdown, resolveScope as resolveMemoryScope, searchMemory, type RecallType } from "../recall.js";
+import { exportBlock, exportSkills, importIntoRepo, parseImportFile, renderExportMarkdown } from "../import-export.js";
+import { matchSkillTriggers } from "../skills.js";
 import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { createHash } from "node:crypto";
@@ -59,6 +62,7 @@ import {
   normalizeTaskStatus,
   type AgentTaskStatus,
   updateClaim,
+  setClaimExpiry,
   setClaimPinned,
   deleteClaim,
   setReportedOnLatest,
@@ -88,7 +92,7 @@ import {
   writeSkill,
   type SkillMeta,
 } from "../skills.js";
-import { buildContext, buildRetrievalShowdown, decorateUsageEvents, renderContextMarkdown } from "../context.js";
+import { buildContext, buildRetrievalShowdown, decorateUsageEvents, renderContextWithinBudget } from "../context.js";
 import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
 import { hostInstallHealth, installHost } from "../install/hosts.js";
@@ -655,14 +659,18 @@ function runContext(repo: RepoRow, body: unknown, searchParams: URLSearchParams)
   const platform =
     bodyField(body, "platform") || searchParams.get("platform") || repo.platform || "unknown";
   const sessionId = bodyField(body, "sessionId") || searchParams.get("sessionId") || undefined;
+  const maxTokens = bodyNumber(body, "max_tokens") ?? (Number(searchParams.get("max_tokens")) || undefined);
   const result = logContextUsage({
     repoId: repo.id,
     platform,
     sessionId,
     query,
+    maxTokens,
   });
   return ok({
     markdown: result.markdown,
+    tokens: result.tokens,
+    truncated: result.truncated,
     event: result.event,
     workspace: parseWorkspaceSlug(repo.remote_url) ?? repo.repo_name,
   });
@@ -762,6 +770,10 @@ function runRemember(repo: RepoRow, body: unknown): ApiResponse {
       },
     ],
   });
+  // TTL: re-remembering a fact without one makes it permanent again.
+  const expiresAt = resolveExpiry(body);
+  if (expiresAt instanceof Error) return err(400, expiresAt.message);
+  setClaimExpiry(repo.id, id, expiresAt);
   // Older memories on the same topic that this one may replace: the caller decides,
   // and re-saves with `supersedes` (or calls amem supersede) to retire them.
   const possiblySupersedes = findOlderSimilarClaims(repo.id, text, [id, ...supersedes]);
@@ -770,6 +782,7 @@ function runRemember(repo: RepoRow, body: unknown): ApiResponse {
     claimId: id,
     workspace: parseWorkspaceSlug(repo.remote_url) ?? repo.repo_name,
     superseded: supersedes,
+    ...(expiresAt ? { expiresAt } : {}),
     possiblySupersedes,
     ...(possiblySupersedes.length
       ? {
@@ -777,6 +790,31 @@ function runRemember(repo: RepoRow, body: unknown): ApiResponse {
         }
       : {}),
   });
+}
+
+/** `ttl_days` (number) or `expires_at` (ISO) → ISO expiry, null for none, Error if invalid. */
+function listField(body: unknown, key: string): string[] | undefined {
+  const v = body && typeof body === "object" ? (body as Record<string, unknown>)[key] : undefined;
+  if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string" && Boolean(x.trim())).slice(0, 20);
+  if (typeof v === "string" && v.trim()) return v.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 20);
+  return undefined;
+}
+
+export function resolveExpiry(body: unknown, now = new Date()): string | null | Error {
+  const raw = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const ttl = typeof raw.ttl_days === "string" ? Number(raw.ttl_days) : raw.ttl_days;
+  if (ttl !== undefined && ttl !== null && ttl !== "") {
+    if (typeof ttl !== "number" || !Number.isFinite(ttl) || ttl <= 0 || ttl > 3650) {
+      return new Error("ttl_days must be a number between 0 and 3650");
+    }
+    return new Date(now.getTime() + ttl * 86_400_000).toISOString();
+  }
+  if (typeof raw.expires_at === "string" && raw.expires_at.trim()) {
+    const t = Date.parse(raw.expires_at);
+    if (!Number.isFinite(t)) return new Error("expires_at must be an ISO date");
+    return new Date(t).toISOString();
+  }
+  return null;
 }
 
 function bodyNumber(body: unknown, key: string): number | undefined {
@@ -1186,6 +1224,70 @@ export function handleApi(req: ApiRequest): ApiResponse {
       doctor: doctorIssues(current, identity.rootPath),
       status: statusPayload(identity, current),
     });
+  }
+
+  if ((method === "POST" || method === "GET") && pathname === "/api/search") {
+    const query = bodyField(body, "query") || searchParams.get("q") || searchParams.get("query") || "";
+    const scope = bodyField(body, "scope") || searchParams.get("scope") || "";
+    const target = scope ? resolveMemoryScope(scope, cwd) : repo;
+    if (scope && !target) return err(404, `Unknown scope: ${scope}`);
+    const listParam = (key: string): string[] => {
+      const v = body && typeof body === "object" ? (body as Record<string, unknown>)[key] : undefined;
+      if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
+      const q = (typeof v === "string" ? v : searchParams.get(key)) || "";
+      return q.split(",").map((x) => x.trim()).filter(Boolean);
+    };
+    const types = listParam("types").filter((t): t is RecallType => t === "claim" || t === "skill" || t === "task");
+    const maxTokens = bodyNumber(body, "max_tokens") ?? (Number(searchParams.get("max_tokens")) || undefined);
+    const limit = bodyNumber(body, "limit") ?? (Number(searchParams.get("limit")) || undefined);
+    const result = searchMemory({
+      query,
+      repo: target,
+      types,
+      tags: listParam("tags"),
+      status: bodyField(body, "status") || searchParams.get("status") || undefined,
+      maxTokens,
+      limit,
+    });
+    return ok({ ...result, markdown: renderRecallMarkdown(result) });
+  }
+
+  if ((method === "POST" || method === "GET") && pathname === "/api/session-bootstrap") {
+    const scope = bodyField(body, "scope") || searchParams.get("scope") || "";
+    const target = scope ? resolveMemoryScope(scope, cwd) : repo;
+    const files =
+      body && typeof body === "object" && Array.isArray((body as { files?: unknown }).files)
+        ? ((body as { files: unknown[] }).files.filter((f): f is string => typeof f === "string"))
+        : (searchParams.get("files") || "").split(",").filter(Boolean);
+    const maxTokens = bodyNumber(body, "max_tokens") ?? (Number(searchParams.get("max_tokens")) || undefined);
+    return ok(buildBootstrap(target, { files, text: bodyField(body, "text") || searchParams.get("text") || "", maxTokens }));
+  }
+
+  if (method === "POST" && pathname === "/api/import") {
+    const scope = bodyField(body, "scope") || "";
+    const target = scope ? resolveMemoryScope(scope, cwd) : repo;
+    if (!target) return err(400, "Unknown workspace. Pass scope or workspace, or run amem init.");
+    const content = bodyField(body, "content");
+    const filename = bodyField(body, "filename") || "import.md";
+    if (!content) return err(400, "content required");
+    try {
+      const parsed = parseImportFile(filename, content);
+      return ok(importIntoRepo(target, parsed, { dryRun: Boolean((body as { dryRun?: unknown })?.dryRun) }));
+    } catch (e) {
+      return err(400, e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  if (method === "GET" && pathname === "/api/export") {
+    const scope = searchParams.get("scope") || "";
+    const all = searchParams.get("all") === "1";
+    const target = scope ? resolveMemoryScope(scope, cwd) : repo;
+    const repos = all ? listRepos() : target ? [target] : [];
+    if (repos.length === 0) return err(400, "Nothing to export: pass scope or all=1");
+    const blocks = repos.map(exportBlock);
+    const skills = searchParams.get("skills") === "0" ? [] : exportSkills();
+    if (searchParams.get("format") === "md") return ok({ format: "md", markdown: renderExportMarkdown(blocks, skills) });
+    return ok({ format: "json", exported_at: new Date().toISOString(), version: 2, repos: blocks, skills });
   }
 
   if ((method === "POST" || method === "GET") && pathname === "/api/context") {
@@ -1623,7 +1725,10 @@ export function handleApi(req: ApiRequest): ApiResponse {
     const query = searchParams.get("q") || "";
     const skills = listIndexedSkills();
     const ranked = query ? rankSkills(skills, query, Number(searchParams.get("limit") || 10)) : [];
+    const files = (searchParams.get("files") || "").split(",").map((f) => f.trim()).filter(Boolean);
+    const hints = files.length || query ? matchSkillTriggers(skills, { files, text: query }) : [];
     return ok({
+      hints,
       skills: skills.map(skillSummary),
       matches: ranked.map((s) => ({ ...skillSummary(s), score: s.score, reasons: s.reasons })),
       dir: skillsDir(),
@@ -1669,6 +1774,8 @@ export function handleApi(req: ApiRequest): ApiResponse {
             description,
             body: content || "",
             version: bodyField(body, "version"),
+            files: listField(body, "files"),
+            keywords: listField(body, "keywords"),
           });
     const scan = scanSkillContent(markdown);
     if (!scan.ok) return err(400, `Rejected: ${scan.reason}`);
@@ -2021,7 +2128,15 @@ export function logContextUsage(input: {
   sessionId?: string;
   query: string;
   strict?: boolean;
-}): { markdown: string; event: UsageEventRow; packet: ReturnType<typeof buildContext> } {
+  /** Pack the rendered packet under this many tokens (~4 chars each). */
+  maxTokens?: number;
+}): {
+  markdown: string;
+  event: UsageEventRow;
+  packet: ReturnType<typeof buildContext>;
+  tokens: number;
+  truncated: boolean;
+} {
   const started = Date.now();
   const repo = getRepoById(input.repoId);
   const packet = buildContext(input.repoId, input.query, {
@@ -2029,7 +2144,8 @@ export function logContextUsage(input: {
     strict: input.strict,
     sessionId: input.sessionId,
   });
-  const markdown = renderContextMarkdown(packet);
+  const budgeted = renderContextWithinBudget(packet, input.maxTokens);
+  const markdown = budgeted.markdown;
   const metrics = metricsFromPacket(packet, markdown, repo?.root_path);
   const localMs = Math.max(0, Date.now() - started);
   const event = insertUsageEvent({
@@ -2048,5 +2164,5 @@ export function logContextUsage(input: {
     estimatedMsSaved: metrics.estimatedMsSaved,
     kind: metrics.kind,
   });
-  return { markdown, event, packet };
+  return { markdown, event, packet, tokens: budgeted.tokens, truncated: budgeted.truncated };
 }
