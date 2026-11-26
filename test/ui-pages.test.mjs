@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { clusterDuplicatePairs, exactDuplicateGroups, normalizeFactText } from "../ui-static/dupes.js";
 
-const js = readFileSync(new URL("../ui-static/app.js", import.meta.url), "utf8");
+// Windows checkouts may use CRLF; the function extractor below expects LF.
+const js = readFileSync(new URL("../ui-static/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const html = readFileSync(new URL("../ui-static/index.html", import.meta.url), "utf8");
 
 /** Pull a top-level function out of app.js and evaluate it on its own. */
