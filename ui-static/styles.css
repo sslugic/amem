@@ -3527,3 +3527,6 @@ button.linkish:focus-visible,
 .tasks-card.flash { box-shadow: 0 0 0 2px var(--accent); }
 .info-tip::after { display: none; }
 .info-tip:hover::after, .info-tip:focus::after { display: block; }
+#settingsVaultSlot .vault-grid { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+#settingsVaultSlot .vault-card-wide { grid-column: auto; }
+#settingsEncryptionSlot .field-action input { width: 100%; }
