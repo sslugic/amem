@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "sh -c 'if command -v amem >/dev/null 2>&1; then exec amem hook; else exec npx -y @iamem/amem@latest hook; fi'",
+        "description": "amem: inject and store local memory"
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "sh -c 'if command -v amem >/dev/null 2>&1; then exec amem hook; else exec npx -y @iamem/amem@latest hook; fi'",
+        "description": "amem: inject and store local memory"
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "sh -c 'if command -v amem >/dev/null 2>&1; then exec amem hook; else exec npx -y @iamem/amem@latest hook; fi'",
+        "description": "amem: inject and store local memory"
+      }
+    ],
+    "stop": [
+      {
+        "command": "sh -c 'if command -v amem >/dev/null 2>&1; then exec amem hook; else exec npx -y @iamem/amem@latest hook; fi'",
+        "description": "amem: inject and store local memory"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "sh -c 'if command -v amem >/dev/null 2>&1; then exec amem hook; else exec npx -y @iamem/amem@latest hook; fi'",
+        "description": "amem: inject and store local memory"
+      }
+    ]
+  }
+}

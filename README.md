@@ -61,6 +61,16 @@ Stripe webhooks must be verified with the raw body.
 Anchors: `src/webhooks/stripe.ts`
 ```
 
+Prefer a plugin? amem ships one for each major agent:
+
+| App | Install |
+| --- | --- |
+| Claude Code | `/plugin marketplace add sslugic/amem`, then `/plugin install amem@amem` |
+| Codex | `codex plugin marketplace add sslugic/amem`, then `/plugins` → **amem** |
+| Gemini CLI | `gemini extensions install https://github.com/sslugic/amem` |
+| Cursor, VS Code, LM Studio | One-click buttons on [getamem.com](https://getamem.com/#setup) |
+| Claude Desktop | Download [`amem.mcpb`](https://github.com/sslugic/amem/releases/latest/download/amem.mcpb) and double-click it |
+
 More you can do:
 
 ```bash

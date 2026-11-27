@@ -1,0 +1,61 @@
+{
+  "manifest_version": "0.3",
+  "name": "amem",
+  "display_name": "amem",
+  "version": "0.13.0",
+  "description": "amem — agent memory, anchored to your code",
+  "long_description": "Local memory for coding agents: file-anchored facts that flag themselves stale, on-demand skills and a shared task board, in one SQLite file on your machine. No cloud, no API keys.\n\nThis bundle starts the amem installed on your machine, or runs it with npx if none is installed. Node 20+ is required.",
+  "author": {
+    "name": "amem",
+    "url": "https://getamem.com"
+  },
+  "homepage": "https://getamem.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sslugic/amem"
+  },
+  "license": "MIT",
+  "icon": "icon.png",
+  "keywords": [
+    "memory",
+    "mcp",
+    "agent-memory",
+    "context",
+    "local-first",
+    "sqlite",
+    "skills",
+    "tasks"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "server/launcher.cjs",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/launcher.cjs"
+      ],
+      "env": {
+        "AMEM_WORKSPACE": "${user_config.workspace}"
+      }
+    }
+  },
+  "user_config": {
+    "workspace": {
+      "type": "string",
+      "title": "Memory to use",
+      "description": "\"personal\" is your memory shared across projects. Use a workspace name to keep Claude Desktop on one project.",
+      "default": "personal",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  }
+}

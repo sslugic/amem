@@ -378,6 +378,21 @@ pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:
 }
 
 /* ---- landing v0.9 ---- */
+.oc{max-width:760px;margin:0 0 1rem;padding:1rem 1.1rem;border:1px solid var(--line);border-radius:16px;background:rgba(20,27,33,.85)}
+.oc h3{margin:.1rem 0 .65rem;font-size:.82rem;color:var(--muted);font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.oc h3+.oc-cmds{margin-top:0}
+.oc-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.55rem;margin:0 0 1rem}
+.oc-btn{display:flex;flex-direction:column;gap:.15rem;padding:.7rem .8rem;border:1px solid rgba(46,196,182,.4);border-radius:12px;
+  background:rgba(46,196,182,.08);color:var(--ink);text-decoration:none;transition:background .15s,border-color .15s}
+.oc-btn:hover{background:rgba(46,196,182,.16);border-color:var(--accent)}
+.oc-btn strong{font-size:.9rem}
+.oc-btn span{color:var(--muted);font-size:.74rem}
+.oc-cmds{display:grid;gap:.45rem}
+.oc-cmd>span{display:block;color:var(--muted);font-size:.76rem;margin:0 0 .2rem}
+.oc-cmd .cmd-row{padding:.45rem .6rem;border:1px solid var(--line);border-radius:10px;background:rgba(11,15,18,.6)}
+.oc .setup-note{margin:.8rem 0 0}
+@media(max-width:760px){.oc-grid{grid-template-columns:1fr 1fr}}
+
 .lp-hero{position:relative;overflow:hidden;padding:3.2rem 1.25rem 3rem}
 .lp-hero .hero-art img{opacity:.22}
 .lp-hero-in{position:relative;z-index:1;max-width:1120px;margin:0 auto;display:grid;
@@ -1120,6 +1135,37 @@ function whyPage() {
   return siteChrome("why", `<main>${siteSections().why}</main>`, "amem — why it pays off");
 }
 
+
+/** One-click installs. Each app takes a single server entry; Cursor and LM Studio base64 it. */
+function oneClickInstalls() {
+  const entry = { command: "npx", args: ["-y", "@iamem/amem@latest", "mcp"] };
+  const b64 = Buffer.from(JSON.stringify(entry)).toString("base64");
+  const cursor = `cursor://anysphere.cursor-deeplink/mcp/install?name=amem&config=${b64}`;
+  const vscode = `vscode:mcp/install?${encodeURIComponent(JSON.stringify({ name: "amem", ...entry }))}`;
+  const lmstudio = `lmstudio://add_mcp?name=amem&config=${encodeURIComponent(b64)}`;
+  const mcpb = "https://github.com/sslugic/amem/releases/latest/download/amem.mcpb";
+  const btn = (href, label, sub) =>
+    `<a class="oc-btn" href="${href}"><strong>${label}</strong><span>${sub}</span></a>`;
+  const cmd = (id, label, text) =>
+    `<div class="oc-cmd"><span>${label}</span><div class="cmd-row"><code id="oc-${id}">${text}</code><button type="button" class="btn compact" data-copy="oc-${id}">Copy</button></div></div>`;
+  return `<div class="oc">
+      <h3>One-click install</h3>
+      <div class="oc-grid">
+        ${btn(cursor, "Add to Cursor", "MCP server, one click")}
+        ${btn(vscode, "Add to VS Code", "Copilot agent mode")}
+        ${btn(lmstudio, "Add to LM Studio", "local models")}
+        ${btn(mcpb, "Claude Desktop", "download amem.mcpb, double-click")}
+      </div>
+      <h3>Plugins</h3>
+      <div class="oc-cmds">
+        ${cmd("cc", "Claude Code: then /plugin install amem@amem (MCP, hooks, skills)", "/plugin marketplace add sslugic/amem")}
+        ${cmd("codex", "Codex: then /plugins → amem", "codex plugin marketplace add sslugic/amem")}
+        ${cmd("gemini", "Gemini CLI", "gemini extensions install https://github.com/sslugic/amem")}
+      </div>
+      <p class="setup-note">All of them run amem locally with <code>npx</code> (Node 20+); memory stays in <code>~/.amem</code>. Other apps: <a href="https://github.com/sslugic/amem/blob/main/docs/CLIENTS.md" style="color:var(--accent)">setup guide</a>.</p>
+    </div>`;
+}
+
 function landing() {
   const prim = (n, title, body, eg) =>
     `<article class="prim"><p class="prim-n">${n}</p><h3>${title}</h3><p>${body}</p><p class="eg">${eg}</p></article>`;
@@ -1242,6 +1288,8 @@ function landing() {
       <h2>Works with every client you already use</h2>
       <p class="sec-lead">Setup installs the CLI, wires the hooks, registers the MCP server and seeds the repo with build, test and CI facts from its manifests. Using Claude Desktop, Gemini CLI, Antigravity, Perplexity, Warp, JetBrains or LM Studio? <a href="https://github.com/sslugic/amem/blob/main/docs/CLIENTS.md" style="color:var(--accent)">Step-by-step setup for every app →</a></p>
     </div>
+    ${oneClickInstalls()}
+    <p class="setup-note" style="margin:1.2rem 0 .6rem">Or run setup from your terminal; it also seeds the repo with build and test facts:</p>
     <div class="cmd-box setup-box">
       <div class="cmd-tabs" role="tablist">
         ${setupTab("claude", "Claude Code", true)}

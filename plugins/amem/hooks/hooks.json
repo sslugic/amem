@@ -1,0 +1,35 @@
+{
+  "description": "amem: hand the agent ranked memory at session start and on each prompt; capture what it learned at the end.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if command -v amem >/dev/null 2>&1; then exec amem hook; else exec npx -y @iamem/amem@latest hook; fi'"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if command -v amem >/dev/null 2>&1; then exec amem hook; else exec npx -y @iamem/amem@latest hook; fi'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'if command -v amem >/dev/null 2>&1; then exec amem hook; else exec npx -y @iamem/amem@latest hook; fi'"
+          }
+        ]
+      }
+    ]
+  }
+}

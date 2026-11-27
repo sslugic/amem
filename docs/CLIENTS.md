@@ -4,6 +4,7 @@
 
 amem talks to any app that supports the **Model Context Protocol (MCP)**. Some apps have a one-command installer. The rest need a small config entry that you paste once. Everything stays on your machine: apps start amem locally or call `127.0.0.1`.
 
+- [Fastest: plugins and one-click installs](#fastest-plugins-and-one-click-installs)
 - [Before you start](#before-you-start)
 - [One-command setup](#one-command-setup): Claude Code, Cursor, Windsurf, Claude Desktop, Continue, Zed, Aider
 - [Paste a config](#paste-a-config): Codex, GitHub Copilot, Gemini CLI, Antigravity, Cline / Roo / Kilo, JetBrains, LM Studio, Goose
@@ -11,6 +12,22 @@ amem talks to any app that supports the **Model Context Protocol (MCP)**. Some a
 - [Apps that can't use amem yet](#apps-that-cant-use-amem-yet)
 - [Check it works](#check-it-works)
 - [Troubleshooting](#troubleshooting)
+
+---
+
+## Fastest: plugins and one-click installs
+
+| App | Install | What you get |
+| --- | --- | --- |
+| **Claude Code** | `/plugin marketplace add sslugic/amem`, then `/plugin install amem@amem` | MCP server, the automatic context hooks and amem skills |
+| **Codex** | `codex plugin marketplace add sslugic/amem`, then `/plugins` in Codex → install **amem** | MCP server and skills; hooks once you trust them |
+| **Gemini CLI** | `gemini extensions install https://github.com/sslugic/amem` | MCP server and the amem instructions |
+| **Cursor** | **Add to Cursor** on [getamem.com](https://getamem.com/#setup) | MCP server |
+| **VS Code (Copilot)** | **Add to VS Code** on [getamem.com](https://getamem.com/#setup) | MCP server (use Agent mode) |
+| **LM Studio** | **Add to LM Studio** on [getamem.com](https://getamem.com/#setup) | MCP server |
+| **Claude Desktop** | Download [`amem.mcpb`](https://github.com/sslugic/amem/releases/latest/download/amem.mcpb) and double-click it (or Settings → Extensions → Install Extension) | MCP server; pick which memory to use when it asks |
+
+All of these run amem locally (`npx -y @iamem/amem mcp`, or your installed `amem`) and need Node 20+. Prefer manual setup or don't see your app? Read on.
 
 ---
 
