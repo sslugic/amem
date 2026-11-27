@@ -26,8 +26,11 @@ function arg(name, fallback) {
 
 const platform = arg("platform", process.platform);
 const arch = arg("arch", process.arch);
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+const win = process.platform === "win32";
+const npm = win ? "npm.cmd" : "npm";
+const npx = win ? "npx.cmd" : "npx";
+// Node refuses to spawn .cmd files without a shell (EINVAL) since the 2024 batch-file fix.
+const shell = win;
 
 if (!existsSync(join(root, "dist", "cli.js"))) {
   console.error("dist/ is missing — run `npm run build` in the repo root first.");
@@ -65,6 +68,7 @@ writeFileSync(join(out, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
 execFileSync(npm, ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], {
   cwd: out,
   stdio: "inherit",
+  shell,
 });
 rmSync(join(out, "package-lock.json"), { force: true });
 
@@ -73,7 +77,7 @@ rmSync(join(sqlite, "build"), { recursive: true, force: true });
 execFileSync(
   npx,
   ["--yes", "prebuild-install@7", "--runtime", "electron", "--target", electronVersion, "--platform", platform, "--arch", arch, "--verbose"],
-  { cwd: sqlite, stdio: "inherit" },
+  { cwd: sqlite, stdio: "inherit", shell },
 );
 const binding = join(sqlite, "build", "Release", "better_sqlite3.node");
 if (!existsSync(binding)) {
