@@ -3514,3 +3514,7 @@ button.crumb:hover { text-decoration: underline; }
 .bar-badge.pinned { color: #f5c451; border-color: rgba(245, 196, 81, 0.35); }
 .bar-badge.stale { color: #f0a46b; border-color: rgba(240, 164, 107, 0.35); }
 @media (max-width: 1100px) { .bar-row { grid-template-columns: minmax(0, 12rem) minmax(3rem, 1fr) 3rem; } .bar-badges { grid-column: 1 / -1; } }
+
+/* ---- Brand icon ---- */
+.brand { display: inline-flex; align-items: center; gap: 0.5rem; }
+.brand-icon { width: 28px; height: 28px; border-radius: 7px; flex: none; display: block; }

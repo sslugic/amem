@@ -87,7 +87,7 @@ function siteChrome(active, body, title = "amem — get started") {
     title,
     `<div class="shell">
   <header class="top">
-    <a class="brand" href="/">amem<span class="brand-tag"> · agent memory, anchored to your code</span></a>
+    <a class="brand" href="/"><img class="brand-icon" src="/public/icon-64.png" alt="" width="28" height="28"/>amem<span class="brand-tag"> · agent memory, anchored to your code</span></a>
     <nav class="nav" aria-label="Site">
       ${tab("start", "/", "Start")}
       ${tab("features", "/features", "Features")}
@@ -110,6 +110,9 @@ function htmlPage(title, body) {
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>${title}</title>
 <meta name="description" content="amem — agent memory, anchored to your code. Local facts, skills and tasks for Claude Code, Cursor, Codex and any MCP client, in one SQLite file on your machine."/>
+<link rel="icon" type="image/png" sizes="32x32" href="/public/favicon-32.png"/>
+<link rel="icon" type="image/png" sizes="64x64" href="/public/icon-64.png"/>
+<link rel="apple-touch-icon" href="/public/apple-touch-icon.png"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
@@ -131,9 +134,10 @@ body{
 .top{display:flex;align-items:center;justify-content:space-between;gap:1rem;
   padding:.85rem 1.5rem;border-bottom:1px solid var(--line);
   background:rgba(11,15,18,.88);backdrop-filter:blur(10px);position:sticky;top:0;z-index:5}
-.brand{color:var(--ink);text-decoration:none;font-weight:700;font-size:1.15rem;letter-spacing:-.03em}
+.brand{color:var(--ink);text-decoration:none;font-weight:700;font-size:1.15rem;letter-spacing:-.03em;display:inline-flex;align-items:center;gap:.5rem}
 .brand-tag{color:var(--muted);font-weight:500;font-size:.82rem;letter-spacing:0}
 @media(max-width:760px){.brand-tag{display:none}}
+.brand-icon{width:28px;height:28px;border-radius:7px;display:block;flex:none}
 .nav{display:flex;align-items:center;gap:.35rem}
 .nav-tab{color:var(--muted);text-decoration:none;font-size:.88rem;font-weight:500;
   padding:.4rem .85rem;border-radius:999px;border:1px solid transparent}
