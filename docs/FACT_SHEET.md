@@ -16,6 +16,8 @@ Numbers in this sheet are reproducible: run `npm run bench`, `amem bootstrap --j
 
 ## 1. What amem does
 
+Setup for each app: [Connect amem to your AI tools](CLIENTS.md).
+
 amem gives coding agents persistent working state across sessions and across tools: Claude Code, Cursor, Codex, Windsurf, Copilot, Gemini CLI, Zed, and any other MCP client (`amem platforms` lists 30+). Everything rests on three primitives.
 
 1. **File-anchored facts.** Short rules, invariants and decisions tied to the files they describe. Example: *"Stripe webhooks must be verified with the raw body"*, anchored to `src/webhooks/stripe.ts`. Each fact stores a content hash of its anchored files. When those files change, the fact is flagged `stale` in every packet until someone re-confirms it, so an outdated rule never reaches a prompt unmarked.

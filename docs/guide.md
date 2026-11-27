@@ -624,6 +624,8 @@ Reload Cursor if skills/rules do not appear immediately.
 
 ### Other hosts
 
+Step-by-step setup for every app, including ones configured in their own settings (Perplexity, Warp, JetBrains, LM Studio), is in **[Connect amem to your AI tools](CLIENTS.md)**.
+
 | Host | What amem writes |
 | --- | --- |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` MCP entry |
