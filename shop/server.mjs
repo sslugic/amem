@@ -222,6 +222,8 @@ body{
 .sec{max-width:1080px;margin:0 auto;padding:3rem 1.25rem 0;width:100%;scroll-margin-top:3.5rem}
 html{scroll-behavior:smooth}
 .sec-head{max-width:44rem;margin:0 0 1.4rem}
+.vid{border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#0b0f12;box-shadow:0 30px 80px rgba(0,0,0,.45)}
+.vid video{display:block;width:100%;height:auto}
 .sec-kicker{margin:0 0 .4rem;color:var(--accent);font-size:.74rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
 .sec h2{margin:0 0 .5rem;font-size:clamp(1.45rem,3.4vw,1.95rem);letter-spacing:-.03em;line-height:1.15}
 .sec-lead{margin:0;color:var(--muted);font-size:1rem}
@@ -1269,6 +1271,33 @@ function landing() {
     </div>
   </section>
 
+  <section class="sec" id="video">
+    <div class="sec-head">
+      <p class="sec-kicker">amem in 60 seconds</p>
+      <h2>How your agents stop re-reading your code</h2>
+      <p class="sec-lead">Claude Code learns something, Gemini CLI uses it the next day, and you watch every lookup in the Activity view. The token numbers in the video are real amem stats from one developer's last 30 days.</p>
+    </div>
+    <div class="vid">
+      <video id="explainer" controls muted playsinline loop preload="metadata" poster="/public/amem-explainer.jpg" width="1920" height="1080" aria-label="60-second explainer: how amem gives AI coding agents shared memory and saves tokens">
+        <source src="/public/amem-explainer.mp4" type="video/mp4" />
+        <source src="/public/amem-explainer.webm" type="video/webm" />
+      </video>
+    </div>
+    <script>
+      (function () {
+        var v = document.getElementById("explainer");
+        if (!v || !("IntersectionObserver" in window)) return;
+        if (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+        new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) v.play().catch(function () {});
+            else v.pause();
+          });
+        }, { threshold: 0.5 }).observe(v);
+      })();
+    </script>
+  </section>
+
   <section class="sec" id="how">
     <div class="sec-head">
       <p class="sec-kicker">How it works</p>
@@ -1710,7 +1739,7 @@ function html(res, status, body) {
   res.end(body);
 }
 
-function servePublic(res, rel) {
+function servePublic(res, rel, req) {
   const PUBLIC = join(ROOT, "public");
   const cleaned = normalize(String(rel || "").replace(/^[/\\]+/, ""));
   if (!cleaned || cleaned === "." || cleaned.includes("..") || cleaned.includes(sep + "..")) {
@@ -1735,12 +1764,39 @@ function servePublic(res, rel) {
     ".svg": "image/svg+xml",
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
   };
+  const body = readFileSync(file);
+  const type = types[ext] || "application/octet-stream";
+  // Safari only plays video served with byte ranges.
+  const range = /^bytes=(\d*)-(\d*)$/.exec(String(req?.headers?.range || ""));
+  if (range && (range[1] || range[2])) {
+    const size = body.length;
+    const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+    const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (start >= size || start > end) {
+      res.writeHead(416, { "Content-Range": `bytes */${size}` });
+      res.end();
+      return;
+    }
+    res.writeHead(206, {
+      "Content-Type": type,
+      "Content-Range": `bytes ${start}-${end}/${size}`,
+      "Content-Length": end - start + 1,
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "public, max-age=86400",
+    });
+    res.end(body.subarray(start, end + 1));
+    return;
+  }
   res.writeHead(200, {
-    "Content-Type": types[ext] || "application/octet-stream",
+    "Content-Type": type,
+    "Content-Length": body.length,
+    "Accept-Ranges": "bytes",
     "Cache-Control": "public, max-age=86400",
   });
-  res.end(readFileSync(file));
+  res.end(body);
 }
 
 function readRaw(req, maxBytes = Infinity) {
@@ -1893,7 +1949,7 @@ async function onRequest(req, res) {
       return;
     }
     if (req.method === "GET" && url.pathname.startsWith("/public/")) {
-      servePublic(res, url.pathname.slice("/public/".length));
+      servePublic(res, url.pathname.slice("/public/".length), req);
       return;
     }
     if (req.method === "GET" && url.pathname === "/success") {
