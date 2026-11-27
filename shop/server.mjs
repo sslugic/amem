@@ -400,6 +400,14 @@ pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:
 .lp-eyebrow{display:inline-flex;gap:.5rem;align-items:center;margin:0 0 1rem;padding:.3rem .75rem;border:1px solid rgba(46,196,182,.35);
   border-radius:999px;background:rgba(46,196,182,.08);color:var(--accent);font-size:.74rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
 .lp-h1{margin:0 0 .9rem;font-size:clamp(2rem,4.6vw,3.1rem);line-height:1.06;letter-spacing:-.04em;font-weight:700}
+.lp-hero-stack{grid-template-columns:1fr;gap:1.8rem;justify-items:center}
+.lp-hero-head{text-align:center;width:100%;max-width:56rem}
+.lp-hero-head .lp-h1{margin:0;font-size:clamp(2.1rem,4.8vw,3.4rem);text-wrap:balance}
+.nowrap{white-space:nowrap}
+.lp-hero-stack .hero-video{width:100%;max-width:1040px}
+.lp-hero-rest{width:100%;max-width:44rem}
+.lp-hero-rest .lp-sub{max-width:none;text-align:center;margin-left:auto;margin-right:auto}
+.lp-hero-rest .lp-facts{justify-content:center}
 .lp-sub{margin:0 0 1.4rem;color:var(--muted);font-size:1.04rem;max-width:34rem}
 .lp-sub code{color:var(--ink)}
 .dl{margin:1.2rem 0 1rem;padding:1rem 1.1rem;border:1px solid rgba(46,196,182,.35);border-radius:14px;background:rgba(46,196,182,.06)}
@@ -1229,16 +1237,10 @@ function landing() {
     `<main>
   <section class="lp-hero">
     <div class="hero-art" aria-hidden="true"><img src="/public/amem-ui.png" alt="" width="1600" height="1000"/></div>
-    <div class="lp-hero-in">
-      <div>
+    <div class="lp-hero-in lp-hero-stack">
+      <div class="lp-hero-head">
         <p class="lp-eyebrow">100% Local • Zero Cloud • Single SQLite File</p>
-        <h1 class="lp-h1">Stop paying your AI agent to re-learn your codebase every session.</h1>
-        <p class="lp-sub">amem gives Claude Code, Cursor, Codex, and Windsurf persistent file-anchored facts, on-demand skills, and a shared task board, stored locally in <code>~/.amem</code> with zero API keys, zero embedding daemons, and zero SaaS fees.</p>
-        ${desktopDownloads()}
-        <p class="dl-or">Prefer the terminal? Install the CLI:</p>
-        ${installCommands(false)}
-        <p class="lp-cta2">Then open the local UI: <code>amem ui</code> <span>→ 127.0.0.1:7843</span></p>
-        <ul class="lp-facts"><li>Free &amp; open source</li><li>Any MCP client</li><li>Mac, Windows, Linux</li><li><a href="https://github.com/sslugic/amem" style="color:inherit">Source on GitHub</a></li></ul>
+        <h1 class="lp-h1">Stop paying your AI agent to <span class="nowrap">re-learn</span> your codebase every session.</h1>
       </div>
       <div class="mock hero-video">
         <div class="mock-bar"><i></i><i></i><i></i><span>amem in 60 seconds</span></div>
@@ -1260,10 +1262,16 @@ function landing() {
         }, { threshold: 0.5 }).observe(v);
       })();
     </script>
+      <div class="lp-hero-rest">
+        <p class="lp-sub">amem gives Claude Code, Cursor, Codex, and Windsurf persistent file-anchored facts, on-demand skills, and a shared task board, stored locally in <code>~/.amem</code> with zero API keys, zero embedding daemons, and zero SaaS fees.</p>
+        ${desktopDownloads()}
+        <p class="dl-or">Prefer the terminal? Install the CLI:</p>
+        ${installCommands(false)}
+        <p class="lp-cta2">Then open the local UI: <code>amem ui</code> <span>→ 127.0.0.1:7843</span></p>
+        <ul class="lp-facts"><li>Free &amp; open source</li><li>Any MCP client</li><li>Mac, Windows, Linux</li><li><a href="https://github.com/sslugic/amem" style="color:inherit">Source on GitHub</a></li></ul>
+      </div>
     </div>
   </section>
-
-  
 
   <section class="sec" id="how">
     <div class="sec-head">
