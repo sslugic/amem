@@ -18,7 +18,7 @@ import {
 } from "../estimate.js";
 import { buildActivityGraph, speedForEvent } from "../activity.js";
 import { activityClientIds, activityEnabled, activitySummary, latestActivityId, listActivity } from "../activity-log.js";
-import { idleClients, scanClients } from "../connected-clients.js";
+import { CLIENTS_GUIDE, idleClients, scanClients } from "../connected-clients.js";
 import {
   getRepoByCwd,
   getRepoById,
@@ -915,7 +915,14 @@ export function handleApi(req: ApiRequest): ApiResponse {
   if (method === "GET" && pathname === "/api/activity/clients") {
     const scan = scanClients();
     const active = activityClientIds();
-    return ok({ connected: scan.connected, idle: idleClients(scan, active), detected: scan.detected, active });
+    return ok({
+      connected: scan.connected,
+      idle: idleClients(scan, active),
+      detected: scan.detected,
+      unsupported: scan.unsupported,
+      active,
+      guide: CLIENTS_GUIDE,
+    });
   }
 
   if (method === "GET" && pathname === "/api/activity/summary") {

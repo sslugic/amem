@@ -46,6 +46,30 @@ describe("connected clients", () => {
     assert.equal(byId.cursor, undefined, "Cursor.app is already connected");
   });
 
+  it("links each app to its setup guide section and lists MCP-less apps as unsupported", () => {
+    const { home, apps } = fakeHome();
+    const { detected, unsupported } = scanClients({ home, platform: "darwin", appDirs: [apps], env: {} });
+    const guide = Object.fromEntries(detected.map((d) => [d.id, d.guide]));
+    const base = "https://github.com/sslugic/amem/blob/main/docs/CLIENTS.md#";
+    assert.equal(guide["claude-desktop"], `${base}one-command-setup`);
+    assert.equal(guide.perplexity, `${base}perplexity-mac-app`);
+    assert.equal(guide.warp, `${base}warp`);
+    assert.equal(guide.antigravity, `${base}google-antigravity`);
+    assert.equal(guide.codex, `${base}openai-codex-cli-ide-extension-and-app`);
+    assert.equal(guide["gemini-app"], undefined, "Gemini app is not offered as connectable");
+    assert.deepEqual(unsupported.map((u) => [u.id, u.instead]), [["gemini-app", "Not supported: use Gemini CLI"]]);
+    assert.equal(unsupported[0].guide, `${base}apps-that-cant-use-amem-yet`);
+  });
+
+  it("every guide anchor exists in docs/CLIENTS.md", () => {
+    const md = readFileSync(new URL("../docs/CLIENTS.md", import.meta.url), "utf8");
+    const slug = (h) => h.trim().toLowerCase().replace(/[^\w\s-]/g, "").replace(/\s/g, "-");
+    const anchors = new Set(md.split("\n").filter((l) => /^#{1,3} /.test(l)).map((l) => slug(l.replace(/^#+ /, ""))));
+    const src = readFileSync(new URL("../src/connected-clients.ts", import.meta.url), "utf8");
+    const block = src.slice(src.indexOf("const GUIDE_ANCHORS"), src.indexOf("export function clientGuide"));
+    for (const [, a] of block.matchAll(/: "([a-z0-9-]+)"/g)) assert.ok(anchors.has(a), `#${a} in docs/CLIENTS.md`);
+  });
+
   it("never returns config values", () => {
     const { home, apps } = fakeHome();
     const out = JSON.stringify(scanClients({ home, platform: "darwin", appDirs: [apps], env: {} }));
@@ -75,6 +99,9 @@ describe("connected clients", () => {
     assert.match(js, /Connected · no calls yet/);
     assert.match(js, /Shows up after its agent first calls amem\./);
     assert.match(js, /Detected, not connected/);
+    assert.match(js, /Can't use amem yet/);
+    const app = readFileSync(new URL("../ui-static/app.js", import.meta.url), "utf8");
+    assert.match(app, /docs\/CLIENTS\.md" target="_blank" rel="noopener">setup guide for every app/);
   });
 });
 
@@ -85,7 +112,8 @@ describe("/api/activity/clients", () => {
       const { handleApi } = await import("../dist/api/routes.js");
       const res = handleApi({ method: "GET", pathname: "/api/activity/clients", searchParams: new URLSearchParams(), body: null, cwd: process.cwd() });
       assert.equal(res.status, 200);
-      for (const k of ["connected", "idle", "detected", "active"]) assert.ok(Array.isArray(res.body[k]), k);
+      for (const k of ["connected", "idle", "detected", "unsupported", "active"]) assert.ok(Array.isArray(res.body[k]), k);
+      assert.match(res.body.guide, /docs\/CLIENTS\.md$/);
     });
   });
 });

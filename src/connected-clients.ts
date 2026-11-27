@@ -24,9 +24,44 @@ export type DetectedClient = {
   label: string;
   /** One-line next step to connect it. */
   nextStep: string;
+  /** Setup guide for this app (docs/CLIENTS.md section). */
+  guide: string;
 };
 
-export type ClientScan = { connected: ConnectedClient[]; detected: DetectedClient[] };
+/** Installed apps that cannot talk to a local MCP server, with what to use instead. */
+export type UnsupportedClient = { id: string; label: string; instead: string; guide: string };
+
+export type ClientScan = { connected: ConnectedClient[]; detected: DetectedClient[]; unsupported: UnsupportedClient[] };
+
+export const CLIENTS_GUIDE = "https://github.com/sslugic/amem/blob/main/docs/CLIENTS.md";
+
+/** docs/CLIENTS.md section per client id. */
+const GUIDE_ANCHORS: Record<string, string> = {
+  "claude-code": "one-command-setup",
+  cursor: "one-command-setup",
+  "claude-desktop": "one-command-setup",
+  windsurf: "one-command-setup",
+  zed: "one-command-setup",
+  continue: "one-command-setup",
+  codex: "openai-codex-cli-ide-extension-and-app",
+  copilot: "github-copilot-vs-code-agent-mode",
+  gemini: "gemini-cli",
+  antigravity: "google-antigravity",
+  cline: "cline-roo-code-kilo-code",
+  roo: "cline-roo-code-kilo-code",
+  kilo: "cline-roo-code-kilo-code",
+  jetbrains: "jetbrains-ai-assistant--junie",
+  "lm-studio": "lm-studio",
+  goose: "goose",
+  perplexity: "perplexity-mac-app",
+  warp: "warp",
+  chatgpt: "apps-that-cant-use-amem-yet",
+  "gemini-app": "apps-that-cant-use-amem-yet",
+};
+
+export function clientGuide(id: string): string {
+  return `${CLIENTS_GUIDE}#${GUIDE_ANCHORS[id] ?? "one-command-setup"}`;
+}
 
 type ScanOpts = { home?: string; platform?: NodeJS.Platform; appDirs?: string[]; env?: NodeJS.ProcessEnv };
 
@@ -96,10 +131,14 @@ const DESKTOP_APPS: Array<{ app: string; id: string; label: string; nextStep: st
   { app: "Windsurf.app", id: "windsurf", label: "Windsurf", nextStep: "Run `amem setup --platform windsurf`" },
   { app: "Zed.app", id: "zed", label: "Zed", nextStep: "Run `amem setup --platform zed`" },
   { app: "Antigravity.app", id: "antigravity", label: "Antigravity", nextStep: "Add amem in Antigravity's MCP settings (`amem recipe` prints the entry)" },
-  { app: "ChatGPT.app", id: "chatgpt", label: "ChatGPT", nextStep: "Add amem in the app's settings → Connectors" },
-  { app: "Gemini.app", id: "gemini-app", label: "Gemini app", nextStep: "Add amem in the app's settings → Connectors" },
   { app: "Perplexity.app", id: "perplexity", label: "Perplexity", nextStep: "Add amem in the app's settings → Connectors" },
   { app: "Warp.app", id: "warp", label: "Warp", nextStep: "Add amem in the app's settings → Connectors" },
+];
+
+/** Desktop apps that can't reach a local MCP server today. */
+const UNSUPPORTED_APPS: Array<{ app: string; id: string; label: string; instead: string }> = [
+  { app: "Gemini.app", id: "gemini-app", label: "Gemini app", instead: "Not supported: use Gemini CLI" },
+  { app: "ChatGPT.app", id: "chatgpt", label: "ChatGPT", instead: "Not supported: use Codex" },
 ];
 
 export function scanClients(opts: ScanOpts = {}): ClientScan {
@@ -154,10 +193,10 @@ export function scanClients(opts: ScanOpts = {}): ClientScan {
 
   const detected: DetectedClient[] = [];
   const seen = new Set<string>();
-  const add = (d: DetectedClient) => {
+  const add = (d: Omit<DetectedClient, "guide">) => {
     if (connectedIds.has(d.id) || seen.has(d.id)) return;
     seen.add(d.id);
-    detected.push(d);
+    detected.push({ ...d, guide: clientGuide(d.id) });
   };
   // CLI clients whose config folder exists but has no amem entry.
   if (existsSync(join(home, ".gemini", "settings.json"))) {
@@ -169,13 +208,18 @@ export function scanClients(opts: ScanOpts = {}): ClientScan {
   if (existsSync(join(home, ".codex"))) {
     add({ id: "codex", label: "OpenAI Codex", nextStep: "Add [mcp_servers.amem] to ~/.codex/config.toml (`amem recipe` prints the entry)" });
   }
+  const unsupported: UnsupportedClient[] = [];
   if (platform === "darwin") {
     const dirs = opts.appDirs ?? ["/Applications", join(home, "Applications")];
+    const installed = (app: string) => dirs.some((d) => existsSync(join(d, app)));
     for (const a of DESKTOP_APPS) {
-      if (dirs.some((d) => existsSync(join(d, a.app)))) add({ id: a.id, label: a.label, nextStep: a.nextStep });
+      if (installed(a.app)) add({ id: a.id, label: a.label, nextStep: a.nextStep });
+    }
+    for (const a of UNSUPPORTED_APPS) {
+      if (installed(a.app)) unsupported.push({ id: a.id, label: a.label, instead: a.instead, guide: clientGuide(a.id) });
     }
   }
-  return { connected, detected };
+  return { connected, detected, unsupported };
 }
 
 /**
