@@ -59,7 +59,7 @@ test("homepage is the full landing: hero, primitives, features, comparison, setu
     const { status, text } = await get(port, "/");
     assert.equal(status, 200);
     assert.match(text, /100% Local • Zero Cloud • Single SQLite File/);
-    assert.match(text, /Stop paying your AI agent to re-learn your codebase every session\./);
+    assert.match(text, /Stop paying your AI agent to (<span class="nowrap">)?re-learn(<\/span>)? your codebase every session\./);
     assert.match(text, /npx @iamem\/amem setup/);
     assert.match(text, /amem ui/);
     // The hero shows the 60-second explainer (it replaced the static dashboard mock).
