@@ -62,10 +62,10 @@ test("homepage is the full landing: hero, primitives, features, comparison, setu
     assert.match(text, /Stop paying your AI agent to re-learn your codebase every session\./);
     assert.match(text, /npx @iamem\/amem setup/);
     assert.match(text, /amem ui/);
-    // Dashboard preview: facts, review queue, task board.
-    assert.match(text, /data-pane="facts"/);
-    assert.match(text, /data-pane="review"/);
-    assert.match(text, /Backlog<\/h4>[\s\S]*Done<\/h4>/);
+    // The hero shows the 60-second explainer (it replaced the static dashboard mock).
+    assert.match(text, /<video id="explainer"[^>]*autoplay/);
+    assert.match(text, /\/public\/amem-explainer\.mp4/);
+    assert.match(text, /poster="\/public\/amem-explainer\.jpg"/);
     // Three primitives.
     assert.match(text, /File-anchored facts, with automatic staleness detection/);
     assert.match(text, /On-demand skills/);

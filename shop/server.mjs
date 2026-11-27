@@ -222,8 +222,6 @@ body{
 .sec{max-width:1080px;margin:0 auto;padding:3rem 1.25rem 0;width:100%;scroll-margin-top:3.5rem}
 html{scroll-behavior:smooth}
 .sec-head{max-width:44rem;margin:0 0 1.4rem}
-.vid{border-radius:16px;overflow:hidden;border:1px solid var(--line);background:#0b0f12;box-shadow:0 30px 80px rgba(0,0,0,.45)}
-.vid video{display:block;width:100%;height:auto}
 .sec-kicker{margin:0 0 .4rem;color:var(--accent);font-size:.74rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
 .sec h2{margin:0 0 .5rem;font-size:clamp(1.45rem,3.4vw,1.95rem);letter-spacing:-.03em;line-height:1.15}
 .sec-lead{margin:0;color:var(--muted);font-size:1rem}
@@ -421,6 +419,7 @@ pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:
 .lp-facts li::before{content:"✓ ";color:var(--accent)}
 .mock{border:1px solid var(--line);border-radius:14px;background:rgba(11,15,18,.92);box-shadow:0 30px 90px rgba(0,0,0,.55);overflow:hidden;font-size:.8rem}
 .mock-bar{display:flex;align-items:center;gap:.4rem;padding:.55rem .75rem;border-bottom:1px solid var(--line);background:rgba(20,27,33,.9)}
+.hero-video video{display:block;width:100%;height:auto;background:#0b0f12}
 .mock-bar i{width:.6rem;height:.6rem;border-radius:999px;background:#3a454e}
 .mock-bar span{margin-left:.5rem;color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:.72rem}
 .mock-tabs{display:flex;gap:.25rem;padding:.5rem .6rem;border-bottom:1px solid var(--line)}
@@ -1241,49 +1240,14 @@ function landing() {
         <p class="lp-cta2">Then open the local UI: <code>amem ui</code> <span>→ 127.0.0.1:7843</span></p>
         <ul class="lp-facts"><li>Free &amp; open source</li><li>Any MCP client</li><li>Mac, Windows, Linux</li><li><a href="https://github.com/sslugic/amem" style="color:inherit">Source on GitHub</a></li></ul>
       </div>
-      <div class="mock" role="group" aria-label="Preview of the amem ui dashboard">
-        <div class="mock-bar"><i></i><i></i><i></i><span>127.0.0.1:7843 · amem ui</span></div>
-        <div class="mock-tabs" role="tablist">
-          <button type="button" class="mock-tab active" data-mock="facts" role="tab" aria-selected="true">Facts</button>
-          <button type="button" class="mock-tab" data-mock="review" role="tab" aria-selected="false">Review queue</button>
-          <button type="button" class="mock-tab" data-mock="tasks" role="tab" aria-selected="false">Tasks</button>
-        </div>
-        <div class="mock-pane active" data-pane="facts">
-          <div class="mf"><span class="pill pin">pinned</span><b>Webhooks require the raw body for signature checks.</b><small>gotcha · src/webhooks/stripe.ts</small></div>
-          <div class="mf"><span class="pill stale">stale</span><b>Migrations run with <code>pnpm db:migrate</code> before tests.</b><small>howto · package.json changed after this fact</small></div>
-          <div class="mf"><span class="pill ok">fresh</span><b>JWT login middleware validates the session on every API call.</b><small>constraint · src/auth/middleware.ts</small></div>
-          <div class="mf"><span class="pill">expires 2d</span><b>Staging queue consumer paused during the incident.</b><small>session · ttl 2 days</small></div>
-        </div>
-        <div class="mock-pane" data-pane="review">
-          <div class="mr"><span>Release steps for the iOS app <em class="pill">new skill</em></span><span class="mr-act"><span class="y">Keep</span><span>Dismiss</span></span></div>
-          <div class="mr"><span>“Retry webhooks 5× not 3×” replaces an older fact</span><span class="mr-act"><span class="y">Retire old</span><span>Keep both</span></span></div>
-          <div class="mr"><span>3 facts point at files that changed</span><span class="mr-act"><span class="y">Review</span></span></div>
-        </div>
-        <div class="mock-pane" data-pane="tasks">
-          <div class="board">
-            <div class="col"><h4>Backlog</h4><div class="card">Coverage for refund webhooks<em>from Cursor</em></div><div class="card">Rotate signing secret</div></div>
-            <div class="col"><h4>Next</h4><div class="card">Drop legacy login page</div></div>
-            <div class="col doing"><h4>Doing</h4><div class="card">Fix OAuth redirect loop<em>Claude Code · now</em></div></div>
-            <div class="col done"><h4>Done</h4><div class="card">Pin Node 20 in CI</div></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="sec" id="video">
-    <div class="sec-head">
-      <p class="sec-kicker">amem in 60 seconds</p>
-      <h2>How your agents stop re-reading your code</h2>
-      <p class="sec-lead">Claude Code learns something, Gemini CLI uses it the next day, and you watch every lookup in the Activity view. The token numbers in the video are real amem stats from one developer's last 30 days.</p>
-    </div>
-    <div class="vid">
-      <video id="explainer" controls muted playsinline loop preload="metadata" poster="/public/amem-explainer.jpg" width="1920" height="1080" aria-label="60-second explainer: how amem gives AI coding agents shared memory and saves tokens">
+      <div class="mock hero-video">
+        <div class="mock-bar"><i></i><i></i><i></i><span>amem in 60 seconds</span></div>
+        <video id="explainer" controls muted autoplay playsinline loop preload="metadata" poster="/public/amem-explainer.jpg" width="1920" height="1080" aria-label="60-second explainer: how amem gives AI coding agents shared memory and saves tokens">
         <source src="/public/amem-explainer.mp4" type="video/mp4" />
         <source src="/public/amem-explainer.webm" type="video/webm" />
       </video>
-    </div>
-    <script>
+      </div>
+      <script>
       (function () {
         var v = document.getElementById("explainer");
         if (!v || !("IntersectionObserver" in window)) return;
@@ -1296,7 +1260,10 @@ function landing() {
         }, { threshold: 0.5 }).observe(v);
       })();
     </script>
+    </div>
   </section>
+
+  
 
   <section class="sec" id="how">
     <div class="sec-head">
