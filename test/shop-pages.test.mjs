@@ -85,6 +85,7 @@ test("homepage is the full landing: hero, primitives, features, comparison, setu
       assert.match(text, new RegExp(`id="setup-${id}"`));
     }
     assert.match(text, /"args": \["-y", "@iamem\/amem", "mcp"\]/);
+    assert.match(text, /docs\/CLIENTS\.md/, "links the per-app setup guide");
     // FAQ.
     assert.match(text, /Does anything leave my machine\?/);
     assert.match(text, /Do I need Ollama or OpenAI keys\?/);

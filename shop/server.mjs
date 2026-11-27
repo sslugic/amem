@@ -1240,7 +1240,7 @@ function landing() {
     <div class="sec-head">
       <p class="sec-kicker">One-command setup</p>
       <h2>Works with every client you already use</h2>
-      <p class="sec-lead">Setup installs the CLI, wires the hooks, registers the MCP server and seeds the repo with build, test and CI facts from its manifests.</p>
+      <p class="sec-lead">Setup installs the CLI, wires the hooks, registers the MCP server and seeds the repo with build, test and CI facts from its manifests. Using Claude Desktop, Gemini CLI, Antigravity, Perplexity, Warp, JetBrains or LM Studio? <a href="https://github.com/sslugic/amem/blob/main/docs/CLIENTS.md" style="color:var(--accent)">Step-by-step setup for every app →</a></p>
     </div>
     <div class="cmd-box setup-box">
       <div class="cmd-tabs" role="tablist">
@@ -1276,7 +1276,7 @@ function landing() {
 </main>
 <footer class="foot"><div class="foot-in">
   <span>amem · agent memory, anchored to your code · MIT</span>
-  <nav aria-label="Footer"><a href="/fact-sheet">Fact sheet</a><a href="/features">Features</a><a href="/why">Why amem</a><a href="/what">How it works</a><a href="https://github.com/sslugic/amem">GitHub</a><a href="https://www.npmjs.com/package/@iamem/amem">npm</a></nav>
+  <nav aria-label="Footer"><a href="/fact-sheet">Fact sheet</a><a href="/features">Features</a><a href="/why">Why amem</a><a href="/what">How it works</a><a href="https://github.com/sslugic/amem/blob/main/docs/CLIENTS.md">Connect your AI tools</a><a href="https://github.com/sslugic/amem">GitHub</a><a href="https://www.npmjs.com/package/@iamem/amem">npm</a></nav>
 </div></footer>`,
     "amem — agent memory, anchored to your code",
   );

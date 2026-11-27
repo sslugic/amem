@@ -72,7 +72,7 @@ amem export --format md --all                    # or JSON (default) for backups
 
 Agents get the same through MCP: `amem_bootstrap` at session start, `amem_search`, `max_tokens` on `amem_context`, and `ttl_days` / `supersedes` on `amem_remember`. Skills can declare triggers in their frontmatter (`files: ["*.swift", "Package.swift"]`, `keywords: [deploy, migration]`), and amem surfaces a one-line hint when they match.
 
-Any MCP client can use the same memory: `amem mcp --print-config` prints a ready-to-paste config.
+Any MCP client can use the same memory: `amem mcp --print-config` prints a ready-to-paste config. **[Connect amem to your AI tools](docs/CLIENTS.md)** has step-by-step setup for Claude Desktop, Codex, Copilot, Gemini CLI, Antigravity, Perplexity, Warp, JetBrains, LM Studio and more.
 
 Something off? `amem doctor --fix` rewires the current repo's client. To remove amem, run `amem uninstall` to see what it added, then `amem uninstall --yes`. Your memory stays unless you add `--purge`.
 
