@@ -39,6 +39,7 @@ import { handleHookPayload } from "./hook.js";
 import { installClaude, claudeInstallHealth } from "./install/claude.js";
 import { installCursor, cursorInstallHealth } from "./install/cursor.js";
 import { installHost } from "./install/hosts.js";
+import { AGENT_INSTALL_IDS, installAgent } from "./install/agents.js";
 import { seedRepoIfEmpty } from "./repo-seed.js";
 import { planUninstall } from "./uninstall.js";
 import { ensureStableCli, type McpRegistration } from "./install/mcp-register.js";
@@ -401,6 +402,11 @@ async function main(): Promise<void> {
           console.log("Claude Code hooks/skills installed");
           for (const s of info.skills) console.log(`  skill: ${s}`);
           printMcp(info.mcp);
+        } else if (platform && AGENT_INSTALL_IDS.has(platform)) {
+          const info = installAgent(platform);
+          console.log(`${platformLabel(platform)} MCP configured`);
+          printMcp(info.mcp);
+          for (const n of info.notes) console.log(`  note: ${n}`);
         }
         // Wire the host up AND tell it how to use amem. An MCP endpoint on its
         // own teaches a client nothing about the task board or memory.
@@ -501,6 +507,8 @@ async function main(): Promise<void> {
             repoRoot: identity.rootPath,
             workspace: identity.repoName,
           });
+        } else if (AGENT_INSTALL_IDS.has(platform)) {
+          installInfo = installAgent(platform);
         } else if (usesGenericMcp(platform)) {
           // No local installer for this client — bind the repo anyway and hand
           // over the MCP endpoint it can be pointed at.
@@ -852,7 +860,13 @@ async function main(): Promise<void> {
       }
       case "remember": {
         const text = positional.slice(1).join(" ").trim();
-        if (!text) throw new Error('Usage: amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>] [--supersedes <id,id>]');
+        const failure = ["approach", "symptom", "cause", "retry-when"].some((k) => flagString(flags, k));
+        if (!text && !failure) {
+          throw new Error(
+            'Usage: amem remember "<text>" [--workspace <name>] [--kind session] [--anchor <path>] [--supersedes <id,id>]\n' +
+              '   or: amem remember --approach "<what was tried>" --symptom "<what happened>" [--cause "<why>"] [--retry-when "<condition>"]',
+          );
+        }
         const repo = resolveBinding(flags);
         const anchor = flagString(flags, "anchor");
         const result = handleApi({
@@ -867,6 +881,10 @@ async function main(): Promise<void> {
             supersedes: flagString(flags, "supersedes"),
             ttl_days: flagString(flags, "ttl-days"),
             expires_at: flagString(flags, "expires-at"),
+            approach: flagString(flags, "approach"),
+            symptom: flagString(flags, "symptom"),
+            cause: flagString(flags, "cause"),
+            retry_when: flagString(flags, "retry-when"),
             source: "cli",
           },
           cwd: process.cwd(),

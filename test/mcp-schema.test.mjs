@@ -18,7 +18,11 @@ describe("MCP tool schemas", () => {
         assert.ok(Array.isArray(required), `${tool.name} declares required`);
         for (const r of required) assert.ok(r in tool.inputSchema.properties, `${tool.name}: ${r} has a schema`);
         if (required.length === 0) {
-          assert.match(tool.description, /All arguments are optional\.|Takes no arguments\./, `${tool.name} says why nothing is required`);
+          assert.match(
+            tool.description,
+            /All arguments are optional\.|Takes no arguments\.|Requires one of: /,
+            `${tool.name} says why nothing is required`,
+          );
         }
         const res = dispatchMcp({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: tool.name, arguments: {} } }).result;
         const text = res.content?.map((c) => c.text).join(" ") ?? "";

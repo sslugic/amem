@@ -9,7 +9,8 @@ export type KnownPlatform = {
   popular?: boolean;
   /** Hidden from the Setup picker (internal ids that still pass policy). */
   hidden?: boolean;
-  installs?: "cursor" | "claude" | "host";
+  /** `agent`: a command-line agent that gets a user-scope stdio MCP entry and a repo binding. */
+  installs?: "cursor" | "claude" | "host" | "agent";
 };
 
 export const PLATFORM_GROUPS: { id: PlatformGroup; label: string }[] = [
@@ -37,8 +38,8 @@ export const KNOWN_PLATFORMS: KnownPlatform[] = [
     popular: true,
     installs: "claude",
   },
-  { id: "codex", label: "OpenAI Codex", hint: "MCP / HTTP API", group: "cli", popular: true },
-  { id: "gemini", label: "Gemini CLI", hint: "MCP / HTTP API", group: "cli", popular: true },
+  { id: "codex", label: "OpenAI Codex", hint: "MCP config installer", group: "cli", popular: true, installs: "agent" },
+  { id: "gemini", label: "Gemini CLI", hint: "MCP config installer", group: "cli", popular: true, installs: "agent" },
   { id: "grok", label: "Grok", hint: "MCP / HTTP API", group: "cli", popular: true },
   {
     id: "aider",
@@ -48,11 +49,11 @@ export const KNOWN_PLATFORMS: KnownPlatform[] = [
     popular: true,
     installs: "host",
   },
-  { id: "opencode", label: "OpenCode", hint: "MCP / HTTP API", group: "cli" },
+  { id: "opencode", label: "OpenCode", hint: "MCP config installer", group: "cli", popular: true, installs: "agent" },
   { id: "goose", label: "Goose", hint: "MCP / HTTP API", group: "cli" },
   { id: "crush", label: "Crush", hint: "MCP / HTTP API", group: "cli" },
   { id: "amp", label: "Amp", hint: "MCP / HTTP API", group: "cli" },
-  { id: "qwen", label: "Qwen Code", hint: "MCP / HTTP API", group: "cli" },
+  { id: "qwen", label: "Qwen Code", hint: "MCP config installer", group: "cli", installs: "agent" },
   { id: "droid", label: "Factory Droid", hint: "MCP / HTTP API", group: "cli" },
   { id: "openhands", label: "OpenHands", hint: "MCP / HTTP API", group: "cli" },
   { id: "amazon-q", label: "Amazon Q Developer", hint: "MCP / HTTP API", group: "cli" },

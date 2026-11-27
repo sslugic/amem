@@ -3,6 +3,8 @@
 const KIND_WEIGHT: Record<string, number> = {
   constraint: 12,
   gotcha: 12,
+  /** A dead end someone already paid for: surface it before the agent walks in again. */
+  fail: 12,
   owner: 8,
   howto: 6,
   structure: 5,

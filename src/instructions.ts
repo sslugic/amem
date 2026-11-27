@@ -58,6 +58,7 @@ const HOST_FILES: Record<string, { path: string; mode: InstructionMode; frontmat
   claude: { path: "CLAUDE.md", mode: "block" },
   copilot: { path: ".github/copilot-instructions.md", mode: "block" },
   gemini: { path: "GEMINI.md", mode: "block" },
+  qwen: { path: "QWEN.md", mode: "block" },
   windsurf: { path: ".windsurf/rules/amem.md", mode: "file" },
   continue: { path: ".continue/rules/amem.md", mode: "file" },
   cline: { path: ".clinerules/amem.md", mode: "file" },

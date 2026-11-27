@@ -97,6 +97,7 @@ import { buildContext, buildRetrievalShowdown, decorateUsageEvents, renderContex
 import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
 import { hostInstallHealth, installHost } from "../install/hosts.js";
+import { AGENT_INSTALL_IDS, agentInstallHealth, installAgent } from "../install/agents.js";
 import { decorateDraft, decorateDrafts } from "../draft-quality.js";
 
 /**
@@ -379,6 +380,11 @@ function doctorIssues(repo: RepoRow | null, rootPath: string): string[] {
   for (const host of ["continue", "zed", "windsurf"]) {
     if (platforms.includes(host) || repo.platform === host) {
       issues.push(...hostInstallHealth(host));
+    }
+  }
+  for (const agent of AGENT_INSTALL_IDS) {
+    if (platforms.includes(agent) || repo.platform === agent) {
+      issues.push(...agentInstallHealth(agent));
     }
   }
   if (platforms.length === 0) {
@@ -729,13 +735,90 @@ function runSupersede(repo: RepoRow, body: unknown): ApiResponse {
   return ok({ superseded: done, by, notFound: ids.filter((i) => !done.includes(i) && i !== by) });
 }
 
+/**
+ * Memories that bear on a question, numbered so an answer can cite them ([E1], [E2]).
+ * Unlike the context packet this returns claims only, with their ids, anchors, dates
+ * and freshness, so the agent can say where each statement came from and check the
+ * stale ones before repeating them.
+ */
+export function buildEvidence(repo: RepoRow, question: string, limit = 8) {
+  const packet = buildContext(repo.id, question, { rootPath: repo.root_path, strict: true });
+  const evidence = packet.claims.slice(0, limit).map((c, i) => {
+    let anchors: string[] = [];
+    try {
+      const parsed = JSON.parse(c.code_anchors) as unknown;
+      if (Array.isArray(parsed)) anchors = parsed.filter((a): a is string => typeof a === "string");
+    } catch {
+      anchors = [];
+    }
+    return {
+      cite: `E${i + 1}`,
+      id: c.id,
+      kind: c.kind,
+      text: c.text,
+      anchors,
+      updatedAt: c.updated_at,
+      freshness: c.freshness.status,
+      ...(c.freshness.staleAnchors.length ? { staleAnchors: c.freshness.staleAnchors } : {}),
+    };
+  });
+  const lines = [`# Evidence: ${question}`, ""];
+  if (evidence.length === 0) {
+    lines.push("No stored memory bears on this question. Say so rather than guessing, then look in the code.");
+  } else {
+    lines.push(
+      "Answer from these entries and cite each statement, e.g. [E1]. If they do not settle the question, say what is missing.",
+      "Entries marked stale point at files that changed since they were written: check those files before relying on them.",
+      "",
+    );
+    for (const e of evidence) {
+      const where = e.anchors.length ? ` · ${e.anchors.join(", ")}` : "";
+      lines.push(`[${e.cite}] (${e.kind}, ${e.freshness}, ${e.updatedAt.slice(0, 10)}) ${e.text}`);
+      lines.push(`  id ${e.id}${where}`);
+    }
+  }
+  return { question, evidence, markdown: lines.join("\n") };
+}
+
+/**
+ * A failed approach, written so the next agent does not repeat it: what was tried, what
+ * happened, why, and what would have to change before it is worth another go. Any of
+ * the four fields turns a remember into kind `fail`.
+ */
+export function composeFailText(body: unknown): { text: string } | { error: string } | null {
+  const field = (...names: string[]) => {
+    for (const n of names) {
+      const v = bodyField(body, n);
+      if (v && v.trim()) return v.trim().replace(/[.\s]+$/, "");
+    }
+    return undefined;
+  };
+  const approach = field("approach");
+  const symptom = field("symptom");
+  const cause = field("cause");
+  const retryWhen = field("retry_when", "retryWhen", "retry-when");
+  const note = bodyField(body, "text")?.trim();
+  const kind = bodyField(body, "kind");
+  if (!approach && !symptom && !cause && !retryWhen) {
+    return kind === "fail" && !note ? { error: "kind fail needs approach and symptom" } : null;
+  }
+  if (!approach || !symptom) return { error: "a failure record needs approach and symptom" };
+  const parts = [`Failed approach: ${approach}.`, `Symptom: ${symptom}.`];
+  if (cause) parts.push(`Cause: ${cause}.`);
+  parts.push(retryWhen ? `Retry only when: ${retryWhen}.` : "Do not retry as is.");
+  if (note) parts.push(note);
+  return { text: parts.join(" ") };
+}
+
 function runRemember(repo: RepoRow, body: unknown): ApiResponse {
-  const text = bodyField(body, "text");
+  const fail = composeFailText(body);
+  if (fail && "error" in fail) return err(400, fail.error);
+  const text = fail ? fail.text : bodyField(body, "text");
   if (!text) return err(400, "text required");
   if (!isUsefulRememberText(text)) {
     return err(400, "text too trivial or secret-like — remember a durable fact with context");
   }
-  const kind = bodyField(body, "kind") ?? "session";
+  const kind = fail ? "fail" : (bodyField(body, "kind") ?? "session");
   const id =
     bodyField(body, "id") ??
     `claim.remember_${createHash("sha256").update(text).digest("hex").slice(0, 12)}`;
@@ -1118,6 +1201,7 @@ export function handleApi(req: ApiRequest): ApiResponse {
             workspace: identity.repoName,
           });
         }
+        else if (AGENT_INSTALL_IDS.has(platform)) installAgent(platform);
       }
       upsertSetupState(current.id, platforms, true);
       tracked.push(summarizeRepo(current));
@@ -1231,6 +1315,7 @@ export function handleApi(req: ApiRequest): ApiResponse {
           }),
         );
       }
+      else if (AGENT_INSTALL_IDS.has(platform)) results.push(installAgent(platform));
     }
     const setup = upsertSetupState(current.id, valid, true);
     return ok({
@@ -1309,6 +1394,15 @@ export function handleApi(req: ApiRequest): ApiResponse {
   if ((method === "POST" || method === "GET") && pathname === "/api/context") {
     if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
     return runContext(repo, body, searchParams);
+  }
+
+  if ((method === "POST" || method === "GET") && pathname === "/api/evidence") {
+    if (!repo) return err(400, "Unknown workspace. Pass workspace= or run amem init.");
+    const question =
+      bodyField(body, "question") || bodyField(body, "query") || searchParams.get("q") || "";
+    if (!question.trim()) return err(400, "question required");
+    const limit = bodyNumber(body, "limit") ?? (Number(searchParams.get("limit")) || 8);
+    return ok(buildEvidence(repo, question.trim(), Math.min(20, Math.max(1, limit))));
   }
 
   if (method === "POST" && pathname === "/api/retrieval/showdown") {
