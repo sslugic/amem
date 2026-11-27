@@ -428,6 +428,10 @@ pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:
 .mock{border:1px solid var(--line);border-radius:14px;background:rgba(11,15,18,.92);box-shadow:0 30px 90px rgba(0,0,0,.55);overflow:hidden;font-size:.8rem}
 .mock-bar{display:flex;align-items:center;gap:.4rem;padding:.55rem .75rem;border-bottom:1px solid var(--line);background:rgba(20,27,33,.9)}
 .hero-video video{display:block;width:100%;height:auto;background:#0b0f12}
+.sound-btn{margin-left:auto;appearance:none;border:1px solid rgba(46,196,182,.45);background:rgba(46,196,182,.1);color:var(--accent);
+  font:inherit;font-size:.74rem;font-weight:600;padding:.22rem .7rem;border-radius:999px;cursor:pointer}
+.sound-btn:hover{background:rgba(46,196,182,.2)}
+.sound-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .mock-bar i{width:.6rem;height:.6rem;border-radius:999px;background:#3a454e}
 .mock-bar span{margin-left:.5rem;color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:.72rem}
 .mock-tabs{display:flex;gap:.25rem;padding:.5rem .6rem;border-bottom:1px solid var(--line)}
@@ -1243,7 +1247,7 @@ function landing() {
         <h1 class="lp-h1">Stop paying your AI agent to <span class="nowrap">re-learn</span> your codebase every session.</h1>
       </div>
       <div class="mock hero-video">
-        <div class="mock-bar"><i></i><i></i><i></i><span>amem in 60 seconds</span></div>
+        <div class="mock-bar"><i></i><i></i><i></i><span>amem in 60 seconds</span><button type="button" class="sound-btn" id="soundBtn" aria-pressed="false">Sound on</button></div>
         <video id="explainer" controls muted autoplay playsinline loop preload="metadata" poster="/public/amem-explainer.jpg" width="1920" height="1080" aria-label="60-second explainer: how amem gives AI coding agents shared memory and saves tokens">
         <source src="/public/amem-explainer.mp4" type="video/mp4" />
         <source src="/public/amem-explainer.webm" type="video/webm" />
@@ -1252,6 +1256,19 @@ function landing() {
       <script>
       (function () {
         var v = document.getElementById("explainer");
+        var b = document.getElementById("soundBtn");
+        if (v && b) {
+          var paint = function () {
+            b.textContent = v.muted ? "Sound on" : "Sound off";
+            b.setAttribute("aria-pressed", v.muted ? "false" : "true");
+          };
+          b.addEventListener("click", function () {
+            v.muted = !v.muted;
+            if (!v.muted) { v.volume = 0.8; v.play().catch(function () {}); }
+            paint();
+          });
+          v.addEventListener("volumechange", paint);
+        }
         if (!v || !("IntersectionObserver" in window)) return;
         if (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
         new IntersectionObserver(function (entries) {
