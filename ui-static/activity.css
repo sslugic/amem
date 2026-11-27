@@ -173,3 +173,15 @@ body.embed { background: transparent; }
 body.embed .act-brand,
 body.embed #panelBtn { display: none; }
 body.embed .act { padding-top: 0.25rem; }
+
+/* Connected apps that never called amem, and installed apps not wired in. */
+.idle-clients { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); display: grid; gap: 12px; }
+.idle-group h3 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.idle-group p { margin: 2px 0 8px; }
+.idle-group ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.idle-node { border: 1px dashed rgba(232, 238, 242, 0.25); border-radius: 8px; padding: 6px 10px; color: var(--muted); font-size: 13px; display: flex; flex-direction: column; }
+.idle-node span { font-size: 11px; opacity: 0.8; }
+.idle-detected { flex-direction: column; flex-wrap: nowrap !important; gap: 6px !important; }
+.idle-detected li { display: flex; gap: 10px; align-items: baseline; font-size: 13px; color: var(--muted); }
+.idle-detected strong { color: var(--ink); font-weight: 500; min-width: 120px; }
+.idle-detected code { color: var(--ink); }
