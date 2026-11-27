@@ -1847,7 +1847,28 @@ async function paintConnections() {
       badge.textContent = issues.length ? `${issues.length} to fix` : "All up to date";
       badge.className = `pill ${issues.length ? "warn" : "ok"}`;
     }
-    if (advice) advice.innerHTML = issues.length ? `<ul class="advice">${issues.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "";
+    const dup = issues.some((i) => /More than one amem install/.test(i));
+    if (advice) {
+      advice.innerHTML = issues.length
+        ? `<ul class="advice">${issues.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>${
+            dup
+              ? `<div class="card-actions"><button class="btn small" type="button" id="fixInstallsBtn">Keep one install</button><span class="note">Points every app at one install and removes the others. amem also does this on its own when the dashboard restarts.</span></div>`
+              : ""
+          }`
+        : "";
+      $("#fixInstallsBtn")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "Fixing…";
+        try {
+          const r = await apiUnscoped("/api/installs/fix", { method: "POST", body: "{}" });
+          notify(r.errors?.length ? `Partly fixed: ${r.errors.join("; ")}` : `Kept ${r.keep?.root || "one install"}; removed ${r.removed?.length || 0}.`, r.errors?.length ? "error" : undefined);
+        } catch (err) {
+          notify(err.message || err);
+        }
+        paintConnections();
+      });
+    }
   } catch (e) {
     list.innerHTML = `<li class="note">Could not check: ${esc(e.message || e)}</li>`;
   }
