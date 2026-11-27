@@ -17,7 +17,8 @@ import {
   USD_PER_MILLION_INPUT_TOKENS,
 } from "../estimate.js";
 import { buildActivityGraph, speedForEvent } from "../activity.js";
-import { activityEnabled, activitySummary, latestActivityId, listActivity } from "../activity-log.js";
+import { activityClientIds, activityEnabled, activitySummary, latestActivityId, listActivity } from "../activity-log.js";
+import { idleClients, scanClients } from "../connected-clients.js";
 import {
   getRepoByCwd,
   getRepoById,
@@ -907,6 +908,14 @@ export function handleApi(req: ApiRequest): ApiResponse {
       latestId: latestActivityId(),
       enabled: activityEnabled(),
     });
+  }
+
+  // Clients wired to amem that never called it, plus AI apps installed but not wired in.
+  // Only reports whether an amem entry exists; no config values leave this machine's files.
+  if (method === "GET" && pathname === "/api/activity/clients") {
+    const scan = scanClients();
+    const active = activityClientIds();
+    return ok({ connected: scan.connected, idle: idleClients(scan, active), detected: scan.detected, active });
   }
 
   if (method === "GET" && pathname === "/api/activity/summary") {

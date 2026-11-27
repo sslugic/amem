@@ -214,6 +214,12 @@ export function listActivity(opts: { sinceId?: number; limit?: number } = {}): A
   ).map(toEvent);
 }
 
+/** Every client id with at least one logged call (within the retained log). */
+export function activityClientIds(): string[] {
+  const rows = openDb().prepare(`SELECT DISTINCT client FROM activity_events`).all() as Array<{ client: string }>;
+  return rows.map((r) => r.client).filter(Boolean);
+}
+
 export function latestActivityId(): number {
   const row = openDb().prepare(`SELECT MAX(id) AS id FROM activity_events`).get() as
     | { id: number | null }

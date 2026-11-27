@@ -163,6 +163,35 @@ function applyEvent(e) {
   return isNew;
 }
 
+/** Apps wired to amem that never called it, and AI apps that are installed but not wired in. */
+function renderIdleClients() {
+  const host = $("idleClients");
+  if (!host || compact) return;
+  const c = state.clients || {};
+  // An app that called amem in this window is already a live lane above.
+  const live = new Set([...state.lanes.values()].map((l) => l.client));
+  const idle = (c.idle || []).filter((x) => !live.has(x.id));
+  const detected = c.detected || [];
+  if (!idle.length && !detected.length) {
+    host.classList.add("hidden");
+    return;
+  }
+  host.classList.remove("hidden");
+  host.innerHTML = `${
+    idle.length
+      ? `<div class="idle-group"><h3>Connected · no calls yet</h3><p class="muted small">Shows up after its agent first calls amem.</p><ul>${idle
+          .map((x) => `<li class="idle-node" title="Wired in via ${esc(x.via.join(" + "))}">${esc(x.label)}<span>${esc(x.via.join(" + "))}</span></li>`)
+          .join("")}</ul></div>`
+      : ""
+  }${
+    detected.length
+      ? `<div class="idle-group"><h3>Detected, not connected</h3><ul class="idle-detected">${detected
+          .map((x) => `<li><strong>${esc(x.label)}</strong><span>${esc(x.nextStep).replace(/`([^`]+)`/g, "<code>$1</code>")}</span></li>`)
+          .join("")}</ul></div>`
+      : ""
+  }`;
+}
+
 async function loadAll() {
   const [summary, recent] = await Promise.all([
     getJson(`/api/activity/summary?hours=${state.hours}`),
@@ -170,6 +199,13 @@ async function loadAll() {
   ]);
   state.summary = summary;
   state.lanes = lanesFromSummary(summary);
+  // Connected-but-silent and installed-but-unwired apps; never blocks the live view.
+  getJson("/api/activity/clients")
+    .then((c) => {
+      state.clients = c;
+      renderIdleClients();
+    })
+    .catch(() => {});
   const since = new Date(Date.now() - state.hours * 3600_000).toISOString();
   state.feed = recent.events.filter((e) => e.ts >= since);
   state.latestId = Math.max(summary.latestId || 0, recent.latestId || 0);
@@ -201,6 +237,7 @@ function scheduleSummaryRefresh(delay = 4000) {
 // ---------- rendering ----------
 
 function renderAll() {
+  renderIdleClients();
   renderFlow();
   renderTotals();
   renderSavings();
