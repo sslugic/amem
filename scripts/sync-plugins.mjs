@@ -16,12 +16,12 @@
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.includes("--check");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-const { instructionTargets, renderInstructions } = await import(join(root, "dist", "instructions.js"));
+const { instructionTargets, renderInstructions } = await import(pathToFileURL(join(root, "dist", "instructions.js")).href);
 
 const VERSION = pkg.version;
 const TAGLINE = "amem — agent memory, anchored to your code";
@@ -242,10 +242,20 @@ function listTree(src) {
   return out;
 }
 
+/** Byte-equal, or equal text once CRLF is normalised (git autocrlf on Windows). */
+function sameFile(a, b) {
+  const x = readFileSync(a);
+  const y = readFileSync(b);
+  if (Buffer.compare(x, y) === 0) return true;
+  const norm = (buf) => buf.toString("utf8").replace(/\r\n/g, "\n");
+  return !x.includes(0) && !y.includes(0) && norm(x) === norm(y);
+}
+
 let stale = [];
 for (const [path, content] of files) {
   const abs = join(root, path);
-  const current = existsSync(abs) ? readFileSync(abs, "utf8") : null;
+  // Windows checkouts may convert line endings; compare content, not newline style.
+  const current = existsSync(abs) ? readFileSync(abs, "utf8").replace(/\r\n/g, "\n") : null;
   if (current === content) continue;
   stale.push(path);
   if (!check) {
@@ -259,7 +269,7 @@ for (const [src, dest] of copies) {
   for (const rel of listTree(from)) {
     const a = rel ? join(from, rel) : from;
     const b = rel ? join(to, rel) : to;
-    if (existsSync(b) && Buffer.compare(readFileSync(a), readFileSync(b)) === 0) continue;
+    if (existsSync(b) && sameFile(a, b)) continue;
     stale.push(relative(root, b));
   }
   if (!check && stale.some((s) => s.startsWith(dest))) {
