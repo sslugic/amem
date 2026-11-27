@@ -1,7 +1,7 @@
 {
   "name": "amem-desktop",
   "private": true,
-  "version": "0.15.0",
+  "version": "0.16.0",
   "productName": "amem",
   "description": "amem — agent memory, anchored to your code. Desktop app with setup and live activity.",
   "main": "main.js",

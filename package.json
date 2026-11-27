@@ -1,6 +1,6 @@
 {
   "name": "@iamem/amem",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "amem — agent memory, anchored to your code. Local facts, skills and tasks for Claude Code, Cursor, Codex and any MCP client. Private to your machine.",
   "type": "module",
   "bin": {

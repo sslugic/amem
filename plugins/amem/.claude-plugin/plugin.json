@@ -1,6 +1,6 @@
 {
   "name": "amem",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "amem — agent memory, anchored to your code. Local memory for coding agents: file-anchored facts that flag themselves stale, on-demand skills and a shared task board, in one SQLite file on your machine. No cloud, no API keys.",
   "author": {
     "name": "amem",
