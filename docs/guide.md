@@ -1,5 +1,7 @@
 # amem guide
 
+*amem — agent memory, anchored to your code.*
+
 The full manual: setup, day-to-day use, what gets stored, skills, savings, other clients, commands, security and IT controls. The [README](../README.md) has the short version.
 
 ## Why amem exists

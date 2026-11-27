@@ -1,8 +1,10 @@
 # amem technical fact sheet
 
+*amem — agent memory, anchored to your code.*
+
 | | |
 | --- | --- |
-| **Product** | `amem` (npm [`@iamem/amem`](https://www.npmjs.com/package/@iamem/amem), source [`sslugic/amem`](https://github.com/sslugic/amem)) |
+| **Product** | `amem`: **a**gent **mem**ory (npm [`@iamem/amem`](https://www.npmjs.com/package/@iamem/amem), source [`sslugic/amem`](https://github.com/sslugic/amem)) |
 | **Category** | Local-first SQLite + Model Context Protocol (MCP) memory layer for AI coding agents |
 | **Storage** | One SQLite file, `~/.amem/graph.db` (skills as Markdown in `~/.amem/skills`). No daemons, no cloud, no API keys. |
 | **Runtime** | Node 20+, one dependency (`better-sqlite3`). MCP over stdio (`amem mcp`) or HTTP on `127.0.0.1:7843`. |

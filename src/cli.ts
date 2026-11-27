@@ -174,7 +174,7 @@ function printMcp(mcp: McpRegistration | undefined): void {
 }
 
 function usage(): never {
-  console.log(`amem — local personal agent memory
+  console.log(`amem — agent memory, anchored to your code
 
 Usage:
   amem setup [--personal] [--platform <host>]
@@ -346,7 +346,7 @@ async function main(): Promise<void> {
   const { positional, flags } = parseArgs(process.argv);
   const cmd = positional[0];
   if (!cmd) {
-    console.log("amem — local personal agent memory\n");
+    console.log("amem — agent memory, anchored to your code\n");
     console.log("Quick start:  amem setup");
     console.log("Help:         amem help\n");
     console.log(`Home: ${amemHome()}`);
