@@ -1,5 +1,6 @@
 import { readVersion } from "../attest.js";
 import { currentInstall, findInstalls, hostLaunches, installIssues } from "../install-check.js";
+import { applyDedupe, planDedupe } from "../install-dedupe.js";
 import { contentTokens } from "../search.js";
 import { buildBootstrap, renderRecallMarkdown, resolveScope as resolveMemoryScope, searchMemory, type RecallType } from "../recall.js";
 import { exportBlock, exportSkills, importIntoRepo, parseImportFile, renderExportMarkdown } from "../import-export.js";
@@ -1100,6 +1101,14 @@ export function handleApi(req: ApiRequest): ApiResponse {
       hosts: hostLaunches(),
       issues: installIssues(),
     });
+  }
+
+  // Keep one amem install: same fix as `amem doctor --fix`.
+  if (method === "POST" && pathname === "/api/installs/fix") {
+    const plan = planDedupe();
+    if (!plan) return ok({ fixed: false, message: "Only one amem install. Nothing to fix." });
+    const r = applyDedupe(plan);
+    return ok({ fixed: r.errors.length === 0, keep: r.keep, removed: r.removed, rewritten: r.rewritten, errors: r.errors, issues: installIssues() });
   }
 
   if (method === "POST" && pathname === "/api/vault/lock") {
