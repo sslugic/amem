@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { replaceFile } from "../fs-replace.js";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getPackageRoot, resolveAmemProgramArgs } from "./skills.js";
 
 export type McpRegistration = {
@@ -17,7 +17,12 @@ export type McpRegistration = {
  * knows the server. A file that does not parse is left alone: ~/.claude.json holds the
  * user's whole Claude Code state, and rewriting it from {} would wipe that.
  */
-export function mergeMcpServer(path: string, server: Record<string, unknown>): McpRegistration {
+export function mergeMcpServer(
+  path: string,
+  server: Record<string, unknown>,
+  /** The object holding servers: `mcpServers` almost everywhere, `mcp` in OpenCode. */
+  key = "mcpServers",
+): McpRegistration {
   let config: Record<string, unknown> = {};
   if (existsSync(path)) {
     try {
@@ -28,17 +33,18 @@ export function mergeMcpServer(path: string, server: Record<string, unknown>): M
       return { path, status: "skipped", note: `${path} is not valid JSON, so amem left it alone` };
     }
   }
-  const servers = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
+  const servers = (config[key] as Record<string, unknown> | undefined) ?? {};
   const before = servers.amem === undefined ? null : JSON.stringify(servers.amem);
   if (before === JSON.stringify(server)) return { path, status: "unchanged" };
-  config.mcpServers = { ...servers, amem: server };
+  config[key] = { ...servers, amem: server };
+  mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.amem-tmp-${process.pid}-${Date.now()}`;
   writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   replaceFile(tmp, path);
   return { path, status: before === null ? "added" : "updated" };
 }
 
-function launch(): { command: string; args: string[] } {
+export function launch(): { command: string; args: string[] } {
   const [command, ...args] = resolveAmemProgramArgs("mcp");
   return { command: command!, args };
 }

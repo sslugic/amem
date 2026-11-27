@@ -64,6 +64,10 @@ These apps have a built-in installer. It writes the config and the instruction f
 | **Continue** | `amem setup --platform continue` | Reload VS Code / JetBrains. Writes Continue's MCP config. |
 | **Zed** | `amem setup --platform zed` | Restart Zed. Adds amem to `settings.json`. |
 | **Aider** | `amem setup --platform aider` | Aider has no MCP, so amem writes `.aider.amem.md` with CLI commands it can run. |
+| **OpenAI Codex** | `amem init --platform codex` | Start a new Codex session. Adds `[mcp_servers.amem]` to `~/.codex/config.toml` (or `$CODEX_HOME`) and writes `AGENTS.md`. |
+| **Gemini CLI** | `amem init --platform gemini` | Start a new session; `/mcp` lists amem. Adds amem to `~/.gemini/settings.json` and writes `GEMINI.md`. |
+| **Qwen Code** | `amem init --platform qwen` | Start a new session; `/mcp` lists amem. Adds amem to `~/.qwen/settings.json` and writes `QWEN.md`. |
+| **OpenCode** | `amem init --platform opencode` | Restart OpenCode. Adds a local `mcp.amem` server to `~/.config/opencode/opencode.json` and writes `AGENTS.md`. A config with comments is left alone; paste the entry by hand there. |
 
 Run the command inside the project you want the app to use; `amem platforms` lists every client id.
 
@@ -83,7 +87,7 @@ args = ["/usr/local/bin/amem", "mcp"]
 env = { AMEM_WORKSPACE = "personal" }      # or leave out inside a repo
 ```
 
-`amem setup --platform codex` also writes `AGENTS.md` so Codex knows to query amem first.
+`amem init --platform codex` writes this entry for you, and `AGENTS.md` so Codex knows to query amem first.
 
 ### GitHub Copilot (VS Code agent mode)
 Create `.vscode/mcp.json` in the project, or use *MCP: Open User Configuration* for all projects. Note that VS Code uses `servers`, not `mcpServers`:
@@ -99,7 +103,7 @@ Create `.vscode/mcp.json` in the project, or use *MCP: Open User Configuration* 
 Switch Copilot Chat to **Agent** mode; MCP tools are only offered there. `amem setup --platform copilot` writes `.github/copilot-instructions.md`.
 
 ### Gemini CLI
-Add the block under `mcpServers` in `~/.gemini/settings.json` (all projects) or `.gemini/settings.json` (one project). `amem setup --platform gemini` writes `GEMINI.md`.
+`amem init --platform gemini` adds amem under `mcpServers` in `~/.gemini/settings.json` and writes `GEMINI.md`. To limit it to one project, put the block in `.gemini/settings.json` there instead.
 
 ### Google Antigravity
 Agent panel → **⋯** → **MCP Servers** → **Manage MCP Servers** → **View raw config**. Add the `amem` block under `mcpServers` and save.

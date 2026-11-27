@@ -65,7 +65,8 @@ describe("platforms", () => {
       "jetbrains",
     ]);
     // Clients with no local installer connect over the MCP recipe.
-    assert.equal(usesGenericMcp("codex"), true);
+    assert.equal(usesGenericMcp("goose"), true);
+    assert.equal(usesGenericMcp("codex"), false, "Codex has its own installer");
     assert.equal(usesGenericMcp("cursor"), false);
     assert.equal(usesGenericMcp("nope"), false);
     // Internal ids stay allowed but out of the Setup picker.

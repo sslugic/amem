@@ -82,7 +82,7 @@ const TOOLS = [
   {
     name: "amem_remember",
     description:
-      "Store a durable local fact in amem (stays on this machine). Use kind `private` (or anchor `private`) for personal, non-work facts so they never appear in work repositories' context. When the fact replaces an older one (a newer status, a fixed bug, a changed decision), pass the old claim ids in `supersedes` so the outdated memory stops being served. The response lists `possiblySupersedes`: older look-alikes to retire with amem_supersede if they are now wrong.",
+      "Store a durable local fact in amem (stays on this machine). After a dead end, record it as a failure (approach, symptom, cause, retry_when; no text needed) so no later session repeats it. Requires one of: text, or approach and symptom (a failure record). Use kind `private` (or anchor `private`) for personal, non-work facts so they never appear in work repositories' context. When the fact replaces an older one (a newer status, a fixed bug, a changed decision), pass the old claim ids in `supersedes` so the outdated memory stops being served. The response lists `possiblySupersedes`: older look-alikes to retire with amem_supersede if they are now wrong.",
     inputSchema: {
       type: "object",
       properties: {
@@ -93,8 +93,26 @@ const TOOLS = [
         supersedes: { type: "array", items: { type: "string" }, description: "Claim ids this fact replaces" },
         ttl_days: { type: "number", description: "Expire after N days (temporary notes)" },
         expires_at: { type: "string", description: "ISO expiry; alternative to ttl_days" },
+        approach: { type: "string", description: "Failure record: what was tried (with symptom, makes kind fail)" },
+        symptom: { type: "string", description: "Failure record: what went wrong (error, wrong output)" },
+        cause: { type: "string", description: "Failure record: why it failed, if known" },
+        retry_when: { type: "string", description: "Failure record: what must change before trying again" },
       },
-      required: ["text"],
+      required: [],
+    },
+  },
+  {
+    name: "amem_evidence",
+    description:
+      "Numbered, citable memory for a question: each entry has an id, kind, date, file anchors and freshness. Use when you will state facts from memory in an answer, a review or a PR, and cite them as [E1]. Prefer amem_context for general orientation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: { type: "string" },
+        workspace: { type: "string" },
+        limit: { type: "number", description: "Max entries (default 8, max 20)" },
+      },
+      required: ["question"],
     },
   },
   {
@@ -530,9 +548,26 @@ function runTool(name: string, args: Record<string, unknown>, fallbackWorkspace?
     const contract = result.body as { paste?: string; markdown?: string };
     return textResult(contract.paste || contract.markdown || JSON.stringify(result.body));
   }
+  if (name === "amem_evidence") {
+    const question = typeof args.question === "string" ? args.question : "";
+    if (!question.trim()) return textResult("question is required", true);
+    const result = api(
+      "POST",
+      "/api/evidence",
+      { question, limit: typeof args.limit === "number" ? args.limit : undefined },
+      { workspace },
+    );
+    if (result.status >= 400) return apiResult(result);
+    return textResult((result.body as { markdown: string }).markdown);
+  }
   if (name === "amem_remember") {
     const text = typeof args.text === "string" ? args.text : "";
-    if (!text.trim()) return textResult("text is required", true);
+    const failure = ["approach", "symptom", "cause", "retry_when"].some(
+      (k) => typeof args[k] === "string" && (args[k] as string).trim(),
+    );
+    if (!text.trim() && !failure) {
+      return textResult("Nothing to store: pass text, or approach and symptom for a failure record.", true);
+    }
     const result = api(
       "POST",
       "/api/remember",
@@ -544,6 +579,10 @@ function runTool(name: string, args: Record<string, unknown>, fallbackWorkspace?
         supersedes: args.supersedes,
         ttl_days: args.ttl_days,
         expires_at: args.expires_at,
+        approach: args.approach,
+        symptom: args.symptom,
+        cause: args.cause,
+        retry_when: args.retry_when,
         source: "mcp",
       },
       { workspace },

@@ -10,7 +10,7 @@
 
 [![amem MCP server](https://mcprush.com/badge/sslugic-amem-mcp/card.svg)](https://mcprush.com/to/sslugic-amem-mcp?ref=badge) [![amem on Glama](https://glama.ai/mcp/servers/sslugic/amem/badges/score.svg)](https://glama.ai/mcp/servers/sslugic/amem)
 
-**amem — agent memory, anchored to your code.** Facts tied to the files they describe, skills and tasks, all in one SQLite file on your machine. Works with Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Windsurf, Continue, Aider and Zed, on macOS, Linux and Windows.
+**amem — agent memory, anchored to your code.** Facts tied to the files they describe, skills and tasks, all in one SQLite file on your machine. Works with Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Qwen Code, OpenCode, Windsurf, Continue, Aider and Zed, on macOS, Linux and Windows.
 
 ```bash
 npx @iamem/amem setup --platform claude   # or cursor, codex, copilot …
@@ -27,13 +27,15 @@ Coding agents forget between sessions. They re-read the same files, re-learn the
 
 - **Memory:** short facts (constraints, gotchas, decisions, owners) tied to the files they describe. Facts are flagged stale when those files change.
 - **Context on autopilot:** hooks hand your agent a small, ranked packet at session start and with each prompt. No pasting a project brief.
+- **Failure records:** when an approach does not work, agents save what they tried, what happened, why, and when it is worth retrying (`amem remember --approach … --symptom …`), so the next session does not walk into the same dead end.
+- **Cited answers:** `amem_evidence` returns the memories behind a question numbered [E1], [E2] with their files, dates and freshness, so an agent can say where each claim came from.
 - **Skills:** repeatable procedures (release steps, deploy order, test setup), loaded only when they apply.
 - **Tasks:** a Backlog → Next → Doing → Done board your agents update, so follow-ups survive the chat.
 - **A dashboard:** `amem ui` shows what your agents remember, what needs review and open tasks. Retire or delete a fact in one click.
 - **Live activity:** the Activity page shows every client talking to amem (Claude Code, Cursor, Codex, Claude Desktop, hooks, the CLI) as it happens: what they save, what context amem feeds back, errors, and the tokens it saved (measured where agents reported what they opened, estimate otherwise). `amem ui --panel` opens it as a small side panel, always on top with the desktop shell.
 - **Private by design:** one SQLite file in `~/.amem`, a localhost-only UI, optional encryption and local backups.
 
-Works with Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Windsurf, Continue, Aider, Zed and any other MCP client.
+Works with Claude Code, Cursor, Claude Desktop, Copilot, Codex, Gemini CLI, Qwen Code, OpenCode, Windsurf, Continue, Aider, Zed and any other MCP client.
 
 ## Quick start
 
