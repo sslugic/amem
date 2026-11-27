@@ -43,7 +43,8 @@
     "test:all": "npm run test && npm run smoke && node scripts/check-pack.mjs",
     "shop": "node shop/server.mjs",
     "plugins": "node scripts/sync-plugins.mjs",
-    "version": "npm run build && node scripts/sync-plugins.mjs && git add plugins .claude-plugin .agents .cursor-plugin gemini-extension.json"
+    "version": "npm run build && node scripts/sync-plugins.mjs && node desktop/scripts/sync-version.mjs && git add plugins .claude-plugin .agents .cursor-plugin gemini-extension.json desktop/package.json",
+    "app:dist": "npm run build && npm ci --prefix desktop && npm run dist:mac --prefix desktop"
   },
   "engines": {
     "node": ">=20"

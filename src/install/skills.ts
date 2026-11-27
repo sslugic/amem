@@ -91,7 +91,19 @@ export function resolveAmemBin(): string {
   return args.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ");
 }
 
+/**
+ * The desktop app ships amem inside itself and writes a small `amem` launcher it keeps
+ * current (AMEM_SHIM). Hooks and MCP configs must point at that launcher: the app's own
+ * executable only behaves as Node when the launcher sets ELECTRON_RUN_AS_NODE.
+ */
+export function bundledShim(): string | null {
+  const shim = process.env.AMEM_SHIM?.trim();
+  return shim && existsSync(shim) ? shim : null;
+}
+
 export function resolveAmemProgramArgs(...extra: string[]): string[] {
+  const shim = bundledShim();
+  if (shim) return [shim, ...extra];
   try {
     // npx puts its cache bin first on PATH; prefer an install that will still be there.
     const win = process.platform === "win32";

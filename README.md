@@ -23,6 +23,10 @@ Coding agents forget between sessions. They re-read the same files, re-learn the
 
 **amem** gives them a private memory that lives on your machine. The next session starts with what the last one learned.
 
+## The amem app
+
+Prefer not to use a terminal? **[Download the amem app](https://getamem.com/#download)** for Mac, Windows or Linux. It ships amem inside it, so you don't need Node. A two-minute guided setup finds your AI tools and projects and connects them, and the app then shows what your agents remember as it happens. It updates itself. See [docs/desktop-app.md](docs/desktop-app.md).
+
 ## What you get
 
 - **Memory:** short facts (constraints, gotchas, decisions, owners) tied to the files they describe. Facts are flagged stale when those files change.

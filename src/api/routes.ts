@@ -1,6 +1,6 @@
+import { homedir } from "node:os";
 import { readVersion } from "../attest.js";
 import { currentInstall, findInstalls, hostLaunches, installIssues } from "../install-check.js";
-import { applyDedupe, planDedupe } from "../install-dedupe.js";
 import { contentTokens } from "../search.js";
 import { buildBootstrap, renderRecallMarkdown, resolveScope as resolveMemoryScope, searchMemory, type RecallType } from "../recall.js";
 import { exportBlock, exportSkills, importIntoRepo, parseImportFile, renderExportMarkdown } from "../import-export.js";
@@ -99,6 +99,10 @@ import { installClaude, claudeInstallHealth } from "../install/claude.js";
 import { installCursor, cursorInstallHealth } from "../install/cursor.js";
 import { hostInstallHealth, installHost } from "../install/hosts.js";
 import { AGENT_INSTALL_IDS, agentInstallHealth, installAgent } from "../install/agents.js";
+import { detectClients } from "../detect-clients.js";
+import { applyInstructions, instructionTargets } from "../instructions.js";
+import { seedRepoIfEmpty } from "../repo-seed.js";
+import { unbindableRootReason } from "../repo-identity.js";
 import { decorateDraft, decorateDrafts } from "../draft-quality.js";
 
 /**
@@ -141,7 +145,7 @@ import {
   workspaceIdentity,
   type RepoIdentity,
 } from "../repo-identity.js";
-import { HOST_INSTALL_IDS, KNOWN_PLATFORMS, normalizePlatforms } from "../platforms.js";
+import { HOST_INSTALL_IDS, KNOWN_PLATFORMS, normalizePlatforms, platformLabel } from "../platforms.js";
 import { amemHome, amemHomeWriteIssue, dbPath, tryEnsureDir } from "../paths.js";
 import { buildAttestReport } from "../attest.js";
 import { scanGitRepos } from "../scan.js";
@@ -736,6 +740,95 @@ function runSupersede(repo: RepoRow, body: unknown): ApiResponse {
   return ok({ superseded: done, by, notFound: ids.filter((i) => !done.includes(i) && i !== by) });
 }
 
+type SetupStep = { label: string; ok: boolean; detail?: string };
+
+/**
+ * The setup wizard's one write: wire each chosen tool into amem and bind each chosen
+ * project. Tools that read one machine-wide config (Claude Desktop, Windsurf, Zed,
+ * Continue) are set up once against the personal workspace; everything else is set up
+ * per project, with the instruction file that tool reads. Every step reports on its own,
+ * so one failure does not hide what did work.
+ */
+function runSetupApply(body: unknown): ApiResponse {
+  const payload = body && typeof body === "object" ? (body as { paths?: unknown; platforms?: unknown }) : {};
+  const platforms = normalizePlatforms(payload.platforms);
+  const paths = (Array.isArray(payload.paths) ? payload.paths : []).filter(
+    (p): p is string => typeof p === "string" && Boolean(p.trim()),
+  );
+  if (platforms.length === 0) return err(400, "Choose at least one AI tool");
+  const policy = loadPolicy().policy;
+  try {
+    for (const platform of platforms) assertPlatformAllowed(platform, policy);
+  } catch (e) {
+    return err(403, e instanceof Error ? e.message : String(e));
+  }
+  const steps: SetupStep[] = [];
+  const home = homedir();
+  const tilde = (text: string | undefined) =>
+    text ? text.split(home).join("~") : text;
+  const attempt = (label: string, fn: () => string | undefined) => {
+    try {
+      const detail = tilde(fn());
+      steps.push({ label, ok: true, ...(detail ? { detail } : {}) });
+    } catch (e) {
+      steps.push({ label, ok: false, detail: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const machineWide = platforms.filter((p) => HOST_INSTALL_IDS.has(p) && p !== "aider");
+  const perProject = platforms.filter((p) => !machineWide.includes(p));
+
+  // MCP entries for command-line agents are user-wide; write them once, not per project.
+  for (const platform of perProject.filter((p) => AGENT_INSTALL_IDS.has(p))) {
+    attempt(`Connect ${platformLabel(platform)}`, () => installAgent(platform).paths.join(", "));
+  }
+  for (const platform of machineWide) {
+    attempt(`Connect ${platformLabel(platform)}`, () => {
+      ensurePersonalWorkspace(platform);
+      return installHost(platform, { workspace: PERSONAL_SLUG }).paths.join(", ");
+    });
+  }
+
+  const tracked: unknown[] = [];
+  for (const raw of paths) {
+    const root = resolve(raw);
+    const name = root.split(/[\\/]/).pop() || root;
+    if (!existsSync(root)) {
+      steps.push({ label: `Add ${name}`, ok: false, detail: "That folder no longer exists" });
+      continue;
+    }
+    const unbindable = unbindableRootReason(root);
+    if (unbindable) {
+      steps.push({ label: `Add ${name}`, ok: false, detail: `Skipped: ${unbindable}` });
+      continue;
+    }
+    if (perProject.length === 0) continue;
+    attempt(`Add ${name}`, () => {
+      const identity = detectRepoIdentity(root);
+      let current = upsertRepo(identity, perProject[0]);
+      for (const platform of perProject) {
+        current = upsertRepo(identity, platform);
+        if (platform === "cursor") installCursor(identity.rootPath);
+        else if (platform === "claude") installClaude(identity.rootPath);
+        else if (platform === "aider") installHost("aider", { repoRoot: identity.rootPath });
+      }
+      const written = applyInstructions(
+        identity.rootPath,
+        instructionTargets(perProject.filter((p) => p !== "cursor")),
+      ).filter((w) => w.status !== "unchanged");
+      upsertSetupState(current.id, perProject, true);
+      const seeded = seedRepoIfEmpty(current);
+      tracked.push(summarizeRepo(current));
+      const notes = [
+        written.length ? `wrote ${written.map((w) => w.path).join(", ")}` : "",
+        seeded ? `learned ${seeded} starting facts` : "",
+      ].filter(Boolean);
+      return notes.join("; ") || undefined;
+    });
+  }
+  return ok({ steps, tracked, ok: steps.every((s) => s.ok) });
+}
+
 /**
  * Memories that bear on a question, numbered so an answer can cite them ([E1], [E2]).
  * Unlike the context packet this returns claims only, with their ids, anchors, dates
@@ -984,6 +1077,10 @@ export function handleApi(req: ApiRequest): ApiResponse {
     return ok(apiHealth());
   }
 
+  if (method === "GET" && pathname === "/api/clients/detect") {
+    return ok({ clients: detectClients() });
+  }
+
   if (method === "GET" && pathname === "/api/activity") {
     const since = searchParams.get("since");
     const limit = Number(searchParams.get("limit") ?? "50");
@@ -1103,14 +1200,6 @@ export function handleApi(req: ApiRequest): ApiResponse {
     });
   }
 
-  // Keep one amem install: same fix as `amem doctor --fix`.
-  if (method === "POST" && pathname === "/api/installs/fix") {
-    const plan = planDedupe();
-    if (!plan) return ok({ fixed: false, message: "Only one amem install. Nothing to fix." });
-    const r = applyDedupe(plan);
-    return ok({ fixed: r.errors.length === 0, keep: r.keep, removed: r.removed, rewritten: r.rewritten, errors: r.errors, issues: installIssues() });
-  }
-
   if (method === "POST" && pathname === "/api/vault/lock") {
     return runVaultLock(body);
   }
@@ -1180,6 +1269,10 @@ export function handleApi(req: ApiRequest): ApiResponse {
         }),
       })),
     });
+  }
+
+  if (method === "POST" && pathname === "/api/setup/apply") {
+    return runSetupApply(body);
   }
 
   if (method === "POST" && pathname === "/api/track") {

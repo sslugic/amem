@@ -1,16 +1,34 @@
 {
   "name": "amem-desktop",
   "private": true,
-  "version": "0.1.0",
-  "description": "Electron shell for local amem Brain UI (localhost only).",
+  "version": "0.14.0",
+  "productName": "amem",
+  "description": "amem — agent memory, anchored to your code. Desktop app with setup and live activity.",
   "main": "main.js",
+  "homepage": "https://getamem.com",
+  "author": {
+    "name": "Slaven Slugic",
+    "email": "hello@getamem.com"
+  },
+  "license": "MIT",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "sync-version": "node scripts/sync-version.mjs",
+    "stage": "node scripts/stage-amem.mjs",
+    "dist:mac": "node scripts/dist.mjs mac",
+    "dist:mac-x64": "node scripts/dist.mjs mac-x64",
+    "dist:win": "node scripts/dist.mjs win",
+    "dist:linux": "node scripts/dist.mjs linux"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "electron": "^33.2.1"
-  }
+    "electron-updater": "^6.8.11"
+  },
+  "devDependencies": {
+    "electron": "42.11.18",
+    "electron-builder": "^26.18.0"
+  },
+  "desktopName": "amem-app.desktop"
 }

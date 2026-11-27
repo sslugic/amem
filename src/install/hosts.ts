@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, writeFileSync, readFileSync } from "n
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { mcpClientConfig, stdioMcpLaunch } from "../mcp.js";
-import { getPackageRoot, resolveAmemProgramArgs, writeJson, readJsonObject } from "./skills.js";
+import { bundledShim, getPackageRoot, resolveAmemProgramArgs, writeJson, readJsonObject } from "./skills.js";
 
 export type HostInstallResult = {
   host: string;
@@ -184,7 +184,8 @@ export function installClaudeDesktop(workspace = "personal"): HostInstallResult 
   const existing = readJsonObject(path);
   const servers = (existing.mcpServers as Record<string, unknown>) ?? {};
   const launcher = mcpLauncherPath();
-  const usable = process.platform !== "win32" && existsSync(launcher);
+  // The desktop app's launcher needs no Node on PATH, so it beats the shell launcher.
+  const usable = !bundledShim() && process.platform !== "win32" && existsSync(launcher);
   if (usable) {
     try {
       chmodSync(launcher, 0o755);

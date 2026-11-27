@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readVersion } from "./attest.js";
 import { handleApi } from "./api/routes.js";
 import { getRepoByName } from "./db.js";
+import { bundledShim } from "./install/skills.js";
 import { mcpDirection, recordActivity } from "./activity-log.js";
 
 export type JsonRpc = {
@@ -963,6 +964,8 @@ export function stdioMcpLaunch(workspace?: string): {
   args: string[];
   env: Record<string, string>;
 } {
+  const shim = bundledShim();
+  if (shim) return { command: shim, args: ["mcp"], env: workspace ? { AMEM_WORKSPACE: workspace } : {} };
   const script = process.argv[1];
   const useNode = Boolean(script && existsSync(script));
   return {
