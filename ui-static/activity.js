@@ -163,6 +163,10 @@ function applyEvent(e) {
   return isNew;
 }
 
+function guideLink(url) {
+  return /^https:\/\/github\.com\//.test(String(url || "")) ? ` · <a href="${esc(url)}" target="_blank" rel="noopener">Setup guide</a>` : "";
+}
+
 /** Apps wired to amem that never called it, and AI apps that are installed but not wired in. */
 function renderIdleClients() {
   const host = $("idleClients");
@@ -172,7 +176,8 @@ function renderIdleClients() {
   const live = new Set([...state.lanes.values()].map((l) => l.client));
   const idle = (c.idle || []).filter((x) => !live.has(x.id));
   const detected = c.detected || [];
-  if (!idle.length && !detected.length) {
+  const unsupported = c.unsupported || [];
+  if (!idle.length && !detected.length && !unsupported.length) {
     host.classList.add("hidden");
     return;
   }
@@ -186,10 +191,19 @@ function renderIdleClients() {
   }${
     detected.length
       ? `<div class="idle-group"><h3>Detected, not connected</h3><ul class="idle-detected">${detected
-          .map((x) => `<li><strong>${esc(x.label)}</strong><span>${esc(x.nextStep).replace(/`([^`]+)`/g, "<code>$1</code>")}</span></li>`)
+          .map(
+            (x) =>
+              `<li><strong>${esc(x.label)}</strong><span>${esc(x.nextStep).replace(/`([^`]+)`/g, "<code>$1</code>")}${guideLink(x.guide)}</span></li>`,
+          )
           .join("")}</ul></div>`
       : ""
-  }`;
+  }${
+    unsupported.length
+      ? `<div class="idle-group"><h3>Can't use amem yet</h3><ul class="idle-detected">${unsupported
+          .map((x) => `<li><strong>${esc(x.label)}</strong><span>${esc(x.instead)}${guideLink(x.guide)}</span></li>`)
+          .join("")}</ul></div>`
+      : ""
+  }${c.guide ? `<p class="muted small idle-guide"><a href="${esc(c.guide)}" target="_blank" rel="noopener">Setup guide for every app</a></p>` : ""}`;
 }
 
 async function loadAll() {

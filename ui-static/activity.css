@@ -185,3 +185,6 @@ body.embed .act { padding-top: 0.25rem; }
 .idle-detected li { display: flex; gap: 10px; align-items: baseline; font-size: 13px; color: var(--muted); }
 .idle-detected strong { color: var(--ink); font-weight: 500; min-width: 120px; }
 .idle-detected code { color: var(--ink); }
+.idle-clients a { color: var(--out); text-decoration: none; }
+.idle-clients a:hover { text-decoration: underline; }
+.idle-guide { margin: 0; }

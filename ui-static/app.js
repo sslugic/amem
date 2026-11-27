@@ -1673,7 +1673,7 @@ function setupDoneHtml(ctx) {
       <div class="settings-grid">
         <article class="card card-wide" id="set-apps">
           <header class="card-head"><h2>Connected apps</h2><span class="pill muted" id="connectionsBadge">Checking…</span></header>
-          <p class="note">Which amem each app runs. They should all use the same, newest install.</p>
+          <p class="note">Which amem each app runs. They should all use the same, newest install. Connecting another app? Follow the <a href="https://github.com/sslugic/amem/blob/main/docs/CLIENTS.md" target="_blank" rel="noopener">setup guide for every app</a>.</p>
           <ul class="conn-list" id="connectionsList"><li class="note">Checking…</li></ul>
           <div id="connectionsAdvice"></div>
         </article>
