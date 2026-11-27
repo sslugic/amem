@@ -2,11 +2,12 @@
 /**
  * Build the desktop app for one target:
  *
- *   node scripts/dist.mjs mac|mac-x64|win|linux [--publish]
+ *   node scripts/dist.mjs mac|mac-x64|win|linux [--publish] [--dir]
  *
  * Syncs the version with amem, stages amem for that platform, runs electron-builder, and
  * on the Mac signs, notarises and staples the dmg too (when Apple credentials are set).
  * --publish uploads the files and the update feed (latest*.yml) to the GitHub release.
+ * --dir builds the unpacked app only (CI uses it to smoke-test every platform).
  */
 import { execFileSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
@@ -28,21 +29,26 @@ if (!target) {
   process.exit(1);
 }
 const publish = process.argv.includes("--publish");
+const dirOnly = process.argv.includes("--dir");
 const win = process.platform === "win32";
-const run = (cmd, args) => execFileSync(cmd, args, { cwd: desktop, stdio: "inherit", shell: win });
+// Windows needs a shell to run .cmd files, and a shell splits unquoted paths with spaces.
+const quote = (a) => (win && /\s/.test(a) ? `"${a}"` : a);
+const run = (cmd, args) =>
+  execFileSync(quote(cmd), args.map(quote), { cwd: desktop, stdio: "inherit", shell: win });
 
 run(process.execPath, ["scripts/sync-version.mjs"]);
 run(process.execPath, ["scripts/stage-amem.mjs", "--platform", target.platform, "--arch", target.arch]);
 
 const signing = Boolean(process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER);
 const builderArgs = [...target.builder, "--config", "electron-builder.json", "--publish", publish ? "always" : "never"];
+if (dirOnly) builderArgs.push("--dir");
 if (target.platform === "darwin" && !signing) {
   console.warn("No Apple credentials (APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER): building without notarisation.");
   builderArgs.push("-c.mac.notarize=false");
 }
 run(win ? "npx.cmd" : "npx", ["electron-builder", ...builderArgs]);
 
-if (target.platform === "darwin" && signing) {
+if (target.platform === "darwin" && signing && !dirOnly) {
   const dmgs = readdirSync(join(desktop, "release"))
     .filter((f) => f.endsWith(".dmg"))
     .map((f) => join(desktop, "release", f))
