@@ -1,0 +1,14 @@
+{
+  "name": "amem",
+  "owner": {
+    "name": "amem",
+    "url": "https://getamem.com"
+  },
+  "plugins": [
+    {
+      "name": "amem",
+      "source": "./plugins/amem",
+      "description": "amem — agent memory, anchored to your code"
+    }
+  ]
+}

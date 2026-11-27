@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "amem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@iamem/amem@latest",
+        "mcp"
+      ]
+    }
+  }
+}

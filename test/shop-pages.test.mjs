@@ -142,3 +142,21 @@ test("fact sheet page is in the nav and linked from the landing comparison", asy
     assert.match(home.text, /href="\/fact-sheet"/);
   });
 });
+
+test("landing setup has one-click installs that decode to the amem MCP entry", async () => {
+  await withShop(async (port) => {
+    const { text } = await get(port, "/");
+    const entry = { command: "npx", args: ["-y", "@iamem/amem@latest", "mcp"] };
+    const cursor = /cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install\?name=amem&amp;config=([A-Za-z0-9+/=]+)|cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install\?name=amem&config=([A-Za-z0-9+/=]+)/.exec(text);
+    assert.ok(cursor, "Add to Cursor link");
+    assert.deepEqual(JSON.parse(Buffer.from(cursor[1] ?? cursor[2], "base64").toString()), entry);
+    const lm = /lmstudio:\/\/add_mcp\?name=amem&(?:amp;)?config=([^"]+)"/.exec(text);
+    assert.deepEqual(JSON.parse(Buffer.from(decodeURIComponent(lm[1]), "base64").toString()), entry);
+    const vs = /vscode:mcp\/install\?([^"]+)"/.exec(text);
+    assert.deepEqual(JSON.parse(decodeURIComponent(vs[1])), { name: "amem", ...entry });
+    assert.match(text, /releases\/latest\/download\/amem\.mcpb/);
+    assert.match(text, /\/plugin marketplace add sslugic\/amem/);
+    assert.match(text, /codex plugin marketplace add sslugic\/amem/);
+    assert.match(text, /gemini extensions install https:\/\/github\.com\/sslugic\/amem/);
+  });
+});

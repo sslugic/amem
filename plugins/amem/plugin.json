@@ -1,0 +1,38 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "amem",
+  "version": "0.13.0",
+  "description": "amem — agent memory, anchored to your code. Local memory for coding agents: file-anchored facts that flag themselves stale, on-demand skills and a shared task board, in one SQLite file on your machine. No cloud, no API keys.",
+  "author": {
+    "name": "amem",
+    "url": "https://getamem.com"
+  },
+  "homepage": "https://getamem.com",
+  "repository": "https://github.com/sslugic/amem",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "agent-memory",
+    "context",
+    "local-first",
+    "sqlite",
+    "skills",
+    "tasks"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "amem",
+        "shortDescription": "Agent memory, anchored to your code",
+        "longDescription": "Local memory for coding agents: file-anchored facts that flag themselves stale, on-demand skills and a shared task board, in one SQLite file on your machine. No cloud, no API keys.",
+        "developerName": "amem",
+        "category": "Developer Tools",
+        "websiteURL": "https://getamem.com",
+        "brandColor": "#2ec4b6",
+        "logo": "./assets/icon.png",
+        "defaultPrompt": "Call amem_bootstrap and tell me what you remember about this project."
+      }
+    }
+  }
+}

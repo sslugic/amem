@@ -22,7 +22,7 @@ This repo does **not** auto-publish on every push.
 ## Release checklist
 
 1. `npm test` and `npm run pack:check` are green locally.
-2. Bump `version` in `package.json`.
+2. Bump `version` with `npm version <x.y.z> --no-git-tag-version`. Its `version` script rebuilds and regenerates the plugin pack (`npm run plugins`); if you bumped another way, run `npm run build && npm run plugins`, or CI fails the plugin-pack check.
 3. Commit, tag, push:
 
    ```bash
