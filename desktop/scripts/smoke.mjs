@@ -39,4 +39,11 @@ if (!/packaged app runs amem/.test(out)) {
   console.error(out);
   throw new Error("The packaged app could not read back what it stored.");
 }
+// macOS refuses to sign or notarise a bundle with symlinks pointing outside it, among other
+// things. An ad-hoc signature plus a strict check catches that here, without a certificate.
+if (process.platform === "darwin") {
+  const bundle = join(app.res, "..", "..");
+  execFileSync("codesign", ["--sign", "-", "--force", "--deep", bundle], { stdio: "inherit" });
+  execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=1", bundle], { stdio: "inherit" });
+}
 console.log(`Smoke test passed: ${app.exe}`);

@@ -71,6 +71,9 @@ execFileSync(npm, ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-f
   shell,
 });
 rmSync(join(out, "package-lock.json"), { force: true });
+// npm's .bin shortcuts are symlinks pointing outside the app bundle, which macOS code
+// signing rejects ("invalid destination for symbolic link"); nothing runs them anyway.
+rmSync(join(out, "node_modules", ".bin"), { recursive: true, force: true });
 
 const sqlite = join(out, "node_modules", "better-sqlite3");
 rmSync(join(sqlite, "build"), { recursive: true, force: true });
