@@ -38,7 +38,8 @@ function machine({ aVersion = "0.13.0", bVersion = "0.13.0" } = {}) {
   return { root, home, a, b, env, run, runs, files: { claude, gemini, cursor, codex }, deps: { home, env, prefixes: [a.prefix, b.prefix], platform: "linux", run, current: null } };
 }
 
-describe("duplicate installs", () => {
+// The fix targets macOS/Linux global npm layouts (prefix/lib/node_modules, bin symlinks).
+describe("duplicate installs", { skip: process.platform === "win32" ? "POSIX npm layout only" : false }, () => {
   it("finds the prefix of a global install", () => {
     assert.equal(prefixOf("/opt/homebrew/lib/node_modules/@iamem/amem"), "/opt/homebrew");
     assert.equal(prefixOf("/Users/me/GitHub/amem"), null);

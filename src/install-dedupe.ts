@@ -107,6 +107,8 @@ function compareVersions(a: string, b: string): number {
 
 /** Decide what to keep: newest version, then the one most hosts already launch, then this process. */
 export function planDedupe(deps: Deps = {}): DedupePlan | null {
+  // Windows global installs use another layout (prefix/node_modules, .cmd shims); not handled yet.
+  if ((deps.platform ?? process.platform) === "win32" || process.platform === "win32") return null;
   const env = deps.env ?? process.env;
   const installs = findInstalls(env, deps.prefixes ?? defaultInstallPrefixes()).filter((i) => prefixOf(i.root));
   if (installs.length < 2) return null;
