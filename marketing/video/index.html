@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>amem in 60 seconds</title>
+<!--
+  The amem explainer video, as an animation with an exact clock: render(t) draws frame t
+  (seconds). render.mjs steps it at 30 fps in headless Chromium and pipes the frames to
+  ffmpeg. Open this file in a browser to preview it (it plays itself; ?t=12.5 freezes a frame).
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=block" rel="stylesheet" />
+<style>
+  :root {
+    --bg0: #0b0f12; --bg1: #121a20; --bg2: #18232b; --ink: #e8eef2; --muted: #8fa3b0;
+    --accent: #2ec4b6; --accent-dim: #1a7a72; --warn: #e8b86d; --bad: #ef7d6d; --claude: #d97757;
+    --gemini: #7aa2ff; --cursor: #c9d1d9; --codex: #9be28a; --line: rgba(232,238,242,.1);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #000; }
+  body { font-family: "IBM Plex Sans", system-ui, sans-serif; color: var(--ink); }
+  #stage {
+    position: relative; width: 1920px; height: 1080px; overflow: hidden;
+    background: radial-gradient(1200px 700px at 50% 38%, rgba(46,196,182,.10), transparent 70%), var(--bg0);
+  }
+  #stage::before {
+    content: ""; position: absolute; inset: 0; opacity: .35;
+    background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 64px 64px; mask-image: radial-gradient(900px 600px at 50% 45%, #000, transparent 80%);
+  }
+  .scene { position: absolute; inset: 0; opacity: 0; }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  h1.big { margin: 0; font-size: 76px; line-height: 1.08; letter-spacing: -.02em; font-weight: 700; text-align: center; }
+  .kicker { color: var(--accent); font-weight: 600; letter-spacing: .14em; text-transform: uppercase; font-size: 22px; text-align: center; }
+  .caption {
+    position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%);
+    font-size: 38px; font-weight: 600; text-align: center; white-space: nowrap;
+    padding: 14px 30px; border-radius: 16px; background: rgba(11,15,18,.78); border: 1px solid var(--line);
+  }
+  .caption b { color: var(--accent); }
+
+  /* terminals */
+  .term {
+    position: absolute; width: 820px; height: 560px; border-radius: 18px; background: #0d1317;
+    border: 1px solid rgba(232,238,242,.14); box-shadow: 0 40px 90px rgba(0,0,0,.55); overflow: hidden;
+  }
+  .term-bar { height: 46px; display: flex; align-items: center; gap: 9px; padding: 0 18px; background: #141c22; border-bottom: 1px solid var(--line); }
+  .term-bar i { width: 13px; height: 13px; border-radius: 50%; background: #39444c; display: block; }
+  .term-bar span { margin-left: 14px; font-size: 18px; color: var(--muted); font-family: "IBM Plex Mono", monospace; }
+  .term-body { padding: 22px 26px; font-family: "IBM Plex Mono", monospace; font-size: 21px; line-height: 1.6; }
+  .term-body .prompt { color: var(--ink); }
+  .term-body .read { color: var(--muted); }
+  .term-body .read b { color: var(--warn); font-weight: 500; }
+  .meter {
+    position: absolute; left: 26px; right: 26px; bottom: 22px; display: flex; justify-content: space-between; align-items: baseline;
+    padding: 14px 18px; border-radius: 12px; background: rgba(239,125,109,.1); border: 1px solid rgba(239,125,109,.35);
+    font-family: "IBM Plex Mono", monospace; font-size: 24px; color: var(--bad);
+  }
+  .meter small { color: var(--muted); font-size: 18px; }
+  .brand-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; vertical-align: 1px; }
+
+  /* logo scene */
+  .logo-wrap { position: absolute; left: 0; right: 0; top: 250px; display: grid; justify-items: center; gap: 28px; }
+  .logo-wrap img { width: 190px; height: 190px; border-radius: 42px; box-shadow: 0 30px 80px rgba(0,0,0,.55); }
+  .logo-word { font-size: 120px; font-weight: 700; letter-spacing: -.03em; line-height: 1; }
+  .tagline { font-size: 40px; color: var(--muted); }
+  .tagline b { color: var(--ink); font-weight: 600; }
+  .chips { display: flex; gap: 16px; justify-content: center; }
+  .chip { padding: 12px 22px; border-radius: 999px; border: 1px solid rgba(46,196,182,.45); color: var(--accent); font-size: 24px; font-weight: 500; background: rgba(46,196,182,.07); }
+
+  /* how it works */
+  .node {
+    position: absolute; width: 560px; border-radius: 20px; background: var(--bg1); border: 1px solid rgba(232,238,242,.14);
+    padding: 26px 28px; box-shadow: 0 30px 70px rgba(0,0,0,.45);
+  }
+  .node h3 { margin: 0 0 14px; font-size: 30px; display: flex; align-items: center; gap: 12px; }
+  .node .line { font-family: "IBM Plex Mono", monospace; font-size: 21px; line-height: 1.55; color: var(--muted); min-height: 33px; }
+  .node .line.ok { color: var(--codex); }
+  .core {
+    position: absolute; left: 760px; top: 330px; width: 400px; height: 400px; border-radius: 50%;
+    display: grid; place-items: center; text-align: center;
+    background: radial-gradient(circle at 50% 40%, rgba(46,196,182,.22), rgba(46,196,182,.04) 60%, transparent 70%);
+  }
+  .core img { width: 130px; height: 130px; border-radius: 30px; }
+  .core .db { font-family: "IBM Plex Mono", monospace; font-size: 20px; color: var(--muted); margin-top: 10px; }
+  .ring { position: absolute; inset: 40px; border-radius: 50%; border: 2px solid rgba(46,196,182,.35); }
+  .fact {
+    position: absolute; left: 700px; top: 760px; width: 520px; padding: 16px 20px; border-radius: 14px;
+    background: var(--bg2); border: 1px solid rgba(46,196,182,.5); font-size: 22px; line-height: 1.45;
+  }
+  .fact .tag { display: inline-block; font-size: 16px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--warn); margin-right: 10px; }
+  .fact .anchor { display: block; color: var(--muted); font-family: "IBM Plex Mono", monospace; font-size: 18px; margin-top: 4px; }
+  svg.wires { position: absolute; inset: 0; }
+  .pulse { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: var(--accent); border: 4px solid #0b0f12; outline: 3px solid var(--accent); }
+  .wire-label {
+    position: absolute; transform: translate(-50%, -50%); padding: 8px 16px; border-radius: 10px; font-family: "IBM Plex Mono", monospace;
+    font-size: 20px; background: #0d1317; border: 1px solid rgba(46,196,182,.5); color: var(--accent); white-space: nowrap;
+  }
+
+  /* savings */
+  .bars { position: absolute; left: 260px; right: 260px; top: 330px; display: grid; gap: 54px; }
+  .bar-row .label { display: flex; justify-content: space-between; font-size: 30px; margin-bottom: 14px; }
+  .bar-row .label span:last-child { font-family: "IBM Plex Mono", monospace; }
+  .bar { height: 74px; border-radius: 14px; background: rgba(232,238,242,.06); overflow: hidden; }
+  .fill { height: 100%; width: 0; border-radius: 14px; display: flex; align-items: center; gap: 6px; padding: 0 10px; overflow: hidden; }
+  .fill.bad { background: linear-gradient(90deg, rgba(239,125,109,.85), rgba(239,125,109,.55)); }
+  .fill.good { background: linear-gradient(90deg, var(--accent), #5fe0d3); }
+  .fill .seg { flex: none; height: 46px; padding: 0 12px; display: grid; place-items: center; border-radius: 8px; background: rgba(0,0,0,.22); font-family: "IBM Plex Mono", monospace; font-size: 17px; color: #1b0a07; white-space: nowrap; }
+  .fill.good .seg { color: #052522; }
+  .after { margin-left: 22px; font-family: "IBM Plex Mono", monospace; font-size: 22px; color: var(--accent); white-space: nowrap; }
+  .save-badge { position: absolute; left: 50%; top: 760px; transform: translateX(-50%); font-size: 96px; font-weight: 700; color: var(--accent); letter-spacing: -.02em; }
+  .stats { position: absolute; left: 160px; right: 160px; top: 330px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; }
+  .stat { padding: 34px 30px; border-radius: 20px; background: var(--bg1); border: 1px solid rgba(232,238,242,.12); }
+  .stat .v { font-size: 74px; font-weight: 700; letter-spacing: -.02em; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .stat .k { margin-top: 8px; font-size: 26px; color: var(--muted); line-height: 1.35; }
+  .footnote { position: absolute; left: 0; right: 0; top: 640px; text-align: center; color: var(--muted); font-size: 22px; }
+
+  /* activity */
+  .win { position: absolute; left: 150px; top: 200px; width: 1080px; height: 720px; border-radius: 20px; background: var(--bg0); border: 1px solid rgba(232,238,242,.14); overflow: hidden; box-shadow: 0 40px 90px rgba(0,0,0,.55); display: grid; grid-template-columns: 230px 1fr; grid-template-rows: 46px 1fr; }
+  .win .term-bar { grid-column: 1 / -1; }
+  .side { border-right: 1px solid var(--line); padding: 22px 16px; display: grid; align-content: start; gap: 6px; }
+  .side .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 24px; margin-bottom: 18px; }
+  .side .brand img { width: 30px; height: 30px; border-radius: 8px; }
+  .side div.item { padding: 10px 12px; border-radius: 10px; color: var(--muted); font-size: 20px; }
+  .side div.item.on { background: var(--bg2); color: var(--ink); }
+  .feed { padding: 26px 30px; overflow: hidden; }
+  .feed h4 { margin: 0 0 18px; font-size: 28px; display: flex; justify-content: space-between; align-items: baseline; }
+  .feed h4 small { font-size: 18px; color: var(--accent); font-weight: 500; }
+  .ev { display: grid; grid-template-columns: 170px 1fr; gap: 16px; align-items: center; padding: 14px 16px; border-radius: 12px; background: var(--bg1); border: 1px solid var(--line); margin-bottom: 12px; font-size: 20px; }
+  .ev .who { font-weight: 600; display: flex; align-items: center; }
+  .ev .what { color: var(--muted); }
+  .ev .what b { color: var(--ink); font-weight: 500; }
+  .ev .what em { font-style: normal; color: var(--accent); }
+  .side-panel { position: absolute; left: 1290px; top: 200px; width: 480px; display: grid; gap: 26px; }
+  .card { padding: 26px 28px; border-radius: 20px; background: var(--bg1); border: 1px solid rgba(232,238,242,.12); }
+  .card .k { color: var(--muted); font-size: 22px; }
+  .card .v { font-size: 64px; font-weight: 700; color: var(--accent); margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .flow { position: relative; height: 330px; }
+  .flow .app { position: absolute; left: 0; width: 170px; padding: 10px 14px; border-radius: 10px; background: var(--bg2); font-size: 19px; display: flex; align-items: center; }
+  .flow .hub { position: absolute; right: 40px; top: 120px; width: 96px; height: 96px; border-radius: 24px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,.5); }
+  .flow .hub img { width: 100%; height: 100%; }
+
+  /* cta */
+  .cta { position: absolute; left: 0; right: 0; top: 170px; display: grid; justify-items: center; gap: 30px; text-align: center; }
+  .cta img { width: 150px; height: 150px; border-radius: 34px; box-shadow: 0 30px 80px rgba(0,0,0,.55); }
+  .cta .tools { color: var(--muted); font-size: 30px; }
+  .buttons { display: flex; gap: 24px; margin-top: 10px; }
+  .btn { padding: 22px 38px; border-radius: 16px; font-size: 32px; font-weight: 600; }
+  .btn.primary { background: var(--accent); color: #062421; }
+  .btn.ghost { border: 1px solid rgba(232,238,242,.25); font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: 28px; }
+  .url { font-size: 44px; font-weight: 700; color: var(--accent); letter-spacing: -.01em; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <!-- 1 · The problem -->
+  <section class="scene" id="s1">
+    <div style="position:absolute;top:70px;left:0;right:0"><h1 class="big" id="s1title">Every new AI session starts from zero.</h1></div>
+    <div class="term" id="t1" style="left:120px;top:220px">
+      <div class="term-bar"><i></i><i></i><i></i><span><span class="brand-dot" style="background:var(--claude)"></span>claude · ~/shop-api</span></div>
+      <div class="term-body"><div class="prompt" id="t1p"></div><div id="t1r"></div></div>
+      <div class="meter" id="t1m"><span><span id="t1n">0</span> tokens</span><small id="t1c">re-reading the codebase</small></div>
+    </div>
+    <div class="term" id="t2" style="left:980px;top:260px">
+      <div class="term-bar"><i></i><i></i><i></i><span><span class="brand-dot" style="background:var(--gemini)"></span>gemini · ~/shop-api</span></div>
+      <div class="term-body"><div class="prompt" id="t2p"></div><div id="t2r"></div></div>
+      <div class="meter" id="t2m"><span><span id="t2n">0</span> tokens</span><small>the same files, again</small></div>
+    </div>
+    <div class="caption" id="s1cap">Same files. Same tokens. <b>Every session, every agent.</b></div>
+  </section>
+
+  <!-- 2 · Meet amem -->
+  <section class="scene" id="s2">
+    <div class="logo-wrap">
+      <img id="s2logo" src="logo.png" alt="" />
+      <div class="logo-word" id="s2word">amem</div>
+      <div class="tagline" id="s2tag"><b>Memory for your AI agents,</b> anchored to your code.</div>
+      <div class="chips" id="s2chips">
+        <span class="chip">100% local</span><span class="chip">one SQLite file</span><span class="chip">no API keys</span><span class="chip">free</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · How it works -->
+  <section class="scene" id="s3">
+    <div style="position:absolute;top:60px;left:0;right:0"><p class="kicker" style="margin:0">How it works</p></div>
+    <svg class="wires" id="wires" width="1920" height="1080" viewBox="0 0 1920 1080">
+      <path id="w1" d="M 640 470 C 720 470, 740 530, 790 530" fill="none" stroke="rgba(46,196,182,.35)" stroke-width="3" stroke-dasharray="8 10" />
+      <path id="w2" d="M 1280 530 C 1180 530, 1200 470, 1130 530" fill="none" stroke="rgba(46,196,182,.0)" stroke-width="3" />
+      <path id="w3" d="M 1280 470 C 1200 470, 1180 530, 1130 530" fill="none" stroke="rgba(46,196,182,.35)" stroke-width="3" stroke-dasharray="8 10" />
+    </svg>
+    <div class="node" id="nClaude" style="left:80px;top:330px">
+      <h3><span class="brand-dot" style="background:var(--claude)"></span>Claude Code</h3>
+      <div class="line" id="nc1"></div><div class="line" id="nc2"></div><div class="line" id="nc3"></div>
+    </div>
+    <div class="core" id="core"><div class="ring" id="ring"></div><div><img src="logo.png" alt="" /><div class="db">~/.amem · amem.db</div></div></div>
+    <div class="node" id="nGemini" style="left:1280px;top:330px">
+      <h3><span class="brand-dot" style="background:var(--gemini)"></span>Gemini CLI</h3>
+      <div class="line" id="ng1"></div><div class="line" id="ng2"></div><div class="line" id="ng3"></div>
+    </div>
+    <div class="fact" id="fact"><span class="tag">gotcha</span>OAuth state cookie must be <b>SameSite=Lax</b>, or Safari drops it and login loops.<span class="anchor">⚓ src/auth/oauth.ts · fresh</span></div>
+    <div class="pulse" id="pulse"></div>
+    <div class="wire-label" id="wlabel"></div>
+    <div class="caption" id="s3cap"></div>
+  </section>
+
+  <!-- 4 · Savings -->
+  <section class="scene" id="s4">
+    <div style="position:absolute;top:120px;left:0;right:0"><h1 class="big" id="s4title">Less re-reading. Far fewer tokens.</h1></div>
+    <div class="bars" id="bars">
+      <div class="bar-row">
+        <div class="label"><span>Without amem: the agent re-reads the code</span><span id="b1n">0 tokens</span></div>
+        <div class="bar"><div class="fill bad" id="b1"><span class="seg">oauth.ts</span><span class="seg">session.ts</span><span class="seg">middleware.ts</span><span class="seg">routes/login.ts</span><span class="seg">cookies.ts</span><span class="seg">config.ts</span><span class="seg">tests…</span><span class="seg">README</span><span class="seg">+4 files</span></div></div>
+      </div>
+      <div class="bar-row">
+        <div class="label"><span>With amem: 3 facts, then the one file that matters</span><span id="b2n">0 tokens</span></div>
+        <div class="bar" style="display:flex;align-items:center"><div class="fill good" id="b2"></div><span class="after" id="b2after">350-token packet + oauth.ts</span></div>
+      </div>
+    </div>
+    <div class="save-badge" id="badge">−91% input tokens</div>
+    <div id="statsWrap" style="position:absolute;inset:0;opacity:0">
+      <div style="position:absolute;top:200px;left:0;right:0"><p class="kicker" style="margin:0">One developer · last 30 days · real amem stats</p></div>
+      <div class="stats">
+        <div class="stat"><div class="v" id="v1">0</div><div class="k">memory lookups by agents</div></div>
+        <div class="stat"><div class="v" id="v2">0%</div><div class="k">answered locally, in ~0.1 s</div></div>
+        <div class="stat"><div class="v" id="v3">0M</div><div class="k">input tokens agents didn't re-read</div></div>
+        <div class="stat"><div class="v" id="v4">$0</div><div class="k">saved at $3 per million input tokens</div></div>
+      </div>
+      <p class="footnote">From <span class="mono">amem stats</span> on the maker's machine. Savings are estimates, about half confirmed by agent reports.</p>
+    </div>
+  </section>
+
+  <!-- 5 · Activity -->
+  <section class="scene" id="s5">
+    <div style="position:absolute;top:80px;left:0;right:0"><h1 class="big" style="font-size:64px">Watch every agent use memory, live.</h1></div>
+    <div class="win" id="win">
+      <div class="term-bar"><i></i><i></i><i></i><span>amem · Activity</span></div>
+      <div class="side">
+        <div class="brand"><img src="logo.png" alt="" />amem</div>
+        <div class="item">Home</div><div class="item on">Activity</div><div class="item">Memory</div><div class="item">Skills</div><div class="item">Tasks</div><div class="item">Insights</div>
+      </div>
+      <div class="feed">
+        <h4>Live activity <small>● 4 apps connected</small></h4>
+        <div id="feed"></div>
+      </div>
+    </div>
+    <div class="side-panel" id="sidePanel">
+      <div class="card"><div class="k">Tokens saved today</div><div class="v" id="today">0</div></div>
+      <div class="card"><div class="k" style="margin-bottom:14px">Who's talking to amem</div>
+        <div class="flow" id="flow">
+          <svg width="424" height="330" style="position:absolute;inset:0" id="flowSvg"></svg>
+          <div class="app" style="top:10px"><span class="brand-dot" style="background:var(--claude)"></span>Claude Code</div>
+          <div class="app" style="top:95px"><span class="brand-dot" style="background:var(--gemini)"></span>Gemini CLI</div>
+          <div class="app" style="top:180px"><span class="brand-dot" style="background:var(--cursor)"></span>Cursor</div>
+          <div class="app" style="top:265px"><span class="brand-dot" style="background:var(--codex)"></span>Codex</div>
+          <div class="hub"><img src="logo.png" alt="" /></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 · Call to action -->
+  <section class="scene" id="s6">
+    <div class="cta">
+      <img src="logo.png" alt="" id="s6logo" />
+      <h1 class="big" id="s6title">Stop paying your agents<br />to re-learn your code.</h1>
+      <div class="tools" id="s6tools">Claude Code · Cursor · Codex · Gemini CLI · Windsurf · Copilot · any MCP client</div>
+      <div class="buttons" id="s6btns"><span class="btn primary">Download the free app</span><span class="btn ghost">npx @iamem/amem setup</span></div>
+      <div class="url" id="s6url">getamem.com</div>
+    </div>
+  </section>
+</div>
+
+<script>
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const out3 = (x) => 1 - Math.pow(1 - x, 3);
+const inOut = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const back = (x) => { const c = 1.6; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Math.round(n).toLocaleString("en-US");
+
+/** Fade/slide an element in over [a, a+d]; returns its progress. */
+function rise(el, t, a, d = 0.6, dy = 24) {
+  const p = out3(prog(t, a, a + d));
+  el.style.opacity = p;
+  el.style.transform = `${el.dataset.base || ""} translateY(${(1 - p) * dy}px)`;
+  return p;
+}
+function scene(el, t, a, b, fade = 0.5) {
+  const o = Math.min(prog(t, a, a + fade), 1 - prog(t, b - fade, b));
+  el.style.opacity = t < a || t > b ? 0 : o;
+  el.style.visibility = t < a || t > b ? "hidden" : "visible";
+  return t >= a && t <= b;
+}
+function typeText(el, t, a, b, text) {
+  const n = Math.floor(text.length * prog(t, a, b));
+  el.textContent = text.slice(0, n) + (t > a && t < b + 0.6 && Math.floor(t * 3) % 2 === 0 ? "▌" : "");
+}
+function along(path, p) {
+  const len = path.getTotalLength();
+  return path.getPointAtLength(len * clamp(p));
+}
+
+const READS = ["src/auth/oauth.ts", "src/auth/session.ts", "src/middleware/auth.ts", "src/routes/login.ts", "src/lib/cookies.ts", "src/config/index.ts", "test/auth.spec.ts", "README.md", "package.json"];
+function reads(el, t, a, b, list) {
+  const n = Math.floor(list.length * prog(t, a, b));
+  el.innerHTML = list.slice(Math.max(0, n - 7), n).map((f) => `<div class="read">Reading <b>${f}</b> …</div>`).join("");
+}
+
+const EVENTS = [
+  ["Claude Code", "--claude", "context ← <b>3 facts</b> for “Safari login loop” · <em>saved 41,230 tokens</em>"],
+  ["Gemini CLI", "--gemini", "context ← <b>2 facts</b> + skill hint “release steps” · <em>saved 28,400 tokens</em>"],
+  ["Cursor", "--cursor", "task <b>“Fix Safari login loop”</b> → Doing"],
+  ["Claude Code", "--claude", "remember → <b>gotcha</b> · src/auth/oauth.ts"],
+  ["Codex", "--codex", "context ← <b>4 facts</b> for “add refund webhook” · <em>saved 36,900 tokens</em>"],
+  ["Claude Code", "--claude", "retired <b>1 outdated fact</b> (replaced by a newer one)"],
+];
+
+function render(t) {
+  // 1 · problem (0–9)
+  if (scene($("s1"), t, 0, 9.2)) {
+    rise($("s1title"), t, 0.2, 0.7);
+    rise($("t1"), t, 0.6, 0.7, 40);
+    typeText($("t1p"), t, 1.1, 2.3, "> fix the OAuth redirect loop");
+    reads($("t1r"), t, 2.4, 5.4, READS);
+    $("t1n").textContent = fmt(48210 * inOut(prog(t, 2.4, 5.6)));
+    $("t1c").textContent = t > 5.6 ? "≈ $0.14 · every single session" : "re-reading the codebase";
+    rise($("t2"), t, 5.4, 0.7, 40);
+    typeText($("t2p"), t, 5.9, 6.8, "> why does login loop on Safari?");
+    reads($("t2r"), t, 6.9, 8.2, READS);
+    $("t2n").textContent = fmt(47880 * inOut(prog(t, 6.9, 8.3)));
+    $("s1cap").style.opacity = out3(prog(t, 7.0, 7.6));
+  }
+
+  // 2 · meet amem (9–15)
+  if (scene($("s2"), t, 9, 15)) {
+    const p = back(prog(t, 9.2, 10.2));
+    $("s2logo").style.transform = `scale(${0.6 + 0.4 * p})`;
+    $("s2logo").style.opacity = prog(t, 9.2, 9.7);
+    rise($("s2word"), t, 9.8, 0.6);
+    rise($("s2tag"), t, 10.5, 0.6);
+    rise($("s2chips"), t, 11.4, 0.6);
+  }
+
+  // 3 · how it works (15–30)
+  if (scene($("s3"), t, 15, 30)) {
+    rise($("nClaude"), t, 15.3, 0.6, 30);
+    rise($("core"), t, 15.6, 0.7, 30);
+    rise($("nGemini"), t, 15.9, 0.6, 30);
+    $("wires").style.opacity = prog(t, 16.0, 16.6);
+    $("ring").style.transform = `scale(${1 + 0.06 * Math.sin(t * 3)})`;
+    typeText($("nc1"), t, 16.4, 17.2, "> fix the OAuth redirect loop");
+    $("nc2").textContent = t > 17.4 ? "✓ fixed: cookie needs SameSite=Lax" : "";
+    $("nc2").className = "line ok";
+    $("nc3").textContent = t > 18.0 ? "→ remembers why" : "";
+    // remember: Claude → amem
+    const pulse = $("pulse"), label = $("wlabel");
+    let shown = false;
+    if (t > 18.0 && t < 19.3) {
+      const pt = along($("w1"), inOut(prog(t, 18.0, 19.2)));
+      pulse.style.left = pt.x + "px"; pulse.style.top = pt.y + "px"; shown = true;
+      label.textContent = "amem_remember"; label.style.left = "715px"; label.style.top = "615px";
+    }
+    const f = rise($("fact"), t, 19.2, 0.6, 30);
+    $("fact").style.transform = `scale(${0.9 + 0.1 * back(prog(t, 19.2, 19.9))})`;
+    // tomorrow: Gemini asks
+    typeText($("ng1"), t, 21.6, 22.8, "> why does login loop on Safari?");
+    if (t > 23.0 && t < 24.2) {
+      const pt = along($("w3"), inOut(prog(t, 23.0, 24.1)));
+      pulse.style.left = pt.x + "px"; pulse.style.top = pt.y + "px"; shown = true;
+      label.textContent = "prompt hook → amem"; label.style.left = "1205px"; label.style.top = "615px";
+    }
+    if (t > 24.3 && t < 25.5) {
+      const pt = along($("w3"), 1 - inOut(prog(t, 24.3, 25.4)));
+      pulse.style.left = pt.x + "px"; pulse.style.top = pt.y + "px"; shown = true;
+      label.textContent = "3 facts · 312 tokens"; label.style.left = "1205px"; label.style.top = "615px";
+    }
+    pulse.style.opacity = shown ? 1 : 0;
+    label.style.opacity = shown ? 1 : 0;
+    $("ng2").textContent = t > 25.6 ? "✓ knew the SameSite gotcha" : "";
+    $("ng2").className = "line ok";
+    $("ng3").textContent = t > 26.2 ? "opened 1 file instead of 9" : "";
+    const cap = $("s3cap");
+    if (t < 21.2) cap.innerHTML = "<b>1</b> · Claude Code fixes the bug and <b>remembers why</b>";
+    else if (t < 27.2) cap.innerHTML = "<b>2</b> · Tomorrow Gemini CLI asks, and <b>amem answers first</b>";
+    else cap.innerHTML = "One memory, <b>every agent</b>: Claude Code, Gemini CLI, Cursor, Codex…";
+    const capA = t < 21.2 ? prog(t, 16.0, 16.5) - prog(t, 20.7, 21.2) : t < 27.2 ? prog(t, 21.2, 21.7) - prog(t, 26.7, 27.2) : prog(t, 27.2, 27.7);
+    cap.style.opacity = clamp(capA);
+    void f;
+  }
+
+  // 4 · savings (30–41)
+  if (scene($("s4"), t, 30, 41.2)) {
+    const bars = 1 - prog(t, 35.0, 35.5);
+    rise($("s4title"), t, 30.2, 0.6);
+    $("s4title").style.opacity = Math.min(prog(t, 30.2, 30.8), bars);
+    $("bars").style.opacity = Math.min(prog(t, 30.5, 31.0), bars);
+    const p1 = inOut(prog(t, 31.0, 32.6));
+    $("b1").style.width = 100 * p1 + "%";
+    $("b1n").textContent = fmt(48210 * p1) + " tokens";
+    const p2 = inOut(prog(t, 32.8, 33.6));
+    $("b2").style.width = 9 * p2 + "%";
+    $("b2n").textContent = fmt(4312 * p2) + " tokens";
+    $("b2after").style.opacity = prog(t, 33.4, 33.8);
+    const b = $("badge");
+    b.style.opacity = Math.min(prog(t, 33.8, 34.2), bars);
+    b.style.transform = `translateX(-50%) scale(${0.7 + 0.3 * back(prog(t, 33.8, 34.6))})`;
+    const sw = $("statsWrap");
+    sw.style.opacity = prog(t, 35.4, 35.9);
+    const c = out3(prog(t, 35.8, 38.4));
+    $("v1").textContent = fmt(13843 * c);
+    $("v2").textContent = Math.round(97 * c) + "%";
+    $("v3").textContent = Math.round(751 * c) + "M";
+    $("v4").textContent = "$" + fmt(2254 * c);
+  }
+
+  // 5 · activity (41–52)
+  if (scene($("s5"), t, 41, 52)) {
+    rise($("win"), t, 41.3, 0.7, 40);
+    rise($("sidePanel"), t, 41.7, 0.7, 40);
+    const shown = EVENTS.filter((_, i) => t > 42.4 + i * 1.25);
+    $("feed").innerHTML = shown
+      .slice()
+      .reverse()
+      .map(([who, c, what], i) => {
+        const age = t - (42.4 + (shown.length - 1 - i) * 1.25);
+        const o = clamp(age / 0.4);
+        return `<div class="ev" style="opacity:${o};transform:translateY(${(1 - out3(o)) * -18}px)"><span class="who"><span class="brand-dot" style="background:var(${c})"></span>${who}</span><span class="what">${what}</span></div>`;
+      })
+      .join("");
+    $("today").textContent = fmt(118000 + 106530 * out3(prog(t, 42.4, 49.5)));
+    // live wires from each app to the hub
+    const ys = [28, 113, 198, 283];
+    const active = shown.length ? EVENTS.indexOf(shown[shown.length - 1]) : -1;
+    const who = active >= 0 ? EVENTS[active][0] : "";
+    const order = ["Claude Code", "Gemini CLI", "Cursor", "Codex"];
+    $("flowSvg").innerHTML = ys
+      .map((y, i) => {
+        const on = order[i] === who && t - (42.4 + active * 1.25) < 1.0;
+        return `<path d="M 175 ${y} C 260 ${y}, 260 165, 330 168" fill="none" stroke="${on ? "#2ec4b6" : "rgba(232,238,242,.18)"}" stroke-width="${on ? 4 : 2}"/>`;
+      })
+      .join("");
+  }
+
+  // 6 · cta (52–60)
+  if (scene($("s6"), t, 52, 60.5, 0.5)) {
+    const p = back(prog(t, 52.2, 53.1));
+    $("s6logo").style.transform = `scale(${0.6 + 0.4 * p})`;
+    $("s6logo").style.opacity = prog(t, 52.2, 52.6);
+    rise($("s6title"), t, 52.8, 0.7);
+    rise($("s6tools"), t, 53.7, 0.6);
+    rise($("s6btns"), t, 54.4, 0.6);
+    rise($("s6url"), t, 55.1, 0.6);
+  }
+}
+
+window.render = render;
+window.DURATION = 60;
+// Preview: plays in real time, or freezes at ?t=12.5
+const q = new URLSearchParams(location.search);
+if (!q.has("capture")) {
+  if (q.has("t")) render(Number(q.get("t")));
+  else {
+    const start = performance.now();
+    const tick = () => { render(((performance.now() - start) / 1000) % 60); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  }
+}
+</script>
+</body>
+</html>
