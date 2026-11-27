@@ -25,6 +25,7 @@ import { clipText } from "./text-clip.js";
 import { captureSkillRevision, captureSkillSuggestion } from "./skill-capture.js";
 import { redactSecrets } from "./secret-detect.js";
 import { recordActivity } from "./activity-log.js";
+import { isOff } from "./toggle.js";
 
 export type HookPayload = {
   hook_event_name?: string;
@@ -191,6 +192,9 @@ function injectPacket(repo: RepoRow, query: string, session: string, platform: s
 }
 
 export function handleHookPayload(raw: string): HookResponse {
+  // `amem off`: a hook still wired somewhere (a project settings file) must not inject
+  // anything, or the amem-off measurement is not clean.
+  if (hookPlatform() === "claude" && isOff("claude")) return { continue: true };
   const started = Date.now();
   let response: HookResponse;
   let ok = true;

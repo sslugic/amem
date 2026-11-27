@@ -84,6 +84,7 @@ amem remember "Staging queue paused for the incident" --ttl-days 2   # expires; 
 amem import .                                    # CLAUDE.md, AGENTS.md, .cursorrules, .cursor/rules/*.mdc (idempotent)
 amem import notes.md --scope global              # global = shared across every project
 amem export --format md --all                    # or JSON (default) for backups and round-trips
+amem off                                         # take amem out of Claude Code entirely (hooks, MCP, skills); `amem on` restores it
 ```
 
 Agents get the same through MCP: `amem_bootstrap` at session start, `amem_search`, `max_tokens` on `amem_context`, and `ttl_days` / `supersedes` on `amem_remember`. Skills can declare triggers in their frontmatter (`files: ["*.swift", "Package.swift"]`, `keywords: [deploy, migration]`), and amem surfaces a one-line hint when they match.

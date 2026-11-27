@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { installIssues } from "./install-check.js";
 import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { amemOff, amemOn, toggleState } from "./toggle.js";
 import { buildBootstrap, renderRecallMarkdown, resolveScope as resolveMemoryScope, searchMemory, type RecallType } from "./recall.js";
 import { exportBlock, exportSkills, importIntoRepo, parseImportFile, renderExportMarkdown } from "./import-export.js";
 import { dirname, join, resolve } from "node:path";
@@ -200,6 +201,8 @@ Usage:
   amem propose diff <file.json>
   amem propose apply <file.json>
   amem export [--out <file>] [--format json|md] [--all] [--scope global|project:<path>]
+  amem off [--platform claude] [--status]  # take amem out of Claude Code completely (hooks, MCP, skills, plugin); reversible
+  amem on [--platform claude]              # put back exactly what amem off removed
   amem import <file|dir> [--scope global|project|project:<path>] [--workspace <name>] [--dry-run] [--json]
   amem search "<query>" [--types claim,skill,task] [--scope <scope>] [--status <s>] [--tags a,b] [--max-tokens N] [--json]
   amem bootstrap [--scope <scope>] [--files a,b] [--max-tokens 350] [--json]
@@ -399,7 +402,11 @@ async function main(): Promise<void> {
           printMcp(info.mcp);
         } else if (platform === "claude") {
           const info = installClaude(detectRepoIdentity().rootPath);
-          console.log("Claude Code hooks/skills installed");
+          console.log(
+            info.skippedOff
+              ? "amem is off for Claude Code (amem off), so nothing was installed. Run `amem on` to turn it back on."
+              : "Claude Code hooks/skills installed",
+          );
           for (const s of info.skills) console.log(`  skill: ${s}`);
           printMcp(info.mcp);
         } else if (platform && AGENT_INSTALL_IDS.has(platform)) {
@@ -1527,6 +1534,34 @@ async function main(): Promise<void> {
           process.env.CLAUDE_SESSION_ID ??
           "unknown";
         touchSession(platform, sessionId, repo.id);
+        break;
+      }
+      case "off":
+      case "on": {
+        const raw = flagString(flags, "platform") || "claude";
+        const platform = resolvePlatformId(raw) ?? raw;
+        if (platform !== "claude") throw new Error(`amem ${cmd} supports --platform claude for now.`);
+        if (flags.get("status")) {
+          const s = toggleState("claude");
+          console.log(`amem is ${s.state} for Claude Code${s.since ? ` since ${s.since}` : ""}.`);
+          break;
+        }
+        const r = cmd === "off" ? amemOff("claude") : amemOn("claude");
+        if (flags.get("json")) {
+          console.log(JSON.stringify(r, null, 2));
+          break;
+        }
+        if (!r.changed) {
+          console.log(r.notes[0]);
+          break;
+        }
+        const c = r.removed ?? r.restored!;
+        const verb = cmd === "off" ? "Removed" : "Restored";
+        console.log(`amem is now ${r.state} for Claude Code.`);
+        console.log(`${verb}: ${c.hooks} hook(s), ${c.mcp ? "the MCP server" : "no MCP server"}, ${c.skills} skill(s)${c.plugins ? `, ${c.plugins} plugin(s)` : ""}.`);
+        for (const n of r.notes.slice(r.notes.length - 1)) console.log(n);
+        for (const n of r.notes.slice(0, -1)) console.log(`Note: ${n}`);
+        if (cmd === "off") console.log("Turn it back on with: amem on");
         break;
       }
       case "hook": {
