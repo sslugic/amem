@@ -3,8 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { copyBundledSkills, isAmemHookCommand, readJsonObject, resolveAmemBin, writeJson } from "./skills.js";
 import { claudeUserConfigPath, registerClaudeMcp, type McpRegistration } from "./mcp-register.js";
+import { isOff } from "../toggle.js";
 
 export type InstallResult = {
+  /** Set when `amem off` is in effect: nothing was written. */
+  skippedOff?: boolean;
   skills: string[];
   settingsPath?: string;
   mcp?: McpRegistration;
@@ -61,6 +64,9 @@ function mergeClaudeHooks(settingsPath: string): string {
 }
 
 export function installClaude(_repoRoot: string): InstallResult {
+  // `amem off` is a deliberate choice (often a measurement): setup, doctor --fix and the
+  // dashboard must not quietly wire amem back in. `amem on` restores it.
+  if (isOff("claude")) return { skippedOff: true, skills: [] };
   const skills = copyBundledSkills(join(claudeHome(), "skills"));
   const settingsPath = join(claudeHome(), "settings.json");
   mergeClaudeHooks(settingsPath);
@@ -69,6 +75,7 @@ export function installClaude(_repoRoot: string): InstallResult {
 }
 
 export function claudeInstallHealth(): string[] {
+  if (isOff("claude")) return []; // turned off on purpose with `amem off`
   const issues: string[] = [];
   const skill = join(claudeHome(), "skills", "amem-bootstrap", "SKILL.md");
   if (!existsSync(skill)) issues.push(`Missing Claude skill: ${skill}`);
