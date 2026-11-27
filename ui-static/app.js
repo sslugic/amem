@@ -1,4 +1,4 @@
-import { createOrbitViz } from "./orbit.js";
+import { memoryRows, fileRows } from "./memory-bars.js";
 import { exactDuplicateGroups, clusterDuplicatePairs } from "./dupes.js";
 import { buildScopeEntries, groupScopeEntries, friendlyScopeLabel, homeShort } from "./scope.js";
 
@@ -14,7 +14,7 @@ function canonicalTab(tab) {
   const t = TAB_ALIASES[tab] || tab;
   return TABS.includes(t) || t === "welcome" ? t : null;
 }
-const VIZ_MODES = ["map", "blocks", "orbit"];
+const VIZ_MODES = ["map", "bars", "blocks"];
 const FALLBACK_CLIENTS = [
   { id: "cursor", label: "Cursor", hint: "Rules, skills, hooks", group: "ide", popular: true },
   { id: "claude", label: "Claude Code", hint: "Skills and settings hooks", group: "cli", popular: true },
@@ -141,7 +141,8 @@ function persistBrainAll(all) {
 function loadMemoryViz() {
   try {
     const v = localStorage.getItem(MEMORY_VIZ_STORAGE);
-    if (v === "neural") return "orbit";
+    // Orbit (and the older neural view) were replaced by the bar overview.
+    if (v === "neural" || v === "orbit") return "bars";
     if (VIZ_MODES.includes(v)) return v;
   } catch {
     /* ignore */
@@ -157,24 +158,14 @@ function persistMemoryViz(mode) {
   }
 }
 
-let orbitViz = null;
-
-function stopOrbitViz() {
-  if (orbitViz) {
-    orbitViz.stop();
-    orbitViz = null;
-  }
-}
-
-function stopAllViz() {
-  stopOrbitViz();
-}
+/** Kept as the single hook pages call when leaving Memory (no animated views remain). */
+function stopAllViz() {}
 
 function setMemoryViz(mode) {
   const next = VIZ_MODES.includes(mode) ? mode : "map";
   state.memoryViz = next;
   persistMemoryViz(next);
-  if (next !== "orbit") stopOrbitViz();
+  state.barsMemory = null;
   if (next !== "map" && (state.brainFilter === "drafts" || state.brainFilter === "review")) {
     state.brainFilter = "files";
     state.selectedNode = null;
@@ -185,8 +176,8 @@ function vizToggleHtml() {
   const mode = state.memoryViz || "map";
   return `<div class="viz-toggle" role="group" aria-label="Memory visualization">
     <button type="button" data-viz="map" class="${mode === "map" ? "active" : ""}" title="Plain list of facts by file">Files</button>
+    <button type="button" data-viz="bars" class="${mode === "bars" ? "active" : ""}" title="Each memory as a bar sized by facts; click one to see its files">Overview</button>
     <button type="button" data-viz="blocks" class="${mode === "blocks" ? "active" : ""}" title="Treemap: each block is a file, sized by facts">Blocks</button>
-    <button type="button" data-viz="orbit" class="${mode === "orbit" ? "active" : ""}" title="Hub and spoke by memory">Orbit</button>
   </div>`;
 }
 
@@ -479,6 +470,7 @@ function clearPageForTab(tab) {
 // Memory is scoped by a sticky file/search/selection. Carrying those across a tab
 // switch makes Memory look like it only loaded part of the store.
 function resetBrainView() {
+  state.barsMemory = null;
   state.selectedFile = null;
   state.selectedNode = null;
   state.activeEventId = null;
@@ -2661,38 +2653,6 @@ function coverageGroups() {
   return fileGroups(state.graph?.claims || []);
 }
 
-function orbitMemoryLabel(repoId) {
-  const r = listedRepos().find((x) => x.id === repoId);
-  if (!r) return "unknown";
-  if (isPersonal(r)) return "Personal";
-  return isWorkspace(r) ? `${r.repo_name} (ws)` : r.repo_name;
-}
-
-// Across all memories the ring must be one node per memory: every repo anchors most
-// of its facts to README.md, so grouping on the raw path merges five repos into one
-// node and hides the smaller ones entirely.
-function orbitClaims() {
-  const base = visibleClaims().length ? visibleClaims() : state.graph?.claims || [];
-  return base.map((c) => {
-    const file = claimAnchors(c)[0] || "(no file yet)";
-    return state.brainAll
-      ? {
-          ...c,
-          _group: c.repo_id,
-          _groupLabel: orbitMemoryLabel(c.repo_id),
-          _sub: fileGroupKey(c, file),
-          _subLabel: fileLabel(file),
-        }
-      : { ...c, _group: file, _sub: null };
-  });
-}
-
-function orbitFocusMemory() {
-  if (state.selectedNode?.type === "memory") return state.selectedNode.id;
-  if (state.selectedNode?.type === "claim") return state.selectedNode.detail?.repo_id || null;
-  return null;
-}
-
 function matchingFiles() {
   return new Set(fileGroups(visibleClaims()).map((g) => g.file));
 }
@@ -3146,7 +3106,9 @@ function renderBrainMap() {
     return;
   }
 
-  const claims = visibleClaims();
+  const mode = state.memoryViz || "map";
+  const drillMemory = mode === "bars" && state.brainAll ? state.barsMemory : null;
+  const claims = drillMemory ? visibleClaims().filter((c) => c.repo_id === drillMemory) : visibleClaims();
   const groups = fileGroups(claims);
   const selectedFile = state.selectedFile;
   const shown = selectedFile
@@ -3158,7 +3120,7 @@ function renderBrainMap() {
     state.brainFilter === "used"
       ? "Only facts injected in a recent query."
       : state.brainFilter === "chats"
-        ? "Chat takeaways. Other files stay on the map, dimmed."
+        ? "Chat takeaways."
         : state.brainFilter === "pinned"
           ? "Pinned facts only."
           : "";
@@ -3213,29 +3175,18 @@ function renderBrainMap() {
           })
           .join("");
 
-  const mode = state.memoryViz || "map";
   const scopeLabel = state.brainAll
     ? "All memory"
     : state.status?.repo?.repo_name || "Memory";
 
   const vizBlock =
-    mode === "orbit"
-      ? `<div class="orbit-host viz-host" id="orbitHost">
-            <div class="viz-banner">
-              <span>${esc(scopeLabel)} · ${state.brainAll ? "click a memory, then a file" : "click a file, then a fact"}</span>
-            </div>
-            <canvas id="orbitCanvas" aria-label="Orbit memory map"></canvas>
-            <div class="viz-legend">
-              <span><i class="sw teal"></i> Used recently</span>
-              <span><i class="sw gold"></i> Has pinned</span>
-              <span><i class="sw blue"></i> ${state.brainAll ? "Other memories" : "Other files"}</span>
-            </div>
-          </div>`
+    mode === "bars"
+      ? `<section class="viz-host bars-host" id="barsHost" aria-label="Memory overview"></section>`
       : mode === "blocks"
         ? `<div class="coverage-host viz-host" id="coverageHost"></div>`
         : "";
 
-  // Files is the plain list; Blocks and Orbit put their visual on top of it.
+  // Files is the plain list; Overview and Blocks put their visual on top of it.
   el.innerHTML =
     mode === "map"
       ? `<div class="brain-facts">
@@ -3253,56 +3204,8 @@ function renderBrainMap() {
     </div>`;
 
   stopAllViz();
-  if (mode === "orbit") {
-    const canvas = $("#orbitCanvas");
-    if (canvas) {
-      try {
-        orbitViz = createOrbitViz(canvas, {
-          onSelectFile: (file) => {
-            state.selectedFile = file;
-            const group = coverageGroups().find((g) => g.file === file);
-            state.selectedNode = group
-              ? { type: "file", id: file, detail: group }
-              : { type: "file", id: file, detail: { file, items: [] } };
-            showBrainDetail(state.selectedNode);
-            // Across memories the ring is focused on a memory, so keep it there
-            // when the click came from a file on the outer ring.
-            if (!state.brainAll) orbitViz?.setFocus(file);
-          },
-          onSelectClaim: (claim) => {
-            if (!claim) return;
-            const anchors = claimAnchors(claim);
-            if (anchors[0]) state.selectedFile = anchors[0];
-            state.selectedNode = { type: "claim", id: claim.id, detail: claim };
-            showBrainDetail(state.selectedNode);
-            orbitViz?.setSelectedClaim(claim.id);
-            el.querySelectorAll(".claim-row").forEach((row) => {
-              row.classList.toggle("selected", row.dataset.claim === claim.id);
-            });
-          },
-          onSelectGroup: state.brainAll
-            ? (group) => {
-                state.selectedFile = null;
-                state.selectedNode = { type: "memory", id: group.id, detail: group };
-                showBrainDetail(state.selectedNode);
-                orbitViz?.setFocus(group.id);
-              }
-            : null,
-        });
-        orbitViz.setData({
-          claims: orbitClaims(),
-          recentClaimIds: state.graph?.recentClaimIds || [],
-          selectedFile: state.brainAll ? orbitFocusMemory() : state.selectedFile,
-          selectedClaim: selectedId,
-          label: scopeLabel,
-          ringLabel: state.brainAll ? "memories" : "files",
-        });
-        orbitViz.start();
-      } catch (err) {
-        const host = $("#orbitHost");
-        if (host) host.innerHTML = `<div class="brain-empty">Orbit view failed: ${esc(err.message || err)}</div>`;
-      }
-    }
+  if (mode === "bars") {
+    renderMemoryBars(scopeLabel);
   } else if (mode === "blocks") {
     renderCoverageMap();
   }
@@ -3314,6 +3217,124 @@ function renderBrainMap() {
     paintBrain();
   });
   bindVizToggle(el);
+}
+
+/**
+ * Overview: level 1 lists memories (All memory scope), level 2 the files inside one
+ * memory. Bars are sized by facts; badges show recent use, pins, stale facts and age.
+ * Clicking a memory drills in; clicking a file filters the facts list below.
+ */
+function renderMemoryBars(scopeLabel) {
+  const host = $("#barsHost");
+  if (!host) return;
+  const sort = state.barsSort === "recent" ? "recent" : "facts";
+  const hotIds = state.graph?.recentClaimIds || [];
+  const claims = visibleClaims();
+  const atMemories = state.brainAll && !state.barsMemory;
+  const memLabel = (id) => (isPersonal(listedRepos().find((r) => r.id === id)) ? "Personal" : prettyRepoName(memoryLabel(id)));
+  const badges = (r) =>
+    [
+      r.used ? `<span class="bar-badge used" title="An agent was given one of these facts recently">used recently</span>` : "",
+      r.pinned ? `<span class="bar-badge pinned" title="${r.pinned} pinned fact${r.pinned === 1 ? "" : "s"}">${r.pinned} pinned</span>` : "",
+      r.stale ? `<span class="bar-badge stale" title="Not updated in 90 days and not used recently. Review them in Tidy up.">${r.stale} stale</span>` : "",
+      r.lastUpdated ? `<span class="bar-badge when" title="Last updated ${esc(formatDateTime(r.lastUpdated))}">${esc(formatWhen(r.lastUpdated))}</span>` : "",
+    ].join("");
+  const row = (r, max, attrs, active = false) => `
+    <li><button type="button" class="bar-row${active ? " active" : ""}" ${attrs} title="${esc(r.path || r.label)}">
+      <span class="bar-name"><span class="bar-label">${esc(r.label)}</span>${r.pathShort ? `<span class="bar-path">${esc(r.pathShort)}</span>` : ""}</span>
+      <span class="bar-track" aria-hidden="true"><i style="width:${Math.max(2, (100 * r.facts) / max).toFixed(1)}%"></i></span>
+      <span class="bar-count" title="${fullNumber(r.facts)} facts">${esc(formatTokens(r.facts))}</span>
+      <span class="bar-badges">${badges(r)}</span>
+    </button></li>`;
+
+  const memoryId = state.brainAll ? state.barsMemory : null;
+  const crumbs = atMemories
+    ? `<span class="crumb current">${esc(scopeLabel)}</span>`
+    : state.brainAll
+      ? `<button type="button" class="crumb" data-crumb="all">All memory</button><span class="crumb-sep">›</span><span class="crumb current">${esc(memLabel(memoryId))}</span>`
+      : `<span class="crumb current">${esc(scopeLabel)}</span>`;
+  const head = `<header class="bars-head">
+      <nav class="bars-crumbs" aria-label="Overview level">${crumbs}${state.selectedFile ? `<span class="crumb-sep">›</span><span class="crumb current">${esc(fileLabel(state.selectedFile.split(" · ").pop()))}</span>` : ""}</nav>
+      <div class="bars-sort" role="group" aria-label="Sort by">
+        <button type="button" data-sort="facts" class="${sort === "facts" ? "active" : ""}">Most facts</button>
+        <button type="button" data-sort="recent" class="${sort === "recent" ? "active" : ""}">Recent</button>
+      </div>
+    </header>
+    <p class="bars-hint">${atMemories ? "Each row is a memory, sized by how many facts it holds. Click one to see its files." : "Each row is a file or topic the facts point at. Click one to show only its facts below; Backspace goes back."}</p>`;
+
+  let body = "";
+  if (atMemories) {
+    const model = memoryRows(claims, listedRepos(), { hotIds, sort });
+    const tempOpen = Boolean(state.barsTempOpen) || Boolean((state.brainSearch || "").trim());
+    body = model.sections.length
+      ? model.sections
+          .map((sec) => {
+            const title = sec.collapsible
+              ? `<button type="button" class="bars-section-title bars-section-toggle" data-toggle-temp aria-expanded="${tempOpen}">${tempOpen ? "▾" : "▸"} ${esc(sec.title)} <span class="count-badge">${sec.rows.length}</span></button>`
+              : `<h3 class="bars-section-title">${esc(sec.title)} <span class="count-badge">${sec.rows.length}</span></h3>`;
+            if (sec.collapsible && !tempOpen) return title;
+            return `${title}<ul class="bars-list">${sec.rows.map((r) => row(r, model.max, `data-memory="${esc(r.id)}"`)).join("")}</ul>`;
+          })
+          .join("")
+      : `<p class="brain-empty">${state.brainSearch ? "No memory has facts matching that search." : "No facts yet. They appear here as your agents save what they learn."}</p>`;
+  } else {
+    const scoped = memoryId ? claims.filter((c) => c.repo_id === memoryId) : claims;
+    const model = fileRows(scoped, { hotIds, sort });
+    const keyOf = (file) => (state.brainAll ? `${memoryLabel(memoryId)} · ${file}` : file);
+    body = model.rows.length
+      ? `<ul class="bars-list">${model.rows
+          .map((r) => row(r, model.max, `data-file="${esc(keyOf(r.id))}"`, state.selectedFile === keyOf(r.id)))
+          .join("")}</ul>`
+      : `<p class="brain-empty">${state.brainSearch ? "No file here has facts matching that search." : "This memory has no facts yet."}</p>`;
+  }
+  host.innerHTML = head + `<div class="bars-body" id="barsBody">${body}</div>`;
+
+  host.querySelectorAll("[data-sort]").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.barsSort = b.dataset.sort;
+      renderMemoryBars(scopeLabel);
+    }),
+  );
+  host.querySelector("[data-crumb]")?.addEventListener("click", () => {
+    state.barsMemory = null;
+    state.selectedFile = null;
+    state.selectedNode = null;
+    paintBrain();
+  });
+  host.querySelector("[data-toggle-temp]")?.addEventListener("click", () => {
+    state.barsTempOpen = !state.barsTempOpen;
+    renderMemoryBars(scopeLabel);
+  });
+  host.querySelectorAll("[data-memory]").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.barsMemory = b.dataset.memory;
+      state.selectedFile = null;
+      state.selectedNode = null;
+      paintBrain();
+      $("#barsBody .bar-row")?.focus();
+    }),
+  );
+  host.querySelectorAll("[data-file]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const file = b.dataset.file;
+      state.selectedFile = state.selectedFile === file ? null : file;
+      state.selectedNode = null;
+      paintBrain();
+      [...document.querySelectorAll("#barsBody [data-file]")].find((x) => x.dataset.file === file)?.focus();
+    }),
+  );
+  // Arrow keys move between rows like the facts list; Enter/Space open (native buttons).
+  host.querySelector("#barsBody")?.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Backspace") return;
+    if (e.key === "Backspace") {
+      if (state.barsMemory) host.querySelector("[data-crumb]")?.click();
+      return;
+    }
+    const rows = [...host.querySelectorAll(".bar-row")];
+    const i = rows.indexOf(document.activeElement);
+    e.preventDefault();
+    rows[e.key === "ArrowDown" ? Math.min(rows.length - 1, i + 1) : Math.max(0, i - 1)]?.focus();
+  });
 }
 
 function bindClaimClicks(root) {
@@ -3504,43 +3525,6 @@ function showBrainDetail(node) {
           : ""
       }`;
     bindPinButtons(drawer);
-    return;
-  }
-  if (node.type === "memory") {
-    const items = node.detail?.items || [];
-    const byFile = new Map();
-    for (const c of items) {
-      const file = claimAnchors(c)[0] || "(no file yet)";
-      const key = fileGroupKey(c, file);
-      const entry = byFile.get(key) || { label: fileLabel(file), path: file, n: 0 };
-      entry.n += 1;
-      byFile.set(key, entry);
-    }
-    const files = [...byFile.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 12);
-    const pinned = items.filter((c) => Number(c.pinned || 0) > 0).length;
-    drawer.innerHTML = `
-      <h2>${esc(orbitMemoryLabel(node.id))}</h2>
-      <div class="meta">${items.length} fact${items.length === 1 ? "" : "s"} · ${pinned} pinned</div>
-      <p>Click a dot on the outer ring to open one of these files. Switch the sidebar to this memory to work on it alone.</p>
-      ${
-        files.length
-          ? `<ul class="detail-list">${files
-              .map(
-                ([key, f]) =>
-                  `<li><button type="button" class="link-row" data-orbit-file="${esc(key)}"><strong>${esc(f.label)}</strong></button><div class="meta">${f.n} fact${f.n === 1 ? "" : "s"} · <code>${esc(f.path)}</code></div></li>`,
-              )
-              .join("")}</ul>`
-          : `<p class="note">No anchored files in this memory yet.</p>`
-      }`;
-    drawer.querySelectorAll("[data-orbit-file]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const file = btn.dataset.orbitFile;
-        state.selectedFile = file;
-        const group = coverageGroups().find((g) => g.file === file);
-        state.selectedNode = { type: "file", id: file, detail: group || { file, items: [] } };
-        showBrainDetail(state.selectedNode);
-      });
-    });
     return;
   }
   if (node.type === "file") {

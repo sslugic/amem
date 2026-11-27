@@ -1263,29 +1263,6 @@ a.btn {
   background: rgba(8, 14, 18, 0.55);
 }
 
-.orbit-host {
-  position: relative;
-  min-height: 320px;
-  /* No height here: .viz-host's clamp() bounds the canvas. A height:100% (or a
-     fr unit) resolves against the fact list, which can be thousands of rows,
-     and starves the list's grid track down to 0. */
-  border-bottom: 1px solid var(--line);
-  background:
-    radial-gradient(ellipse at 50% 40%, rgba(46, 196, 182, 0.1), transparent 55%),
-    linear-gradient(180deg, rgba(8, 14, 18, 0.9), var(--bg0));
-  display: flex;
-  flex-direction: column;
-}
-
-.orbit-host canvas {
-  flex: 1 1 auto;
-  width: 100%;
-  min-height: 280px;
-  display: block;
-  cursor: pointer;
-  touch-action: none;
-}
-
 .brain-filters {
   display: flex;
   flex-wrap: wrap;
@@ -1357,37 +1334,6 @@ a.btn {
 /* Files mode is the list alone — no second row to reserve. */
 .brain-map:has(.brain-facts:only-child) {
   grid-template-rows: minmax(0, 1fr);
-}
-
-.viz-legend {
-  position: absolute;
-  left: 0.85rem;
-  bottom: 0.65rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem 0.85rem;
-  font-size: 0.72rem;
-  color: var(--muted);
-  pointer-events: none;
-}
-
-.viz-legend .sw {
-  display: inline-block;
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  margin-right: 0.3rem;
-  vertical-align: middle;
-}
-
-.viz-legend .sw.gold {
-  background: rgba(230, 180, 80, 0.95);
-}
-.viz-legend .sw.teal {
-  background: rgba(94, 224, 212, 0.95);
-}
-.viz-legend .sw.blue {
-  background: rgba(140, 180, 200, 0.85);
 }
 
 .pin-howto {
@@ -3530,3 +3476,41 @@ button.linkish:focus-visible,
 #settingsVaultSlot .vault-grid { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 #settingsVaultSlot .vault-card-wide { grid-column: auto; }
 #settingsEncryptionSlot .field-action input { width: 100%; }
+
+/* ---- Memory overview (bars) ---- */
+.bars-host { height: clamp(300px, 46vh, 600px); display: flex; flex-direction: column; border-bottom: 1px solid var(--line); background: var(--bg0); }
+.bars-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem 1rem 0.35rem; flex-wrap: wrap; }
+.bars-crumbs { display: flex; align-items: center; gap: 0.4rem; min-width: 0; font-size: 0.875rem; }
+.crumb { appearance: none; border: 0; background: none; padding: 0; font: inherit; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 22rem; }
+button.crumb { cursor: pointer; color: var(--accent-hover, #34d399); }
+button.crumb:hover { text-decoration: underline; }
+.crumb.current { color: var(--ink); font-weight: 600; }
+.crumb-sep { color: var(--muted); }
+.bars-sort { display: inline-flex; gap: 0.2rem; padding: 0.15rem; border: 1px solid var(--line); border-radius: 999px; }
+.bars-sort button { appearance: none; border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.75rem; padding: 0.2rem 0.6rem; border-radius: 999px; cursor: pointer; }
+.bars-sort button.active { background: var(--bg2); color: var(--ink); }
+.bars-hint { margin: 0 1rem 0.4rem; font-size: 0.75rem; color: var(--muted); }
+.bars-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0.6rem 0.75rem; }
+.bars-section-title { display: flex; align-items: center; gap: 0.4rem; margin: 0.6rem 0.4rem 0.25rem; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.bars-section-toggle { appearance: none; border: 0; background: none; cursor: pointer; padding: 0; font-family: inherit; }
+.bars-section-toggle:hover { color: var(--ink); }
+.bars-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.bar-row {
+  width: 100%; display: grid; grid-template-columns: minmax(0, 15rem) minmax(4rem, 1fr) 3.25rem minmax(0, 15rem); align-items: center; gap: 0.75rem;
+  appearance: none; border: 0; background: none; color: var(--ink); font: inherit; text-align: left; padding: 0.4rem 0.5rem; border-radius: 8px; cursor: pointer;
+}
+.bar-row:hover, .bar-row:focus-visible { background: var(--bg2); outline: none; }
+.bar-row:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+.bar-row.active { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.bar-name { display: flex; flex-direction: column; min-width: 0; }
+.bar-label { font-size: 0.8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-path { font-size: 0.6875rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-track { height: 8px; background: var(--bg2); border-radius: 4px; overflow: hidden; }
+.bar-track i { display: block; height: 100%; background: #2ec4b6; border-radius: 4px; }
+.bar-count { font-size: 0.8125rem; text-align: right; font-variant-numeric: tabular-nums; }
+.bar-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; min-width: 0; }
+.bar-badge { font-size: 0.6875rem; padding: 0.05rem 0.4rem; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
+.bar-badge.used { color: #5ee0d4; border-color: rgba(94, 224, 212, 0.35); }
+.bar-badge.pinned { color: #f5c451; border-color: rgba(245, 196, 81, 0.35); }
+.bar-badge.stale { color: #f0a46b; border-color: rgba(240, 164, 107, 0.35); }
+@media (max-width: 1100px) { .bar-row { grid-template-columns: minmax(0, 12rem) minmax(3rem, 1fr) 3rem; } .bar-badges { grid-column: 1 / -1; } }
