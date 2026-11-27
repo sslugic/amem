@@ -1,0 +1,615 @@
+/* Guided setup (setup-wizard.js). Uses the dashboard's tokens from styles.css. */
+
+body.wz-open {
+  overflow: hidden;
+}
+
+.wz-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background: rgba(5, 8, 10, 0.82);
+  backdrop-filter: blur(6px);
+}
+
+.wz-shell {
+  width: min(980px, 100%);
+  height: min(680px, 100%);
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  background: var(--bg1);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+}
+
+/* Progress rail */
+.wz-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1.5rem 1.25rem;
+  background: var(--bg0);
+  border-right: 1px solid var(--line);
+}
+
+.wz-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 700;
+}
+
+.wz-brand img {
+  border-radius: 6px;
+}
+
+.wz-rail ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.wz-rail li {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.wz-rail li span {
+  width: 1.5rem;
+  height: 1.5rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  font-size: 0.78rem;
+  font-weight: 600;
+  flex: none;
+}
+
+.wz-rail li.now {
+  color: var(--ink);
+  background: var(--bg2);
+}
+
+.wz-rail li.now span {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.wz-rail li.past span {
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+  color: var(--ink);
+}
+
+.wz-skip {
+  margin-top: auto;
+  align-self: flex-start;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Main column */
+.wz-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wz-body {
+  flex: 1;
+  overflow: auto;
+  padding: 2.25rem 2.5rem 1.5rem;
+}
+
+.wz-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 2.5rem;
+  border-top: 1px solid var(--line);
+  background: rgba(11, 15, 18, 0.4);
+}
+
+.wz-foot .btn {
+  padding: 0.65rem 1.35rem;
+  font-size: 0.95rem;
+}
+
+.wz-final {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.wz-body h1 {
+  margin: 0.75rem 0 0.5rem;
+  font-size: 1.85rem;
+  line-height: 1.2;
+}
+
+.wz-body h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1.35rem;
+}
+
+.wz-body h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.wz-sub,
+.wz-lead {
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0 0 1.4rem;
+  max-width: 38rem;
+}
+
+.wz-lead {
+  font-size: 1.05rem;
+}
+
+.wz-loading,
+.wz-empty {
+  color: var(--muted);
+  padding: 1.5rem 0;
+}
+
+.wz-loading::before {
+  content: "";
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-right: 0.6rem;
+  vertical-align: -0.1rem;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: wz-spin 0.8s linear infinite;
+}
+
+@keyframes wz-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wz-loading::before {
+    animation: none;
+  }
+}
+
+/* Welcome */
+.wz-hero img {
+  border-radius: 14px;
+}
+
+.wz-points {
+  list-style: none;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.85rem;
+  max-width: 38rem;
+}
+
+.wz-points li {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg2);
+  line-height: 1.5;
+}
+
+.wz-points b {
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+/* Tools */
+.wz-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 0.65rem;
+}
+
+.wz-tool {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg2);
+  cursor: pointer;
+}
+
+.wz-tool.on {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.wz-tool input,
+.wz-repo input {
+  accent-color: var(--accent);
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+}
+
+.wz-tool-mark {
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--bg0);
+  color: var(--accent);
+  font-weight: 700;
+  flex: none;
+}
+
+.wz-tool-text {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.wz-tool-text small,
+.wz-repo small {
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wz-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.18rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--accent-dim);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.wz-badge.ok {
+  background: var(--accent-dim);
+  color: var(--ink);
+}
+
+.wz-badge.muted {
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.wz-more {
+  margin-top: 1rem;
+}
+
+/* Projects */
+.wz-repo-tools {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.wz-repo-tools input[type="search"],
+.wz-add input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg0);
+  color: var(--ink);
+  font: inherit;
+}
+
+.wz-add {
+  display: flex;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.wz-repos {
+  display: grid;
+  gap: 0.4rem;
+  max-height: 340px;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.wz-repo {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg2);
+  cursor: pointer;
+}
+
+.wz-repo.on {
+  border-color: var(--accent-dim);
+}
+
+.wz-repo > span {
+  display: grid;
+  min-width: 0;
+}
+
+.wz-repo em {
+  font-style: normal;
+  font-size: 0.72rem;
+  color: var(--accent);
+  margin-left: 0.5rem;
+}
+
+.wz-count {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.75rem 0 0;
+}
+
+/* Connect */
+.wz-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.wz-summary > div {
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg2);
+}
+
+.wz-summary ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  line-height: 1.7;
+}
+
+.wz-summary .muted {
+  color: var(--muted);
+}
+
+.wz-check {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  line-height: 1.5;
+}
+
+.wz-check small {
+  color: var(--muted);
+}
+
+.wz-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.wz-results li {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg2);
+}
+
+.wz-results li > span:last-child {
+  display: grid;
+  min-width: 0;
+}
+
+.wz-results small {
+  color: var(--muted);
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
+.wz-dot {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex: none;
+}
+
+.wz-results .ok .wz-dot {
+  background: var(--accent-dim);
+  color: var(--ink);
+}
+
+.wz-results .bad .wz-dot {
+  background: rgba(232, 184, 109, 0.2);
+  color: var(--warn);
+}
+
+/* Done */
+.wz-done-mark {
+  width: 3.25rem;
+  height: 3.25rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--bg0);
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.wz-restart {
+  margin: 0 0 1.5rem;
+  padding: 0;
+  list-style: none;
+  counter-reset: wz;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.wz-restart li {
+  counter-increment: wz;
+  display: grid;
+  grid-template-columns: 1.75rem 11rem 1fr;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg2);
+}
+
+.wz-restart li::before {
+  content: counter(wz);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.wz-restart span {
+  color: var(--muted);
+}
+
+.wz-try {
+  padding: 1rem 1.1rem;
+  border-radius: var(--radius);
+  border: 1px dashed var(--accent-dim);
+}
+
+.wz-try p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.wz-try q {
+  color: var(--ink);
+}
+
+@media (max-width: 760px) {
+  .wz-overlay {
+    padding: 0;
+  }
+
+  .wz-shell {
+    height: 100%;
+    border-radius: 0;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .wz-rail {
+    flex-direction: row;
+    align-items: center;
+    padding: 0.85rem 1rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .wz-rail ol {
+    display: none;
+  }
+
+  .wz-skip {
+    margin: 0 0 0 auto;
+  }
+
+  .wz-body,
+  .wz-foot {
+    padding-left: 1.25rem;
+    padding-right: 1.25rem;
+  }
+
+  .wz-summary,
+  .wz-restart li {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Desktop app: update banner and Settings card (desktop-bridge.js) */
+.desk-update-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 1.25rem;
+  background: var(--accent-dim);
+  color: var(--ink);
+  font-size: 0.92rem;
+}
+
+.desk-update-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex: none;
+}
+
+.desk-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+
+.desk-facts dt {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-bottom: 0.2rem;
+}
+
+.desk-facts dd {
+  margin: 0;
+}
+
+.desk-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.desk-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.desk-toggle input {
+  accent-color: var(--accent);
+}
+
+.desk-warn {
+  color: var(--warn);
+}

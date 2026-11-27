@@ -402,6 +402,17 @@ pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:
 .lp-h1{margin:0 0 .9rem;font-size:clamp(2rem,4.6vw,3.1rem);line-height:1.06;letter-spacing:-.04em;font-weight:700}
 .lp-sub{margin:0 0 1.4rem;color:var(--muted);font-size:1.04rem;max-width:34rem}
 .lp-sub code{color:var(--ink)}
+.dl{margin:1.2rem 0 1rem;padding:1rem 1.1rem;border:1px solid rgba(46,196,182,.35);border-radius:14px;background:rgba(46,196,182,.06)}
+.dl h2{margin:0 0 .2rem;font-size:1.05rem}
+.dl p{margin:0 0 .8rem;color:var(--muted);font-size:.9rem;line-height:1.5}
+.dl-row{display:flex;flex-wrap:wrap;gap:.55rem}
+.dl-btn{display:flex;flex-direction:column;gap:.1rem;padding:.6rem .95rem;border-radius:11px;border:1px solid var(--line);color:var(--ink);text-decoration:none;min-width:9.5rem}
+.dl-btn strong{font-size:.92rem}
+.dl-btn span{font-size:.76rem;color:var(--muted)}
+.dl-btn:hover{border-color:var(--accent)}
+.dl-btn.primary{background:var(--accent);border-color:var(--accent);color:#06201d}
+.dl-btn.primary span{color:#0b3b36}
+.dl-or{margin:.9rem 0 .5rem;color:var(--muted);font-size:.86rem}
 .lp-cta2{display:flex;align-items:center;gap:.6rem;margin:.8rem 0 0;color:var(--muted);font-size:.86rem}
 .lp-cta2 code{color:var(--ink);padding:.25rem .55rem;border:1px solid var(--line);border-radius:8px;background:rgba(11,15,18,.6)}
 .lp-facts{display:flex;flex-wrap:wrap;gap:.4rem 1.1rem;margin:1.3rem 0 0;padding:0;list-style:none;color:var(--muted);font-size:.8rem}
@@ -1166,6 +1177,31 @@ function oneClickInstalls() {
     </div>`;
 }
 
+/** The desktop app: amem bundled with a setup wizard and activity view; no Node needed. */
+function desktopDownloads() {
+  const base = "https://github.com/sslugic/amem/releases/latest/download";
+  const btn = (os, href, label, sub) =>
+    `<a class="dl-btn" data-os="${os}" href="${base}/${href}"><strong>${label}</strong><span>${sub}</span></a>`;
+  return `<div class="dl" id="download">
+      <h2>Get the amem app</h2>
+      <p>Download, open, and a short guided setup connects your AI tools and projects. Then watch what your agents remember, live. No Node or terminal needed, and it updates itself.</p>
+      <div class="dl-row">
+        ${btn("mac", "amem-mac-arm64.dmg", "Download for Mac", "Apple silicon · .dmg")}
+        ${btn("win", "amem-win-x64.exe", "Download for Windows", "Windows 10 and 11 · .exe")}
+        ${btn("linux", "amem-linux-x86_64.AppImage", "Download for Linux", ".AppImage")}
+        ${btn("linux-deb", "amem-linux-amd64.deb", "Linux .deb", "Debian, Ubuntu")}
+      </div>
+    </div>
+    <script>
+      (function () {
+        var ua = navigator.userAgent || "";
+        var os = /Mac/.test(ua) ? "mac" : /Win/.test(ua) ? "win" : /Linux|X11/.test(ua) ? "linux" : "";
+        var el = os && document.querySelector('.dl-btn[data-os="' + os + '"]');
+        if (el) { el.classList.add("primary"); el.parentNode.insertBefore(el, el.parentNode.firstChild); }
+      })();
+    </script>`;
+}
+
 function landing() {
   const prim = (n, title, body, eg) =>
     `<article class="prim"><p class="prim-n">${n}</p><h3>${title}</h3><p>${body}</p><p class="eg">${eg}</p></article>`;
@@ -1197,9 +1233,11 @@ function landing() {
         <p class="lp-eyebrow">100% Local • Zero Cloud • Single SQLite File</p>
         <h1 class="lp-h1">Stop paying your AI agent to re-learn your codebase every session.</h1>
         <p class="lp-sub">amem gives Claude Code, Cursor, Codex, and Windsurf persistent file-anchored facts, on-demand skills, and a shared task board, stored locally in <code>~/.amem</code> with zero API keys, zero embedding daemons, and zero SaaS fees.</p>
+        ${desktopDownloads()}
+        <p class="dl-or">Prefer the terminal? Install the CLI:</p>
         ${installCommands(false)}
         <p class="lp-cta2">Then open the local UI: <code>amem ui</code> <span>→ 127.0.0.1:7843</span></p>
-        <ul class="lp-facts"><li>Free &amp; open source</li><li>Any MCP client</li><li>Node 20+</li><li><a href="https://github.com/sslugic/amem" style="color:inherit">Source on GitHub</a></li></ul>
+        <ul class="lp-facts"><li>Free &amp; open source</li><li>Any MCP client</li><li>Mac, Windows, Linux</li><li><a href="https://github.com/sslugic/amem" style="color:inherit">Source on GitHub</a></li></ul>
       </div>
       <div class="mock" role="group" aria-label="Preview of the amem ui dashboard">
         <div class="mock-bar"><i></i><i></i><i></i><span>127.0.0.1:7843 · amem ui</span></div>

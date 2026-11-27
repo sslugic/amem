@@ -127,3 +127,69 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" amem.mcpb --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The desktop app (desktop/): amem bundled inside an installable app, with a setup wizard
+  # and self-updates from these releases (latest*.yml). Windows and Linux build here on
+  # every release. The Mac build is signed and notarised, so it runs only once the signing
+  # secrets exist (MAC_CSC_LINK, MAC_CSC_KEY_PASSWORD, APPLE_API_KEY_P8, APPLE_API_KEY_ID,
+  # APPLE_API_ISSUER); until then it is built on a Mac with `npm run app:dist` (docs/desktop-app.md).
+  desktop:
+    if: github.event_name == 'push'
+    needs: github-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist:win
+          - os: ubuntu-latest
+            script: dist:linux
+          - os: macos-latest
+            script: dist:mac
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    env:
+      HAS_MAC_SIGNING: ${{ secrets.MAC_CSC_LINK != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: matrix.os != 'macos-latest' || env.HAS_MAC_SIGNING == 'true'
+      - uses: actions/setup-node@v4
+        if: matrix.os != 'macos-latest' || env.HAS_MAC_SIGNING == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - name: build amem
+        if: matrix.os != 'macos-latest' || env.HAS_MAC_SIGNING == 'true'
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          npm ci --prefix desktop
+      - name: Apple API key
+        if: matrix.os == 'macos-latest' && env.HAS_MAC_SIGNING == 'true'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey.p8"
+          echo "APPLE_API_KEY=$RUNNER_TEMP/keys/AuthKey.p8" >> "$GITHUB_ENV"
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+      - name: package and upload to the release
+        if: matrix.os != 'macos-latest' || env.HAS_MAC_SIGNING == 'true'
+        shell: bash
+        run: npm run ${{ matrix.script }} --prefix desktop -- --publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - name: upload the stapled dmg
+        if: matrix.os == 'macos-latest' && env.HAS_MAC_SIGNING == 'true'
+        shell: bash
+        run: gh release upload "$GITHUB_REF_NAME" desktop/release/*.dmg --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Mac build skipped
+        if: matrix.os == 'macos-latest' && env.HAS_MAC_SIGNING != 'true'
+        run: echo "No Mac signing secrets yet; build the Mac app locally with npm run app:dist (docs/desktop-app.md)."

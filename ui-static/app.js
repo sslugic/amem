@@ -1663,10 +1663,11 @@ function setupDoneHtml(ctx) {
           <h1>Settings</h1>
           <p class="sub">Everything stays in <code>~/.amem</code> on this machine. Nothing is uploaded.</p>
         </div>
+        <button class="btn secondary" type="button" id="runWizardBtn">Run guided setup</button>
       </header>
 
       <nav class="settings-subnav" id="settingsSubnav" aria-label="Settings sections">
-        ${SETTINGS_SECTIONS.map((sec) => `<a href="#set-${sec.id}" data-section="${sec.id}">${esc(sec.label)}</a>`).join("")}
+        ${[...(window.amemDesktop ? [{ id: "desktop", label: "amem app" }] : []), ...SETTINGS_SECTIONS].map((sec) => `<a href="#set-${sec.id}" data-section="${sec.id}">${esc(sec.label)}</a>`).join("")}
       </nav>
       <p class="settings-status" id="settingsStatusLine" role="status"></p>
 
@@ -1677,6 +1678,15 @@ function setupDoneHtml(ctx) {
           <ul class="conn-list" id="connectionsList"><li class="note">Checking…</li></ul>
           <div id="connectionsAdvice"></div>
         </article>
+
+        ${
+          window.amemDesktop
+            ? `<article class="card card-wide" id="set-desktop">
+          <header class="card-head"><h2>amem app</h2></header>
+          <div id="settingsDesktopSlot"></div>
+        </article>`
+            : ""
+        }
 
         <article class="card card-wide" id="set-backup">
           <header class="card-head"><h2>Backup &amp; restore</h2></header>
@@ -1775,6 +1785,8 @@ function renderSetup() {
   const showDone = setupIsComplete() && !state.setupEdit;
   main.innerHTML = showDone ? setupDoneHtml(ctx) : setupWizardHtml(ctx);
   bindSetupEvents(main, ctx);
+  $("#runWizardBtn")?.addEventListener("click", () => window.amemSetupWizard?.open());
+  window.amemDesktopUi?.mountCard($("#settingsDesktopSlot"));
   if (showDone) {
     mountVaultIn($("#settingsVaultSlot"));
     paintConnections();
@@ -1847,28 +1859,7 @@ async function paintConnections() {
       badge.textContent = issues.length ? `${issues.length} to fix` : "All up to date";
       badge.className = `pill ${issues.length ? "warn" : "ok"}`;
     }
-    const dup = issues.some((i) => /More than one amem install/.test(i));
-    if (advice) {
-      advice.innerHTML = issues.length
-        ? `<ul class="advice">${issues.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>${
-            dup
-              ? `<div class="card-actions"><button class="btn small" type="button" id="fixInstallsBtn">Keep one install</button><span class="note">Points every app at one install and removes the others. amem also does this on its own when the dashboard restarts.</span></div>`
-              : ""
-          }`
-        : "";
-      $("#fixInstallsBtn")?.addEventListener("click", async (e) => {
-        const btn = e.currentTarget;
-        btn.disabled = true;
-        btn.textContent = "Fixing…";
-        try {
-          const r = await apiUnscoped("/api/installs/fix", { method: "POST", body: "{}" });
-          notify(r.errors?.length ? `Partly fixed: ${r.errors.join("; ")}` : `Kept ${r.keep?.root || "one install"}; removed ${r.removed?.length || 0}.`, r.errors?.length ? "error" : undefined);
-        } catch (err) {
-          notify(err.message || err);
-        }
-        paintConnections();
-      });
-    }
+    if (advice) advice.innerHTML = issues.length ? `<ul class="advice">${issues.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : "";
   } catch (e) {
     list.innerHTML = `<li class="note">Could not check: ${esc(e.message || e)}</li>`;
   }

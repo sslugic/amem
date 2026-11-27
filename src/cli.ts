@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { installIssues } from "./install-check.js";
-import { applyDedupe, autoFixInstalls, planDedupe } from "./install-dedupe.js";
 import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { buildBootstrap, renderRecallMarkdown, resolveScope as resolveMemoryScope, searchMemory, type RecallType } from "./recall.js";
 import { exportBlock, exportSkills, importIntoRepo, parseImportFile, renderExportMarkdown } from "./import-export.js";
@@ -711,16 +710,6 @@ async function main(): Promise<void> {
           // Re-run what setup does for this repo's host. Every step is idempotent, so a
           // healthy install reports nothing.
           const fixed: string[] = [];
-          // More than one global install: keep one, repoint hosts, remove the rest.
-          const dedupe = planDedupe();
-          if (dedupe) {
-            const r = applyDedupe(dedupe);
-            fixed.push(`kept one amem install: ${r.keep.root} (${r.reason})`);
-            for (const p of r.rewritten) fixed.push(`pointed at it: ${p}`);
-            for (const p of r.reloaded) fixed.push(`reloaded launch agent: ${p}`);
-            for (const p of r.removed) fixed.push(`removed extra install: ${p}`);
-            for (const e of r.errors) console.error(`could not fix: ${e}`);
-          }
           const host = repo?.platform ?? platformFlag(flags);
           if (repo && !unbindableRootReason(identity.rootPath)) {
             if (host === "claude" || host === "cursor") {
@@ -1678,21 +1667,6 @@ async function main(): Promise<void> {
             landingUrl: landing,
           });
           console.log(`amem ui at ${server.url} (localhost only)`);
-          // The login dashboard is the one amem process that always restarts after an
-          // upgrade, so it tidies duplicate installs (only when it runs from the one it keeps).
-          if (port === 7843 && process.env.NODE_ENV !== "test" && !process.env.CI) {
-            setTimeout(() => {
-              try {
-                const r = autoFixInstalls();
-                if (r) {
-                  console.log(`amem: kept ${r.keep.root}; removed ${r.removed.join(", ") || "nothing"}; updated ${r.rewritten.length} config file(s)`);
-                  for (const e of r.errors) console.error(`amem: install fix: ${e}`);
-                }
-              } catch (e) {
-                console.error(`amem: install fix failed: ${e instanceof Error ? e.message : String(e)}`);
-              }
-            }, 5_000).unref();
-          }
           console.log(`focused: ${process.cwd()}`);
           console.log("Press Ctrl+C to stop.");
           await new Promise(() => {

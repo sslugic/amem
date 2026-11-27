@@ -1,0 +1,77 @@
+{
+  "appId": "com.getamem.app",
+  "productName": "amem",
+  "copyright": "Copyright © 2026 Slaven Slugic",
+  "directories": {
+    "output": "release",
+    "buildResources": "icons"
+  },
+  "files": [
+    "main.js",
+    "preload.js",
+    "icons/**",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "build/amem",
+      "to": "amem"
+    }
+  ],
+  "asar": true,
+  "npmRebuild": false,
+  "artifactName": "amem-${os}-${arch}.${ext}",
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "sslugic",
+      "repo": "amem",
+      "releaseType": "release"
+    }
+  ],
+  "mac": {
+    "category": "public.app-category.developer-tools",
+    "target": [
+      "dmg",
+      "zip"
+    ],
+    "icon": "icons/icon-1024.png",
+    "hardenedRuntime": true,
+    "entitlements": "entitlements.mac.plist",
+    "entitlementsInherit": "entitlements.mac.plist",
+    "notarize": true
+  },
+  "dmg": {
+    "sign": true,
+    "title": "amem"
+  },
+  "win": {
+    "target": [
+      "nsis"
+    ],
+    "icon": "icons/icon-1024.png"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "shortcutName": "amem"
+  },
+  "linux": {
+    "target": [
+      "AppImage",
+      "deb"
+    ],
+    "category": "Development",
+    "executableName": "amem-app",
+    "icon": "icons/icon-1024.png",
+    "synopsis": "Local memory for your AI coding agents",
+    "maintainer": "Slaven Slugic <hello@getamem.com>",
+    "syncDesktopName": true
+  },
+  "deb": {
+    "packageName": "amem-app"
+  },
+  "afterPack": "scripts/after-pack.cjs"
+}
