@@ -404,6 +404,10 @@ pre{background:rgba(232,238,242,.06);border:1px solid var(--line);border-radius:
 .lp-hero-head{text-align:center;width:100%;max-width:56rem}
 .lp-hero-head .lp-h1{margin:0;font-size:clamp(2.1rem,4.8vw,3.4rem);text-wrap:balance}
 .nowrap{white-space:nowrap}
+.lp-free{margin:1rem 0 0;color:var(--muted);font-size:1.05rem;text-wrap:balance}
+.lp-free strong{color:var(--accent);font-weight:600}
+.lp-free a{white-space:nowrap;color:var(--ink);text-decoration:underline;text-decoration-color:rgba(46,196,182,.5);text-underline-offset:3px}
+.lp-free a:hover{text-decoration-color:var(--accent)}
 .lp-hero-stack .hero-video{width:100%;max-width:1040px}
 .lp-hero-rest{width:100%;max-width:44rem}
 .lp-hero-rest .lp-sub{max-width:none;text-align:center;margin-left:auto;margin-right:auto}
@@ -1245,6 +1249,7 @@ function landing() {
       <div class="lp-hero-head">
         <p class="lp-eyebrow">100% Local • Zero Cloud • Single SQLite File</p>
         <h1 class="lp-h1">Stop paying your AI agent to <span class="nowrap">re-learn</span> your codebase every session.</h1>
+        <p class="lp-free"><strong>Free and open source</strong> <span aria-hidden="true">·</span> <span class="nowrap">MIT licensed</span> <span aria-hidden="true">·</span> <a href="https://github.com/sslugic/amem">Source on GitHub →</a></p>
       </div>
       <div class="mock hero-video">
         <div class="mock-bar"><i></i><i></i><i></i><span>amem in 60 seconds</span><button type="button" class="sound-btn" id="soundBtn" aria-pressed="false">Sound on</button></div>
